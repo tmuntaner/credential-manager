@@ -10,9 +10,6 @@ use async_trait::async_trait;
 use thiserror::Error;
 use url::Url;
 
-struct StateMachine<S> {
-    state: S,
-}
 #[derive(Error, Debug)]
 enum ParseError {
     #[error("could not parse key {key:?} in response")]
@@ -45,19 +42,17 @@ struct Authorize {
     base_url: String,
 }
 
-impl StateMachine<Authorize> {
-    pub fn new(username: String, password: String, base_url: String) -> StateMachine<Authorize> {
-        StateMachine {
-            state: Authorize {
-                username,
-                password,
-                base_url,
-            },
+impl Authorize {
+    pub fn new(username: String, password: String, base_url: String) -> Authorize {
+        Authorize {
+            username,
+            password,
+            base_url,
         }
     }
 }
 
-impl StateMachine<Authorize> {
+impl Authorize {
     fn get_verification_url(&self, factor: &FactorType) -> Result<String> {
         match *factor {
             FactorType::WebAuthn { ref links, .. } => {
@@ -82,13 +77,13 @@ impl StateMachine<Authorize> {
 }
 
 #[async_trait]
-impl Runnable for StateMachine<Authorize> {
+impl Runnable for Authorize {
     async fn run(&self, client: &OktaClient) -> Result<Event> {
         let json = &serde_json::json!({
-            "username": self.state.username,
-            "password": self.state.password,
+            "username": self.username,
+            "password": self.password,
         });
-        let mut url = Url::parse(self.state.base_url.as_str())?;
+        let mut url = Url::parse(self.base_url.as_str())?;
         url.set_path("/api/v1/authn");
 
         let body = client
@@ -135,7 +130,7 @@ struct Challenge {
     url: String,
 }
 
-impl StateMachine<Challenge> {
+impl Challenge {
     fn get_verification_url(&self, factor: &FactorType) -> Result<String> {
         match *factor {
             FactorType::WebAuthn { ref links, .. } => {
@@ -178,16 +173,16 @@ impl StateMachine<Challenge> {
 }
 
 #[async_trait]
-impl Runnable for StateMachine<Challenge> {
+impl Runnable for Challenge {
     async fn run(&self, client: &OktaClient) -> Result<Event> {
-        let url = self.get_verification_url(&self.state.factor)?;
+        let url = self.get_verification_url(&self.factor)?;
 
         let json = &serde_json::json!({
-            "stateToken": self.state.state_token,
+            "stateToken": self.state_token,
         });
 
         let body = client
-            .post(self.state.url.as_str(), json)
+            .post(self.url.as_str(), json)
             .await
             .map_err(|e| anyhow!(e))?;
 
@@ -265,7 +260,7 @@ struct AwsCredentials {
     session_token: String,
 }
 
-impl StateMachine<AwsCredentials> {
+impl AwsCredentials {
     async fn get_saml_response(&self, body: String) -> Result<Vec<AwsCredential>> {
         let saml_response = verify::saml::SamlResponse::new(body)
             .ok_or_else(|| anyhow!("could not get saml response"))?;
@@ -278,12 +273,12 @@ impl StateMachine<AwsCredentials> {
 }
 
 #[async_trait]
-impl Runnable for StateMachine<AwsCredentials> {
+impl Runnable for AwsCredentials {
     async fn run(&self, client: &OktaClient) -> Result<Event> {
         let body = client
             .get(
                 "/home/amazon_aws/0oa1crzseqkrZUctZ357/272".to_string(),
-                Some(self.state.session_token.clone()),
+                Some(self.session_token.clone()),
             )
             .await
             .map_err(|e| anyhow!(e))?;
@@ -305,9 +300,9 @@ impl Runnable for StateMachine<AwsCredentials> {
 }
 
 enum StateMachineWrapper {
-    Authorize(StateMachine<Authorize>),
-    Challenge(StateMachine<Challenge>),
-    AwsCredentials(StateMachine<AwsCredentials>),
+    Authorize(Authorize),
+    Challenge(Challenge),
+    AwsCredentials(AwsCredentials),
 }
 
 impl StateMachineWrapper {
@@ -321,22 +316,18 @@ impl StateMachineWrapper {
                     factor,
                     ..
                 },
-            ) => Ok(StateMachineWrapper::Challenge(StateMachine {
-                state: Challenge {
-                    url,
-                    factor,
-                    state_token: state_token.clone(),
-                },
+            ) => Ok(StateMachineWrapper::Challenge(Challenge {
+                url,
+                factor,
+                state_token: state_token.clone(),
             })),
             (
                 StateMachineWrapper::Challenge(_val),
                 Event::AuthorizeSuccess {
                     ref session_token, ..
                 },
-            ) => Ok(StateMachineWrapper::AwsCredentials(StateMachine {
-                state: AwsCredentials {
-                    session_token: session_token.clone(),
-                },
+            ) => Ok(StateMachineWrapper::AwsCredentials(AwsCredentials {
+                session_token: session_token.clone(),
             })),
             _ => Err(anyhow!("unimplemented")),
         }
@@ -356,7 +347,7 @@ pub struct Factory {}
 impl Factory {
     pub async fn run(self, username: String, password: String, base_url: String) -> Result<()> {
         let mut state: StateMachineWrapper =
-            StateMachineWrapper::Authorize(StateMachine::new(username, password, base_url));
+            StateMachineWrapper::Authorize(Authorize::new(username, password, base_url));
         let client = OktaClient::new().map_err(|e| anyhow!(e))?;
 
         loop {
