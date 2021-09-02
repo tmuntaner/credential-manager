@@ -42,15 +42,15 @@ trait Runnable {
     async fn run(&self, client: &OktaClient) -> Result<Event>;
 }
 
-struct Authorize {
+struct OktaAuthorize {
     username: String,
     password: String,
     base_url: String,
 }
 
-impl Authorize {
-    pub fn new(username: String, password: String, base_url: String) -> Authorize {
-        Authorize {
+impl OktaAuthorize {
+    pub fn new(username: String, password: String, base_url: String) -> OktaAuthorize {
+        OktaAuthorize {
             username,
             password,
             base_url,
@@ -58,7 +58,7 @@ impl Authorize {
     }
 }
 
-impl Authorize {
+impl OktaAuthorize {
     fn get_verification_url(&self, factor: &FactorType) -> Result<String> {
         match *factor {
             FactorType::WebAuthn { ref links, .. } => {
@@ -83,7 +83,7 @@ impl Authorize {
 }
 
 #[async_trait]
-impl Runnable for Authorize {
+impl Runnable for OktaAuthorize {
     async fn run(&self, client: &OktaClient) -> Result<Event> {
         let json = &serde_json::json!({
             "username": self.username,
@@ -126,13 +126,13 @@ impl Runnable for Authorize {
     }
 }
 
-struct Challenge {
+struct OktaMfaChallenge {
     state_token: String,
     factor: FactorType,
     url: String,
 }
 
-impl Challenge {
+impl OktaMfaChallenge {
     fn get_verification_url(&self, factor: &FactorType) -> Result<String> {
         match *factor {
             FactorType::WebAuthn { ref links, .. } => {
@@ -172,7 +172,7 @@ impl Challenge {
 }
 
 #[async_trait]
-impl Runnable for Challenge {
+impl Runnable for OktaMfaChallenge {
     async fn run(&self, client: &OktaClient) -> Result<Event> {
         let url = self.get_verification_url(&self.factor)?;
 
@@ -246,11 +246,11 @@ impl Runnable for Challenge {
     }
 }
 
-struct AwsCredentials {
+struct OktaGetCredentials {
     session_token: String,
 }
 
-impl AwsCredentials {
+impl OktaGetCredentials {
     async fn get_saml_response(&self, body: String) -> Result<Vec<AwsCredential>> {
         let saml_response = verify::saml::SamlResponse::new(body)
             .ok_or_else(|| anyhow!("could not get saml response"))?;
@@ -263,7 +263,7 @@ impl AwsCredentials {
 }
 
 #[async_trait]
-impl Runnable for AwsCredentials {
+impl Runnable for OktaGetCredentials {
     async fn run(&self, client: &OktaClient) -> Result<Event> {
         let body = client
             .get(
@@ -290,9 +290,9 @@ impl Runnable for AwsCredentials {
 }
 
 enum StateMachineWrapper {
-    Authorize(Authorize),
-    Challenge(Challenge),
-    AwsCredentials(AwsCredentials),
+    Authorize(OktaAuthorize),
+    Challenge(OktaMfaChallenge),
+    GetCredentials(OktaGetCredentials),
 }
 
 impl StateMachineWrapper {
@@ -306,7 +306,7 @@ impl StateMachineWrapper {
                     factor,
                     ..
                 },
-            ) => Ok(StateMachineWrapper::Challenge(Challenge {
+            ) => Ok(StateMachineWrapper::Challenge(OktaMfaChallenge {
                 url,
                 factor,
                 state_token: state_token.clone(),
@@ -316,7 +316,7 @@ impl StateMachineWrapper {
                 Event::AuthorizeSuccess {
                     ref session_token, ..
                 },
-            ) => Ok(StateMachineWrapper::AwsCredentials(AwsCredentials {
+            ) => Ok(StateMachineWrapper::GetCredentials(OktaGetCredentials {
                 session_token: session_token.clone(),
             })),
             _ => Err(anyhow!("unimplemented")),
@@ -327,7 +327,7 @@ impl StateMachineWrapper {
         match self {
             StateMachineWrapper::Authorize(val) => Ok(val.run(client).await?),
             StateMachineWrapper::Challenge(val) => Ok(val.run(client).await?),
-            StateMachineWrapper::AwsCredentials(val) => Ok(val.run(client).await?),
+            StateMachineWrapper::GetCredentials(val) => Ok(val.run(client).await?),
         }
     }
 }
@@ -337,7 +337,7 @@ pub struct Factory {}
 impl Factory {
     pub async fn run(self, username: String, password: String, base_url: String) -> Result<()> {
         let mut state: StateMachineWrapper =
-            StateMachineWrapper::Authorize(Authorize::new(username, password, base_url));
+            StateMachineWrapper::Authorize(OktaAuthorize::new(username, password, base_url));
         let client = OktaClient::new().map_err(|e| anyhow!(e))?;
 
         loop {
