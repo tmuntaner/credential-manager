@@ -10,10 +10,16 @@ use async_trait::async_trait;
 use thiserror::Error;
 use url::Url;
 
+macro_rules! missing_required_key_error {
+    ($msg:literal $(,)?) => {
+        ParseError::RequiredMissing {
+            key: String::from($msg),
+        }
+    };
+}
+
 #[derive(Error, Debug)]
 enum ParseError {
-    #[error("could not parse key {key:?} in response")]
-    CouldNotParse { key: String },
     #[error("required key {key:?} not in response")]
     RequiredMissing { key: String },
 }
@@ -56,12 +62,12 @@ impl Authorize {
     fn get_verification_url(&self, factor: &FactorType) -> Result<String> {
         match *factor {
             FactorType::WebAuthn { ref links, .. } => {
-                let links = links.as_ref().ok_or(ParseError::RequiredMissing {
-                    key: String::from("links"),
-                })?;
-                return match links.get("next").ok_or(ParseError::RequiredMissing {
-                    key: String::from("next"),
-                })? {
+                let links = links.as_ref().ok_or(missing_required_key_error!("links"))?;
+                let next = links
+                    .get("next")
+                    .ok_or(missing_required_key_error!("next"))?;
+
+                return match next {
                     Links::Single(l) => Ok(l.href.clone()),
                     Links::Multi(list) => {
                         let link = list.get(0).ok_or_else(|| anyhow!("cannot get link"))?;
@@ -92,19 +98,15 @@ impl Runnable for Authorize {
             .map_err(|e| anyhow!(e))?;
 
         let response: AuthResponse = serde_json::from_str(body.as_str())?;
-        let state_token = response.state_token.ok_or(ParseError::CouldNotParse {
-            key: String::from("state_token"),
-        })?;
+        let state_token = response
+            .state_token
+            .ok_or(missing_required_key_error!("state_token"))?;
 
         let factors = response
             .embedded
-            .ok_or(ParseError::CouldNotParse {
-                key: String::from("embedded"),
-            })?
+            .ok_or(missing_required_key_error!("embedded"))?
             .factor_types
-            .ok_or(ParseError::CouldNotParse {
-                key: String::from("factor_types"),
-            })?;
+            .ok_or(missing_required_key_error!("factor_types"))?;
 
         if factors.is_empty() {
             return Err(anyhow!("no MFA factors"));
@@ -134,13 +136,12 @@ impl Challenge {
     fn get_verification_url(&self, factor: &FactorType) -> Result<String> {
         match *factor {
             FactorType::WebAuthn { ref links, .. } => {
-                let links = links.as_ref().ok_or(ParseError::RequiredMissing {
-                    key: String::from("links"),
-                })?;
+                let links = links.as_ref().ok_or(missing_required_key_error!("links"))?;
+                let next = links
+                    .get("next")
+                    .ok_or(missing_required_key_error!("next"))?;
 
-                return match links.get("next").ok_or(ParseError::RequiredMissing {
-                    key: String::from("next"),
-                })? {
+                return match next {
                     Links::Single(l) => Ok(l.href.clone()),
                     Links::Multi(list) => {
                         let link = list.get(0).ok_or_else(|| anyhow!("could not get link"))?;
@@ -155,16 +156,14 @@ impl Challenge {
     fn get_challenge_id(&self, factor: &FactorType) -> Result<String> {
         return match *factor {
             FactorType::WebAuthn { ref profile, .. } => {
-                let profile = profile.as_ref().ok_or(ParseError::CouldNotParse {
-                    key: String::from("profile"),
-                })?;
+                let profile = profile
+                    .as_ref()
+                    .ok_or(missing_required_key_error!("profile"))?;
 
                 Ok(profile
                     .credential_id
                     .as_ref()
-                    .ok_or(ParseError::CouldNotParse {
-                        key: String::from("credential_id"),
-                    })?
+                    .ok_or(missing_required_key_error!("credential_id"))?
                     .clone())
             }
             FactorType::Unimplemented => Err(anyhow!("unimplemented")),
@@ -190,19 +189,15 @@ impl Runnable for Challenge {
 
         let state_token = challenge_response
             .state_token
-            .ok_or(ParseError::RequiredMissing {
-                key: String::from("state_token"),
-            })?;
+            .ok_or(missing_required_key_error!("state_token"))?;
 
         let embedded = challenge_response
             .embedded
-            .ok_or(ParseError::RequiredMissing {
-                key: String::from("embedded"),
-            })?;
+            .ok_or(missing_required_key_error!("embedded"))?;
 
-        let factors = &embedded.factors.ok_or(ParseError::RequiredMissing {
-            key: String::from("factors"),
-        })?;
+        let factors = &embedded
+            .factors
+            .ok_or(missing_required_key_error!("factors"))?;
 
         let credential_ids: Vec<String> = factors
             .iter()
@@ -212,9 +207,7 @@ impl Runnable for Challenge {
 
         let challenge = embedded
             .challenge
-            .ok_or(ParseError::RequiredMissing {
-                key: String::from("challenge"),
-            })?
+            .ok_or(missing_required_key_error!("challenge"))?
             .challenge;
 
         let origin = Url::parse(url.clone().as_str())?;
@@ -245,14 +238,11 @@ impl Runnable for Challenge {
 
         let challenge_result_response: ChallengeResultResponse =
             serde_json::from_str(body.as_str()).map_err(|e| anyhow!(e))?;
+        let session_token = challenge_result_response
+            .session_token
+            .ok_or(missing_required_key_error!("session_token"))?;
 
-        Ok(Event::AuthorizeSuccess {
-            session_token: challenge_result_response.session_token.ok_or(
-                ParseError::RequiredMissing {
-                    key: String::from("session_token"),
-                },
-            )?,
-        })
+        Ok(Event::AuthorizeSuccess { session_token })
     }
 }
 
