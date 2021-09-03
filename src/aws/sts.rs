@@ -5,6 +5,7 @@ use rusoto_sts::{
     AssumeRoleWithSAMLError, AssumeRoleWithSAMLRequest, AssumeRoleWithSAMLResponse, Sts, StsClient,
 };
 
+#[derive(Clone)]
 pub struct SamlAWSRole {
     pub principal_arn: String,
     pub role_arn: String,

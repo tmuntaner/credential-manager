@@ -40,6 +40,8 @@ struct Creds {
     username: Option<String>,
     #[clap(short, long)]
     with_password: bool,
+    #[clap(short, long)]
+    role_arn: Option<String>,
 }
 
 #[derive(Clap)]
@@ -127,7 +129,7 @@ async fn main() -> Result<()> {
 
             let state_machine = okta::state_machine::Factory {};
             state_machine
-                .run(username, password, app_url)
+                .run(username, password, app_url, val.role_arn)
                 .await
                 .unwrap();
         }

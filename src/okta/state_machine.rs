@@ -39,7 +39,7 @@ enum Event {
 
 #[async_trait]
 trait Runnable {
-    async fn run(&self, client: &OktaClient, app_url: String) -> Result<Event>;
+    async fn run(&self, client: &OktaClient, config: Config) -> Result<Event>;
 }
 
 struct OktaAuthorize {
@@ -79,12 +79,12 @@ impl OktaAuthorize {
 
 #[async_trait]
 impl Runnable for OktaAuthorize {
-    async fn run(&self, client: &OktaClient, app_url: String) -> Result<Event> {
+    async fn run(&self, client: &OktaClient, config: Config) -> Result<Event> {
         let json = &serde_json::json!({
             "username": self.username,
             "password": self.password,
         });
-        let mut url = Url::parse(app_url.as_str())?;
+        let mut url = Url::parse(config.app_url.as_str())?;
         url.set_path("/api/v1/authn");
 
         let (body, status) = client
@@ -177,7 +177,7 @@ impl OktaMfaChallenge {
 
 #[async_trait]
 impl Runnable for OktaMfaChallenge {
-    async fn run(&self, client: &OktaClient, _app_url: String) -> Result<Event> {
+    async fn run(&self, client: &OktaClient, _config: Config) -> Result<Event> {
         let url = self.get_verification_url(&self.factor)?;
 
         let json = &serde_json::json!({
@@ -255,10 +255,24 @@ struct OktaGetCredentials {
 }
 
 impl OktaGetCredentials {
-    async fn get_saml_response(&self, body: String) -> Result<Vec<AwsCredential>> {
+    async fn get_saml_response(
+        &self,
+        body: String,
+        role_arn: Option<String>,
+    ) -> Result<Vec<AwsCredential>> {
         let saml_response = verify::saml::SamlResponse::new(body)
             .ok_or_else(|| anyhow!("could not get saml response"))?;
-        let saml_aws_credentials = saml_response.credentials();
+        let saml_aws_credentials = match role_arn {
+            Some(role_arn) => {
+                let credentials = saml_response.credentials();
+                let role = credentials
+                    .iter()
+                    .find(|cred| cred.role_arn == role_arn)
+                    .ok_or_else(|| anyhow!("could not find role_arn {}", role_arn))?;
+                vec![role.clone()]
+            }
+            None => saml_response.credentials(),
+        };
         let aws_credentials =
             aws::sts::generate_sts_credentials(saml_response.raw, saml_aws_credentials).await;
 
@@ -268,14 +282,14 @@ impl OktaGetCredentials {
 
 #[async_trait]
 impl Runnable for OktaGetCredentials {
-    async fn run(&self, client: &OktaClient, app_url: String) -> Result<Event> {
+    async fn run(&self, client: &OktaClient, config: Config) -> Result<Event> {
         let body = client
-            .get(app_url, Some(self.session_token.clone()))
+            .get(config.app_url, Some(self.session_token.clone()))
             .await
             .map_err(|e| anyhow!(e))?;
 
         let aws_credentials = self
-            .get_saml_response(body.clone())
+            .get_saml_response(body.clone(), config.role_arn)
             .await
             .map_err(|e| anyhow!(e))?;
 
@@ -324,25 +338,38 @@ impl StateMachineWrapper {
         }
     }
 
-    async fn run(&self, client: &OktaClient, app_url: String) -> Result<Event> {
+    async fn run(&self, client: &OktaClient, config: Config) -> Result<Event> {
         match self {
-            StateMachineWrapper::Authorize(val) => Ok(val.run(client, app_url).await?),
-            StateMachineWrapper::Challenge(val) => Ok(val.run(client, app_url).await?),
-            StateMachineWrapper::GetCredentials(val) => Ok(val.run(client, app_url).await?),
+            StateMachineWrapper::Authorize(val) => Ok(val.run(client, config).await?),
+            StateMachineWrapper::Challenge(val) => Ok(val.run(client, config).await?),
+            StateMachineWrapper::GetCredentials(val) => Ok(val.run(client, config).await?),
         }
     }
+}
+
+#[derive(Clone)]
+struct Config {
+    app_url: String,
+    role_arn: Option<String>,
 }
 
 pub struct Factory {}
 
 impl Factory {
-    pub async fn run(self, username: String, password: String, base_url: String) -> Result<()> {
+    pub async fn run(
+        self,
+        username: String,
+        password: String,
+        app_url: String,
+        role_arn: Option<String>,
+    ) -> Result<()> {
         let mut state: StateMachineWrapper =
             StateMachineWrapper::Authorize(OktaAuthorize::new(username, password));
         let client = OktaClient::new().map_err(|e| anyhow!(e))?;
+        let config = Config { app_url, role_arn };
 
         loop {
-            let event = state.run(&client, base_url.clone()).await?;
+            let event = state.run(&client, config.clone()).await?;
             match event {
                 Event::Done => {
                     break;
