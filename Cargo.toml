@@ -1,5 +1,5 @@
 [package]
-name = "credman"
+name = "c9s"
 version = "0.1.0"
 edition = "2018"
 
@@ -23,7 +23,9 @@ sxd-xpath = "~0.4"
 rusoto_core = "0.47.0"
 rusoto_sts = "0.47.0"
 rusoto_credential = "0.47.0"
-structopt = "0.3"
-structopt-derive = "0.4.15"
+clap = "3.0.0-beta.4"
 async-trait = "0.1.51"
 thiserror = "1.0"
+toml = "0.5.8"
+dirs ="3.0.2"
+rpassword = "5.0"

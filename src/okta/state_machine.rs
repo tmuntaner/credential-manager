@@ -1,7 +1,7 @@
 use crate::aws;
 use crate::aws::sts::AwsCredential;
 use crate::okta::api_responses::{
-    AuthResponse, ChallengeResponse, ChallengeResultResponse, FactorType, Links,
+    AuthResponse, ChallengeResponse, ChallengeResultResponse, FactorType, Links, OktaError,
 };
 use crate::okta::okta_client::OktaClient;
 use crate::verify;
@@ -39,22 +39,17 @@ enum Event {
 
 #[async_trait]
 trait Runnable {
-    async fn run(&self, client: &OktaClient) -> Result<Event>;
+    async fn run(&self, client: &OktaClient, app_url: String) -> Result<Event>;
 }
 
 struct OktaAuthorize {
     username: String,
     password: String,
-    base_url: String,
 }
 
 impl OktaAuthorize {
-    pub fn new(username: String, password: String, base_url: String) -> OktaAuthorize {
-        OktaAuthorize {
-            username,
-            password,
-            base_url,
-        }
+    pub fn new(username: String, password: String) -> OktaAuthorize {
+        OktaAuthorize { username, password }
     }
 }
 
@@ -84,45 +79,54 @@ impl OktaAuthorize {
 
 #[async_trait]
 impl Runnable for OktaAuthorize {
-    async fn run(&self, client: &OktaClient) -> Result<Event> {
+    async fn run(&self, client: &OktaClient, app_url: String) -> Result<Event> {
         let json = &serde_json::json!({
             "username": self.username,
             "password": self.password,
         });
-        let mut url = Url::parse(self.base_url.as_str())?;
+        let mut url = Url::parse(app_url.as_str())?;
         url.set_path("/api/v1/authn");
 
-        let body = client
+        let (body, status) = client
             .post(url.as_str(), json)
             .await
             .map_err(|e| anyhow!(e))?;
 
-        let response: AuthResponse = serde_json::from_str(body.as_str())?;
-        let state_token = response
-            .state_token
-            .ok_or(missing_required_key_error!("state_token"))?;
+        match status {
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                let response: OktaError = serde_json::from_str(body.as_str())?;
+                Err(anyhow!(response.summary()))
+            }
+            reqwest::StatusCode::OK => {
+                let response: AuthResponse = serde_json::from_str(body.as_str())?;
+                let state_token = response
+                    .state_token
+                    .ok_or(missing_required_key_error!("state_token"))?;
 
-        let factors = response
-            .embedded
-            .ok_or(missing_required_key_error!("embedded"))?
-            .factor_types
-            .ok_or(missing_required_key_error!("factor_types"))?;
+                let factors = response
+                    .embedded
+                    .ok_or(missing_required_key_error!("embedded"))?
+                    .factor_types
+                    .ok_or(missing_required_key_error!("factor_types"))?;
 
-        if factors.is_empty() {
-            return Err(anyhow!("no MFA factors"));
+                if factors.is_empty() {
+                    return Err(anyhow!("no MFA factors"));
+                }
+
+                let factor = factors
+                    .get(0)
+                    .ok_or_else(|| anyhow!("cannot get MFA factor"))?;
+
+                let url = self.get_verification_url(factor)?;
+
+                Ok(Event::MfaRequired {
+                    url,
+                    state_token,
+                    factor: factor.clone(),
+                })
+            }
+            _ => Err(anyhow!("unimplemented")),
         }
-
-        let factor = factors
-            .get(0)
-            .ok_or_else(|| anyhow!("cannot get MFA factor"))?;
-
-        let url = self.get_verification_url(factor)?;
-
-        Ok(Event::MfaRequired {
-            url,
-            state_token,
-            factor: factor.clone(),
-        })
     }
 }
 
@@ -173,14 +177,14 @@ impl OktaMfaChallenge {
 
 #[async_trait]
 impl Runnable for OktaMfaChallenge {
-    async fn run(&self, client: &OktaClient) -> Result<Event> {
+    async fn run(&self, client: &OktaClient, _app_url: String) -> Result<Event> {
         let url = self.get_verification_url(&self.factor)?;
 
         let json = &serde_json::json!({
             "stateToken": self.state_token,
         });
 
-        let body = client
+        let (body, _status) = client
             .post(self.url.as_str(), json)
             .await
             .map_err(|e| anyhow!(e))?;
@@ -231,7 +235,7 @@ impl Runnable for OktaMfaChallenge {
             "authenticatorData": u2f_response.authenticator_data,
         });
 
-        let body = client
+        let (body, _status) = client
             .post(url.as_str(), json)
             .await
             .map_err(|e| anyhow!(e))?;
@@ -264,12 +268,9 @@ impl OktaGetCredentials {
 
 #[async_trait]
 impl Runnable for OktaGetCredentials {
-    async fn run(&self, client: &OktaClient) -> Result<Event> {
+    async fn run(&self, client: &OktaClient, app_url: String) -> Result<Event> {
         let body = client
-            .get(
-                "/home/amazon_aws/0oa1crzseqkrZUctZ357/272".to_string(),
-                Some(self.session_token.clone()),
-            )
+            .get(app_url, Some(self.session_token.clone()))
             .await
             .map_err(|e| anyhow!(e))?;
 
@@ -323,11 +324,11 @@ impl StateMachineWrapper {
         }
     }
 
-    async fn run(&self, client: &OktaClient) -> Result<Event> {
+    async fn run(&self, client: &OktaClient, app_url: String) -> Result<Event> {
         match self {
-            StateMachineWrapper::Authorize(val) => Ok(val.run(client).await?),
-            StateMachineWrapper::Challenge(val) => Ok(val.run(client).await?),
-            StateMachineWrapper::GetCredentials(val) => Ok(val.run(client).await?),
+            StateMachineWrapper::Authorize(val) => Ok(val.run(client, app_url).await?),
+            StateMachineWrapper::Challenge(val) => Ok(val.run(client, app_url).await?),
+            StateMachineWrapper::GetCredentials(val) => Ok(val.run(client, app_url).await?),
         }
     }
 }
@@ -337,11 +338,11 @@ pub struct Factory {}
 impl Factory {
     pub async fn run(self, username: String, password: String, base_url: String) -> Result<()> {
         let mut state: StateMachineWrapper =
-            StateMachineWrapper::Authorize(OktaAuthorize::new(username, password, base_url));
+            StateMachineWrapper::Authorize(OktaAuthorize::new(username, password));
         let client = OktaClient::new().map_err(|e| anyhow!(e))?;
 
         loop {
-            let event = state.run(&client).await?;
+            let event = state.run(&client, base_url.clone()).await?;
             match event {
                 Event::Done => {
                     break;

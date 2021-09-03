@@ -7,7 +7,6 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 
 pub struct OktaClient {
     client: Client,
-    pub base_url: Url,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
@@ -20,11 +19,10 @@ impl OktaClient {
     pub fn new() -> Result<OktaClient> {
         Ok(OktaClient {
             client: Client::builder().cookie_store(true).build()?,
-            base_url: Url::parse("https://suse.okta.com")?,
         })
     }
 
-    pub async fn post(&self, uri: &str, json: &Value) -> Result<String> {
+    pub async fn post(&self, uri: &str, json: &Value) -> Result<(String, reqwest::StatusCode)> {
         let res = self
             .client
             .post(uri)
@@ -32,18 +30,17 @@ impl OktaClient {
             .header(ACCEPT, HeaderValue::from_static("application/json"))
             .send()
             .await?;
+        let status = res.status();
         let body = res.text().await?;
 
         //println!("Url: {}", uri);
         //println!("Body: {}", body);
 
-        Ok(body)
+        Ok((body, status))
     }
 
-    pub async fn get(&self, path: String, session_token: Option<String>) -> Result<String> {
-        let mut url = self.base_url.clone();
-
-        url.set_path(path.as_str());
+    pub async fn get(&self, url: String, session_token: Option<String>) -> Result<String> {
+        let mut url = Url::parse(url.as_str())?;
 
         if let Some(token) = session_token {
             url.query_pairs_mut()
