@@ -21,7 +21,7 @@ impl OktaError {
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
-pub enum TransactionState {
+enum TransactionState {
     #[serde(rename = "MFA_REQUIRED")]
     MfaRequired,
     #[serde(rename = "MFA_CHALLENGE")]
@@ -34,46 +34,70 @@ pub enum TransactionState {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct AuthResponse {
-    pub state_token: Option<String>,
+pub struct Response {
+    state_token: Option<String>,
+    session_token: Option<String>,
     #[serde(rename = "_embedded")]
-    pub embedded: Option<Embedded>,
-    pub status: Option<TransactionState>,
+    embedded: Option<Embedded>,
+    status: Option<TransactionState>,
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct ChallengeResponse {
-    pub state_token: Option<String>,
-    #[serde(rename = "_embedded")]
-    pub embedded: Option<Embedded>,
-}
+impl Response {
+    pub fn state_token(&self) -> Option<String> {
+        self.state_token.clone()
+    }
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct ChallengeResultResponse {
-    pub session_token: Option<String>,
+    pub fn session_token(&self) -> Option<String> {
+        self.session_token.clone()
+    }
+
+    pub fn factors(&self) -> Option<Vec<FactorType>> {
+        // collect the general webauthn factor (used to authorize against all webauthn factors)
+        let mut factors_types = self
+            .embedded
+            .as_ref()?
+            .factor_types
+            .clone()
+            .unwrap_or_default();
+
+        // collect all other MFA factors
+        let mut factors = self.embedded.as_ref()?.factors.clone().unwrap_or_default();
+
+        factors_types.append(&mut factors);
+        Some(factors_types)
+    }
+
+    pub fn challenge(&self) -> Option<String> {
+        Some(
+            self.embedded
+                .as_ref()?
+                .challenge
+                .as_ref()?
+                .challenge
+                .clone(),
+        )
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct Challenge {
-    pub challenge: String,
-    pub user_verification: Option<String>,
-    pub extensions: Option<Value>,
+struct Challenge {
+    challenge: String,
+    user_verification: Option<String>,
+    extensions: Option<Value>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct Embedded {
+struct Embedded {
     #[serde(default)]
-    pub factor_types: Option<Vec<FactorType>>,
+    factor_types: Option<Vec<FactorType>>,
 
     #[serde(default)]
-    pub factors: Option<Vec<FactorType>>,
+    factors: Option<Vec<FactorType>>,
 
     #[serde(default)]
-    pub challenge: Option<Challenge>,
+    challenge: Option<Challenge>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -87,13 +111,13 @@ pub enum Links {
 #[serde(rename_all = "camelCase")]
 pub struct Link {
     name: Option<String>,
-    pub href: String,
+    href: String,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
-    pub credential_id: Option<String>,
+    credential_id: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -107,4 +131,34 @@ pub enum FactorType {
     },
     #[serde(other)]
     Unimplemented,
+}
+
+impl FactorType {
+    pub fn get_verification_url(&self) -> Option<String> {
+        return match self {
+            FactorType::WebAuthn { ref links, .. } => {
+                let next = links.as_ref()?.get("next")?;
+
+                match next {
+                    Links::Single(l) => Some(l.href.clone()),
+                    Links::Multi(list) => {
+                        let link = list.get(0)?;
+                        Some(link.href.clone())
+                    }
+                }
+            }
+            FactorType::Unimplemented => None,
+        };
+    }
+
+    pub fn get_credential_id(&self) -> Option<String> {
+        return match self {
+            FactorType::WebAuthn { ref profile, .. } => {
+                let profile = profile.as_ref()?;
+
+                Some(profile.credential_id.as_ref()?.clone())
+            }
+            FactorType::Unimplemented => None,
+        };
+    }
 }

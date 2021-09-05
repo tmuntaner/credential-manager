@@ -1,28 +1,11 @@
 use crate::aws;
 use crate::aws::sts::AwsCredential;
-use crate::okta::api_responses::{
-    AuthResponse, ChallengeResponse, ChallengeResultResponse, FactorType, Links, OktaError,
-};
+use crate::okta::api_responses::{FactorType, OktaError, Response};
 use crate::okta::okta_client::OktaClient;
 use crate::verify;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use thiserror::Error;
 use url::Url;
-
-macro_rules! missing_required_key_error {
-    ($msg:literal $(,)?) => {
-        ParseError::RequiredMissing {
-            key: String::from($msg),
-        }
-    };
-}
-
-#[derive(Error, Debug)]
-enum ParseError {
-    #[error("required key {key:?} not in response")]
-    RequiredMissing { key: String },
-}
 
 #[derive(Debug, Clone)]
 enum Event {
@@ -53,30 +36,6 @@ impl OktaAuthorize {
     }
 }
 
-impl OktaAuthorize {
-    fn get_verification_url(&self, factor: &FactorType) -> Result<String> {
-        match *factor {
-            FactorType::WebAuthn { ref links, .. } => {
-                let links = links.as_ref().ok_or(missing_required_key_error!("links"))?;
-                let next = links
-                    .get("next")
-                    .ok_or(missing_required_key_error!("next"))?;
-
-                return match next {
-                    Links::Single(l) => Ok(l.href.clone()),
-                    Links::Multi(list) => {
-                        let link = list.get(0).ok_or_else(|| anyhow!("cannot get link"))?;
-                        Ok(link.href.clone())
-                    }
-                };
-            }
-            FactorType::Unimplemented => {}
-        }
-
-        Err(anyhow!("could not retrieve verification url"))
-    }
-}
-
 #[async_trait]
 impl Runnable for OktaAuthorize {
     async fn run(&self, client: &OktaClient, config: Config) -> Result<Event> {
@@ -98,26 +57,22 @@ impl Runnable for OktaAuthorize {
                 Err(anyhow!(response.summary()))
             }
             reqwest::StatusCode::OK => {
-                let response: AuthResponse = serde_json::from_str(body.as_str())?;
+                let response: Response = serde_json::from_str(body.as_str())?;
                 let state_token = response
-                    .state_token
-                    .ok_or(missing_required_key_error!("state_token"))?;
+                    .state_token()
+                    .ok_or_else(|| anyhow!("could not get state token"))?;
 
                 let factors = response
-                    .embedded
-                    .ok_or(missing_required_key_error!("embedded"))?
-                    .factor_types
-                    .ok_or(missing_required_key_error!("factor_types"))?;
-
-                if factors.is_empty() {
-                    return Err(anyhow!("no MFA factors"));
-                }
+                    .factors()
+                    .ok_or_else(|| anyhow!("could not get factors"))?;
 
                 let factor = factors
                     .get(0)
                     .ok_or_else(|| anyhow!("cannot get MFA factor"))?;
 
-                let url = self.get_verification_url(factor)?;
+                let url = factor
+                    .get_verification_url()
+                    .ok_or_else(|| anyhow!("could not get verification url"))?;
 
                 Ok(Event::MfaRequired {
                     url,
@@ -136,49 +91,13 @@ struct OktaMfaChallenge {
     url: String,
 }
 
-impl OktaMfaChallenge {
-    fn get_verification_url(&self, factor: &FactorType) -> Result<String> {
-        match *factor {
-            FactorType::WebAuthn { ref links, .. } => {
-                let links = links.as_ref().ok_or(missing_required_key_error!("links"))?;
-                let next = links
-                    .get("next")
-                    .ok_or(missing_required_key_error!("next"))?;
-
-                return match next {
-                    Links::Single(l) => Ok(l.href.clone()),
-                    Links::Multi(list) => {
-                        let link = list.get(0).ok_or_else(|| anyhow!("could not get link"))?;
-                        Ok(link.href.clone())
-                    }
-                };
-            }
-            FactorType::Unimplemented => Err(anyhow!("not implemented factor type")),
-        }
-    }
-
-    fn get_challenge_id(&self, factor: &FactorType) -> Result<String> {
-        return match *factor {
-            FactorType::WebAuthn { ref profile, .. } => {
-                let profile = profile
-                    .as_ref()
-                    .ok_or(missing_required_key_error!("profile"))?;
-
-                Ok(profile
-                    .credential_id
-                    .as_ref()
-                    .ok_or(missing_required_key_error!("credential_id"))?
-                    .clone())
-            }
-            FactorType::Unimplemented => Err(anyhow!("unimplemented")),
-        };
-    }
-}
-
 #[async_trait]
 impl Runnable for OktaMfaChallenge {
     async fn run(&self, client: &OktaClient, _config: Config) -> Result<Event> {
-        let url = self.get_verification_url(&self.factor)?;
+        let url = self
+            .factor
+            .get_verification_url()
+            .ok_or_else(|| anyhow!("could not get verification url"))?;
 
         let json = &serde_json::json!({
             "stateToken": self.state_token,
@@ -189,30 +108,22 @@ impl Runnable for OktaMfaChallenge {
             .await
             .map_err(|e| anyhow!(e))?;
 
-        let challenge_response: ChallengeResponse = serde_json::from_str(body.as_str())?;
-
-        let state_token = challenge_response
-            .state_token
-            .ok_or(missing_required_key_error!("state_token"))?;
-
-        let embedded = challenge_response
-            .embedded
-            .ok_or(missing_required_key_error!("embedded"))?;
-
-        let factors = &embedded
-            .factors
-            .ok_or(missing_required_key_error!("factors"))?;
+        let response: Response = serde_json::from_str(body.as_str())?;
+        let factors = response
+            .factors()
+            .ok_or_else(|| anyhow!("could not get mfa factors"))?;
+        let state_token = response
+            .state_token()
+            .ok_or_else(|| anyhow!("could not get state token"))?;
+        let challenge = response
+            .challenge()
+            .ok_or_else(|| anyhow!("could not get challenge"))?;
 
         let credential_ids: Vec<String> = factors
             .iter()
-            .map(|factor| self.get_challenge_id(factor))
-            .filter_map(|factor| factor.ok())
+            .map(|factor| factor.get_credential_id())
+            .flatten()
             .collect();
-
-        let challenge = embedded
-            .challenge
-            .ok_or(missing_required_key_error!("challenge"))?
-            .challenge;
 
         let origin = Url::parse(url.clone().as_str())?;
         if origin.scheme() != "https" {
@@ -240,11 +151,10 @@ impl Runnable for OktaMfaChallenge {
             .await
             .map_err(|e| anyhow!(e))?;
 
-        let challenge_result_response: ChallengeResultResponse =
-            serde_json::from_str(body.as_str()).map_err(|e| anyhow!(e))?;
-        let session_token = challenge_result_response
-            .session_token
-            .ok_or(missing_required_key_error!("session_token"))?;
+        let response: Response = serde_json::from_str(body.as_str()).map_err(|e| anyhow!(e))?;
+        let session_token = response
+            .session_token()
+            .ok_or_else(|| anyhow!("could not get session token"))?;
 
         Ok(Event::AuthorizeSuccess { session_token })
     }
