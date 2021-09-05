@@ -1,3 +1,4 @@
 /target
 .idea
 *.iml
+package/obs/*.tar.bz2
