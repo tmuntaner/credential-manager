@@ -21,7 +21,7 @@ impl OktaError {
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
-enum TransactionState {
+pub enum TransactionState {
     #[serde(rename = "MFA_REQUIRED")]
     MfaRequired,
     #[serde(rename = "MFA_CHALLENGE")]
@@ -40,9 +40,15 @@ pub struct Response {
     #[serde(rename = "_embedded")]
     embedded: Option<Embedded>,
     status: Option<TransactionState>,
+    #[serde(rename = "_links")]
+    links: Option<HashMap<String, Links>>,
 }
 
 impl Response {
+    pub fn status(&self) -> Option<TransactionState> {
+        self.status.clone()
+    }
+
     pub fn state_token(&self) -> Option<String> {
         self.state_token.clone()
     }
@@ -65,6 +71,10 @@ impl Response {
 
         factors_types.append(&mut factors);
         Some(factors_types)
+    }
+
+    pub fn next(&self) -> Option<String> {
+        self.links.as_ref()?.get("next")?.link()
     }
 
     pub fn challenge(&self) -> Option<String> {
@@ -107,6 +117,18 @@ pub enum Links {
     Multi(Vec<Link>),
 }
 
+impl Links {
+    fn link(&self) -> Option<String> {
+        match self {
+            Links::Single(l) => Some(l.href.clone()),
+            Links::Multi(list) => {
+                let link = list.get(0)?;
+                Some(link.href.clone())
+            }
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Link {
@@ -136,17 +158,7 @@ pub enum FactorType {
 impl FactorType {
     pub fn get_verification_url(&self) -> Option<String> {
         return match self {
-            FactorType::WebAuthn { ref links, .. } => {
-                let next = links.as_ref()?.get("next")?;
-
-                match next {
-                    Links::Single(l) => Some(l.href.clone()),
-                    Links::Multi(list) => {
-                        let link = list.get(0)?;
-                        Some(link.href.clone())
-                    }
-                }
-            }
+            FactorType::WebAuthn { ref links, .. } => links.as_ref()?.get("next")?.link(),
             FactorType::Unimplemented => None,
         };
     }

@@ -1,9 +1,9 @@
+use crate::okta::api_responses::{OktaError, Response};
+use anyhow::{anyhow, Result};
 use reqwest::header::{HeaderValue, ACCEPT};
 use reqwest::Client;
 use serde_json::Value;
 use url::Url;
-
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 pub struct OktaClient {
     client: Client,
@@ -22,7 +22,7 @@ impl OktaClient {
         })
     }
 
-    pub async fn post(&self, uri: &str, json: &Value) -> Result<(String, reqwest::StatusCode)> {
+    pub async fn post(&self, uri: &str, json: &Value) -> Result<Response> {
         let res = self
             .client
             .post(uri)
@@ -33,10 +33,17 @@ impl OktaClient {
         let status = res.status();
         let body = res.text().await?;
 
-        //println!("Url: {}", uri);
-        //println!("Body: {}", body);
-
-        Ok((body, status))
+        match status {
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                let response: OktaError = serde_json::from_str(body.as_str())?;
+                Err(anyhow!(response.summary()))
+            }
+            reqwest::StatusCode::OK => {
+                let response: Response = serde_json::from_str(body.as_str())?;
+                Ok(response)
+            }
+            _ => Err(anyhow!("unimplemented")),
+        }
     }
 
     pub async fn get(&self, url: String, session_token: Option<String>) -> Result<String> {
