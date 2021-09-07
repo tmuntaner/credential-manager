@@ -127,11 +127,9 @@ async fn main() -> Result<()> {
                     .map_err(|_e| anyhow!("please supply a password"))?,
             };
 
-            let authorizer = okta::authorizer::Authorizer {};
-            let session_token = authorizer.run(app_url.clone(), username, password).await?;
-            let aws_credentials = okta::aws_credentials::AwsCredentials {};
-            aws_credentials
-                .run(app_url, session_token, val.role_arn)
+            let client = okta::okta_client::OktaClient::new()?;
+            client
+                .run(username, password, app_url, val.role_arn)
                 .await?;
         }
     }

@@ -1,4 +1,5 @@
-pub(crate) mod api_responses;
-pub mod authorizer;
-pub mod aws_credentials;
+mod api_responses;
+mod authorizer;
+mod aws_credentials;
+mod okta_api_client;
 pub mod okta_client;

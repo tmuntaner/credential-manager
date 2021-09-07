@@ -1,21 +1,27 @@
 use crate::aws;
 use crate::aws::sts::AwsCredential;
-use crate::okta::okta_client::OktaClient;
+use crate::okta::okta_api_client::OktaApiClient;
 use crate::verify;
 use anyhow::{anyhow, Result};
 
-pub struct AwsCredentials {}
+pub struct AwsCredentials {
+    client: OktaApiClient,
+}
 
 impl AwsCredentials {
+    pub fn new() -> Result<AwsCredentials> {
+        let client = OktaApiClient::new().map_err(|e| anyhow!(e))?;
+        Ok(AwsCredentials { client })
+    }
+
     pub async fn run(
         &self,
         app_url: String,
         session_token: String,
         role_arn: Option<String>,
     ) -> Result<()> {
-        let client = OktaClient::new().map_err(|e| anyhow!(e))?;
-
-        let body = client
+        let body = self
+            .client
             .get(app_url, Some(session_token.clone()))
             .await
             .map_err(|e| anyhow!(e))?;
