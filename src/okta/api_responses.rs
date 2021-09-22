@@ -12,6 +12,7 @@ pub struct OktaError {
 }
 
 impl OktaError {
+    /// Returns an error summary
     pub fn summary(&self) -> String {
         format!(
             "okta error code {} - {}",
@@ -45,18 +46,26 @@ pub struct Response {
 }
 
 impl Response {
+    /// Tries to return the [`TransactionState`] of a response.
     pub fn status(&self) -> Option<TransactionState> {
         self.status.clone()
     }
 
+    /// Tries to return the state token to keep track of the transaction.
+    ///
+    /// This should always be filled.
     pub fn state_token(&self) -> Option<String> {
         self.state_token.clone()
     }
 
+    /// Tries to return the session token to run authorized API requests.
+    ///
+    /// This will only be filled if we successfully authorized the user.
     pub fn session_token(&self) -> Option<String> {
         self.session_token.clone()
     }
 
+    /// Tries to return the valid MFA factors.
     pub fn factors(&self) -> Option<Vec<FactorType>> {
         // collect the general webauthn factor (used to authorize against all webauthn factors)
         let mut factors_types = self
@@ -73,10 +82,12 @@ impl Response {
         Some(factors_types)
     }
 
+    /// Tries to return the next page in the transaction.
     pub fn next(&self) -> Option<String> {
         self.links.as_ref()?.get("next")?.link()
     }
 
+    /// Tries to return the MFA challenge.
     pub fn challenge(&self) -> Option<String> {
         Some(
             self.embedded
@@ -118,6 +129,7 @@ pub enum Links {
 }
 
 impl Links {
+    /// Tries to return a valid link.
     fn link(&self) -> Option<String> {
         match self {
             Links::Single(l) => Some(l.href.clone()),
@@ -156,6 +168,7 @@ pub enum FactorType {
 }
 
 impl FactorType {
+    /// Tries to get the verification URL for a factor.
     pub fn get_verification_url(&self) -> Option<String> {
         return match self {
             FactorType::WebAuthn { ref links, .. } => links.as_ref()?.get("next")?.link(),
@@ -163,6 +176,7 @@ impl FactorType {
         };
     }
 
+    /// Tries to get the credential ID for a factor.
     pub fn get_credential_id(&self) -> Option<String> {
         return match self {
             FactorType::WebAuthn { ref profile, .. } => {

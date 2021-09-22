@@ -4,20 +4,41 @@ use crate::verify;
 use anyhow::{anyhow, Result};
 use url::Url;
 
-pub struct Authorizer {
+/// Goes through the Okta Authentication state machine to finally generate a session token.
+///
+/// See <https://developer.okta.com/docs/reference/api/authn/#transaction-state> for more details
+/// on how Okta handles the authentication process.
+///
+/// # Examples
+///
+/// ```rust
+/// let authenticator = Authenticator::new()?;
+/// ```
+pub struct Authenticator {
     client: OktaApiClient,
 }
 
-impl Authorizer {
-    pub fn new() -> Result<Authorizer> {
+impl Authenticator {
+    /// Creates a new [`Authenticator`] object.
+    pub fn new() -> Result<Authenticator> {
         let client = OktaApiClient::new().map_err(|e| anyhow!(e))?;
-        Ok(Authorizer { client })
+        Ok(Authenticator { client })
     }
 
+    /// Runs the authentication process for an app/username/password.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// let authenticator = Authenticator::new()?;
+    /// let result = authenticator.run("https://the.app.url", "username", "correct battery horse staple")?;
+    /// ```
     pub async fn run(&self, app_url: String, username: String, password: String) -> Result<String> {
         let mut response = self
             .try_authorize(app_url.clone(), username, password)
             .await?;
+
+        // loop over the mutated response until we reach a success state or an error.
         loop {
             match response
                 .status()
@@ -39,6 +60,9 @@ impl Authorizer {
         }
     }
 
+    /// Try to authenticate against Okta
+    ///
+    /// <https://developer.okta.com/docs/reference/api/authn/#primary-authentication>
     async fn try_authorize(
         &self,
         app_url: String,
@@ -60,6 +84,46 @@ impl Authorizer {
             .map_err(|e| anyhow!(e))?)
     }
 
+    /// An MFA challenge is required.
+    ///
+    /// This happens when the username/password isn't enough (should always be the case). The user
+    /// chooses an MFA option and Okta will provide it with a challenge.
+    ///
+    /// <https://developer.okta.com/docs/reference/api/authn/#verify-factor>
+    async fn mfa_required(&self, response: &Response) -> Result<Response> {
+        let state_token = response
+            .state_token()
+            .ok_or_else(|| anyhow!("could not get state token"))?;
+
+        let factors = response
+            .factors()
+            .ok_or_else(|| anyhow!("could not get factors"))?;
+
+        let factor = factors
+            .get(0)
+            .ok_or_else(|| anyhow!("cannot get MFA factor"))?;
+
+        let url = factor
+            .get_verification_url()
+            .ok_or_else(|| anyhow!("could not get verification url"))?;
+
+        let json = &serde_json::json!({
+           "stateToken": state_token,
+        });
+
+        Ok(self
+            .client
+            .post(url.as_str(), json)
+            .await
+            .map_err(|e| anyhow!(e))?)
+    }
+
+    /// Attempt an MFA challenge
+    ///
+    /// After a user chose an MFA option, it reaches this state with the MFA challenge. Here we try
+    /// the challenge and, if successful, we'll receive a session token in our next response.
+    ///
+    /// <https://developer.okta.com/docs/reference/api/authn/#verify-factor>
     async fn mfa_challenge(&self, response: &Response, app_url: String) -> Result<Response> {
         let factors = response
             .factors()
@@ -101,34 +165,6 @@ impl Authorizer {
         let url = response
             .next()
             .ok_or_else(|| anyhow!("could not get next page"))?;
-
-        Ok(self
-            .client
-            .post(url.as_str(), json)
-            .await
-            .map_err(|e| anyhow!(e))?)
-    }
-
-    async fn mfa_required(&self, response: &Response) -> Result<Response> {
-        let state_token = response
-            .state_token()
-            .ok_or_else(|| anyhow!("could not get state token"))?;
-
-        let factors = response
-            .factors()
-            .ok_or_else(|| anyhow!("could not get factors"))?;
-
-        let factor = factors
-            .get(0)
-            .ok_or_else(|| anyhow!("cannot get MFA factor"))?;
-
-        let url = factor
-            .get_verification_url()
-            .ok_or_else(|| anyhow!("could not get verification url"))?;
-
-        let json = &serde_json::json!({
-           "stateToken": state_token,
-        });
 
         Ok(self
             .client

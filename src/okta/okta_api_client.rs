@@ -5,23 +5,26 @@ use reqwest::Client;
 use serde_json::Value;
 use url::Url;
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub struct Role {
-    pub provider_arn: String,
-    pub role_arn: String,
-}
-
+/// An API client to contact Okta
+///
+/// # Examples
+///
+/// ```rust
+/// let client = OktaApiClient::new()?;
+/// ```
 pub struct OktaApiClient {
     http_client: Client,
 }
 
 impl OktaApiClient {
+    /// Returns a new [`OktaApiClient`]
     pub fn new() -> Result<OktaApiClient> {
         Ok(OktaApiClient {
             http_client: Client::builder().cookie_store(true).build()?,
         })
     }
 
+    /// HTTP POST to generate a [`Response`]
     pub async fn post(&self, uri: &str, json: &Value) -> Result<Response> {
         let res = self
             .http_client
@@ -46,6 +49,7 @@ impl OktaApiClient {
         }
     }
 
+    /// HTTP GET to get a body [`String`]
     pub async fn get(&self, url: String, session_token: Option<String>) -> Result<String> {
         let mut url = Url::parse(url.as_str())?;
 

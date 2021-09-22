@@ -129,7 +129,7 @@ async fn main() -> Result<()> {
 
             let client = okta::okta_client::OktaClient::new()?;
             client
-                .run(username, password, app_url, val.role_arn)
+                .aws_credentials(username, password, app_url, val.role_arn)
                 .await?;
         }
     }

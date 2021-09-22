@@ -4,16 +4,42 @@ use crate::okta::okta_api_client::OktaApiClient;
 use crate::verify;
 use anyhow::{anyhow, Result};
 
+/// This struct contacts the AWS application in Okta, goes through its SAML response, and then
+/// uses the result to generate credentials with STS.
+///
+/// # Examples
+///
+/// ```rust
+/// let aws_credentials = AwsCredentials::new()?;
+/// ```
 pub struct AwsCredentials {
     client: OktaApiClient,
 }
 
 impl AwsCredentials {
+    /// Generates a new [`AwsCredentials`] object.
     pub fn new() -> Result<AwsCredentials> {
         let client = OktaApiClient::new().map_err(|e| anyhow!(e))?;
         Ok(AwsCredentials { client })
     }
 
+    /// Call this function to get credentials from the AWS.
+    ///
+    /// # Examples
+    ///
+    /// Return only one role:
+    ///
+    /// ```rust
+    /// let aws_credentials = AwsCredentials::new()?;
+    /// aws_credentials.run("https://the.app.url", "the session token", Some("role arn"))?;
+    /// ```
+    ///
+    /// Return all roles:
+    ///
+    /// ```rust
+    /// let aws_credentials = AwsCredentials::new()?;
+    /// aws_credentials.run("https://the.app.url", "the session token", NONE)?;
+    /// ```
     pub async fn run(
         &self,
         app_url: String,
@@ -41,6 +67,21 @@ impl AwsCredentials {
         Ok(())
     }
 
+    /// Call this function to parse the saml response and generate AWS credntials.
+    ///
+    /// # Examples
+    ///
+    /// Return only one role:
+    ///
+    /// ```rust
+    /// let credentials = self.get_saml_response(body, Some("ROLE_ARN"))?;
+    /// ```
+    ///
+    /// Return all roles:
+    ///
+    /// ```rust
+    /// let credentials = self.get_saml_response(body, NONE)?;
+    /// ```
     async fn get_saml_response(
         &self,
         body: String,
