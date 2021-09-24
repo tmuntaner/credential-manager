@@ -15,6 +15,7 @@ pub struct AwsCredential {
     pub secret_access_key: String,
     pub access_key_id: String,
     pub role_arn: String,
+    pub session_token: String,
 }
 
 struct StsFuture {
@@ -60,6 +61,7 @@ pub async fn generate_sts_credentials(
             secret_access_key: credentials.secret_access_key,
             access_key_id: credentials.access_key_id,
             role_arn: future.role_arn,
+            session_token: credentials.session_token,
         });
     }
 
