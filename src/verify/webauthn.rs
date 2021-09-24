@@ -56,15 +56,17 @@ pub struct SignatureResponse {
 
 pub fn webauthn_sign(
     challenge_str: String,
-    origin: String,
+    host: String,
     credential_ids: Vec<String>,
 ) -> SignatureResponse {
     let mut manager =
         AuthenticatorService::new().expect("The auth service should initialize safely");
     manager.add_u2f_usb_hid_platform_transports();
 
+    let origin: String = format!("https://{}", host);
+
     let (client_data_json, chall_bytes, app_bytes) =
-        generate_input_hashes(origin, challenge_str, String::from("suse.okta.com"));
+        generate_input_hashes(origin, challenge_str, host);
 
     let key_handles: Vec<KeyHandle> = credential_ids
         .iter()

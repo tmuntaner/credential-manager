@@ -45,7 +45,7 @@ impl AwsCredentials {
         app_url: String,
         session_token: String,
         role_arn: Option<String>,
-    ) -> Result<()> {
+    ) -> Result<Vec<AwsCredential>> {
         let body = self
             .client
             .get(app_url, Some(session_token.clone()))
@@ -57,14 +57,7 @@ impl AwsCredentials {
             .await
             .map_err(|e| anyhow!(e))?;
 
-        for credential in aws_credentials {
-            println!(
-                "{}\n{}\n{}\n",
-                credential.role_arn, credential.access_key_id, credential.secret_access_key
-            );
-        }
-
-        Ok(())
+        Ok(aws_credentials)
     }
 
     /// Call this function to parse the saml response and generate AWS credntials.

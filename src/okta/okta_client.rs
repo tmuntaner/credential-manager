@@ -1,3 +1,4 @@
+use crate::aws::sts::AwsCredential;
 use crate::okta::authenticator::Authenticator;
 use crate::okta::aws_credentials::AwsCredentials;
 use anyhow::Result;
@@ -46,15 +47,16 @@ impl OktaClient {
         password: String,
         app_url: String,
         role_arn: Option<String>,
-    ) -> Result<()> {
+    ) -> Result<Vec<AwsCredential>> {
         let session_token = self
             .authorizer
             .run(app_url.clone(), username, password)
             .await?;
-        self.aws_credentials
+        let credentials = self
+            .aws_credentials
             .run(app_url, session_token, role_arn)
             .await?;
 
-        Ok(())
+        Ok(credentials)
     }
 }

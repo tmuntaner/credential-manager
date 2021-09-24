@@ -128,9 +128,16 @@ async fn main() -> Result<()> {
             };
 
             let client = okta::okta_client::OktaClient::new()?;
-            client
+            let aws_credentials = client
                 .aws_credentials(username, password, app_url, val.role_arn)
                 .await?;
+
+            for credential in aws_credentials {
+                println!(
+                    "{}\nexport AWS_ACCESS_KEY_ID=\"{}\"\nexport AWS_SECRET_ACCESS_KEY=\"{}\"\nexport AWS_SESSION_TOKEN=\"{}\"\n",
+                    credential.role_arn, credential.access_key_id, credential.secret_access_key, credential.session_token
+                );
+            }
         }
     }
 
