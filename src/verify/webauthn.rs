@@ -3,14 +3,15 @@ use authenticator::{
     AuthenticatorTransports, KeyHandle, SignFlags, StatusUpdate,
 };
 
+use indicatif::{ProgressBar, ProgressStyle};
 use nom::call;
 use nom::do_parse;
 use nom::named;
 use nom::u32;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::sync::mpsc::{channel, RecvError};
-use std::{str, thread};
+use std::str;
+use std::sync::mpsc::channel;
 use url::Url;
 
 named!( authenticator_data_parser<&[u8], (u8, u32, Vec<u8>)>,
@@ -80,26 +81,25 @@ pub fn webauthn_sign(
         })
         .collect();
 
-    let (status_tx, status_rx) = channel::<StatusUpdate>();
+    let (status_tx, _status_rx) = channel::<StatusUpdate>();
     let (sign_tx, sign_rx) = channel();
 
-    thread::spawn(move || loop {
-        match status_rx.recv() {
-            Ok(StatusUpdate::DeviceAvailable { dev_info }) => {
-                println!("STATUS: device available: {}", dev_info)
-            }
-            Ok(StatusUpdate::DeviceUnavailable { dev_info }) => {
-                println!("STATUS: device unavailable: {}", dev_info)
-            }
-            Ok(StatusUpdate::Success { dev_info }) => {
-                println!("STATUS: success using device: {}", dev_info);
-            }
-            Err(RecvError) => {
-                println!("STATUS: end");
-                return;
-            }
-        }
-    });
+    let pb = ProgressBar::new_spinner();
+    pb.enable_steady_tick(120);
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .tick_strings(&[
+                "▹▹▹▹▹",
+                "▸▹▹▹▹",
+                "▹▸▹▹▹",
+                "▹▹▸▹▹",
+                "▹▹▹▸▹",
+                "▹▹▹▹▸",
+                "▪▪▪▪▪",
+            ])
+            .template("{spinner:.blue} {msg}"),
+    );
+    pb.set_message("Please insert and activate your U2F device...");
 
     let callback = StateCallback::new(Box::new(move |rv| {
         sign_tx.send(rv).unwrap();
@@ -122,6 +122,7 @@ pub fn webauthn_sign(
         .recv()
         .expect("Problem receiving, unable to continue");
     let (_app_id, _used_handle, sign_data, _device_info) = sign_result.expect("Sign failed");
+    pb.finish_with_message("Processing sign request...");
 
     let (_, (user_present, counter, signature)) =
         authenticator_data_parser(sign_data.as_slice()).unwrap();
