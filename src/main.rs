@@ -6,6 +6,8 @@ pub mod verify;
 use crate::settings::Host;
 use anyhow::{anyhow, Result};
 use clap::{AppSettings, Clap};
+use log::LevelFilter;
+use simple_logger::SimpleLogger;
 use std::io::{self, BufRead, Write};
 use url::Url;
 
@@ -60,6 +62,11 @@ struct ConfigAdd {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opt: Opts = Opts::parse();
+
+    SimpleLogger::new()
+        .with_level(LevelFilter::Info)
+        .init()
+        .unwrap();
 
     match opt.sub_command {
         SubCommand::Config(val) => match val.sub_command {
