@@ -1,7 +1,7 @@
 use crate::aws;
 use crate::aws::sts::AwsCredential;
 use crate::okta::okta_api_client::OktaApiClient;
-use crate::verify;
+use crate::okta::saml_parsers::OktaAwsSamlParser;
 use anyhow::{anyhow, Result};
 
 /// This struct contacts the AWS application in Okta, goes through its SAML response, and then
@@ -60,41 +60,28 @@ impl AwsCredentials {
         Ok(aws_credentials)
     }
 
-    /// Call this function to parse the saml response and generate AWS credntials.
-    ///
-    /// # Examples
-    ///
-    /// Return only one role:
-    ///
-    /// ```rust
-    /// let credentials = self.get_saml_response(body, Some("ROLE_ARN"))?;
-    /// ```
-    ///
-    /// Return all roles:
-    ///
-    /// ```rust
-    /// let credentials = self.get_saml_response(body, NONE)?;
-    /// ```
     async fn get_saml_response(
         &self,
         body: String,
         role_arn: Option<String>,
     ) -> Result<Vec<AwsCredential>> {
-        let saml_response = verify::saml::SamlResponse::new(body)
-            .ok_or_else(|| anyhow!("could not get saml response"))?;
+        let saml_parser = OktaAwsSamlParser::new(body)?;
         let saml_aws_credentials = match role_arn {
             Some(role_arn) => {
-                let credentials = saml_response.credentials();
+                let credentials = saml_parser.credentials()?;
                 let role = credentials
                     .iter()
                     .find(|cred| cred.role_arn == role_arn)
                     .ok_or_else(|| anyhow!("could not find role_arn {}", role_arn))?;
                 vec![role.clone()]
             }
-            None => saml_response.credentials(),
+            None => saml_parser.credentials()?,
         };
-        let aws_credentials =
-            aws::sts::generate_sts_credentials(saml_response.raw, saml_aws_credentials).await;
+        let aws_credentials = aws::sts::generate_sts_credentials(
+            saml_parser.raw_saml_response(),
+            saml_aws_credentials,
+        )
+        .await;
 
         Ok(aws_credentials)
     }
