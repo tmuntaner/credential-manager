@@ -11,7 +11,8 @@ use std::collections::HashMap;
 /// # Examples
 ///
 /// ```rust
-/// let aws_credentials = AwsCredentials::new()?;
+/// use c9s::okta::aws::aws_credentials::AwsCredentials;
+/// let aws_credentials = AwsCredentials::new().unwrap();
 /// ```
 pub struct AwsCredentials {
     client: ApiClient,
@@ -25,22 +26,6 @@ impl AwsCredentials {
     }
 
     /// Call this function to get credentials from the AWS.
-    ///
-    /// # Examples
-    ///
-    /// Return only one role:
-    ///
-    /// ```rust
-    /// let aws_credentials = AwsCredentials::new()?;
-    /// aws_credentials.run("https://the.app.url", "the session token", Some("role arn"))?;
-    /// ```
-    ///
-    /// Return all roles:
-    ///
-    /// ```rust
-    /// let aws_credentials = AwsCredentials::new()?;
-    /// aws_credentials.run("https://the.app.url", "the session token", NONE)?;
-    /// ```
     pub async fn run(
         &self,
         app_url: String,

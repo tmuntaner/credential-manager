@@ -9,7 +9,8 @@ use serde_json::Value;
 /// # Examples
 ///
 /// ```rust
-/// let client = OktaApiClient::new()?;
+/// use c9s::okta::authenticator::okta_api_client::OktaApiClient;
+/// let client = OktaApiClient::new().unwrap();
 /// ```
 pub struct OktaApiClient {
     http_client: Client,

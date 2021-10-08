@@ -15,22 +15,6 @@ impl AwsSSOCredentials {
     }
 
     /// Call this function to get credentials from AWS SSO.
-    ///
-    /// # Examples
-    ///
-    /// Return only one role:
-    ///
-    /// ```rust
-    /// let aws_credentials = AwsSSOCredentials::new()?;
-    /// aws_credentials.run("https://the.app.url", "the session token", Some("role arn"))?;
-    /// ```
-    ///
-    /// Return all roles:
-    ///
-    /// ```rust
-    /// let aws_credentials = AwsSSOCredentials::new()?;
-    /// aws_credentials.run("https://the.app.url", "the session token", NONE)?;
-    /// ```
     pub async fn run(
         &self,
         app_url: String,

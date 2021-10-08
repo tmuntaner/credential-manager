@@ -13,7 +13,8 @@ use url::Url;
 /// # Examples
 ///
 /// ```rust
-/// let authenticator = Authenticator::new()?;
+/// use c9s::okta::authenticator::authenticator_client::AuthenticatorClient;
+/// let authenticator = AuthenticatorClient::new().unwrap();
 /// ```
 pub struct AuthenticatorClient {
     client: OktaApiClient,
@@ -27,13 +28,6 @@ impl AuthenticatorClient {
     }
 
     /// Runs the authentication process for an app/username/password.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// let authenticator = Authenticator::new()?;
-    /// let result = authenticator.run("https://the.app.url", "username", "correct battery horse staple")?;
-    /// ```
     pub async fn run(&self, app_url: String, username: String, password: String) -> Result<String> {
         let mut response = self
             .try_authorize(app_url.clone(), username, password)

@@ -9,7 +9,8 @@ use anyhow::Result;
 /// # Example
 ///
 /// ```rust
-/// let client = OktaClient::new()?;
+/// use c9s::okta::okta_client::OktaClient;
+/// let client = OktaClient::new().unwrap();
 /// ```
 pub struct OktaClient {
     authorizer: AuthenticatorClient,
@@ -27,23 +28,6 @@ impl OktaClient {
         })
     }
 
-    /// Retrieves AWS Credentials
-    ///
-    /// # Example
-    ///
-    /// Without an AWS Role Arn:
-    ///
-    /// ```rust
-    /// let client = OktaClient::new()?;
-    /// let result = client.run("foo@domain.com", "correct horse battery staple", "https://domain.okta.com/aws", NONE))?;
-    /// ```
-    ///
-    /// With an AWS Role ARN:
-    ///
-    /// ```rust
-    /// let client = OktaClient::new()?;
-    /// let result = client.run("foo@domain.com", "correct horse battery staple", "https://domain.okta.com/aws", Some("AWS_ARN"))?;
-    /// ```
     pub async fn aws_credentials(
         &self,
         username: String,

@@ -1,5 +1,5 @@
-mod authenticator;
-mod aws;
-mod aws_sso;
+pub mod authenticator;
+pub mod aws;
+pub mod aws_sso;
 pub mod okta_client;
-mod saml_parsers;
+pub mod saml_parsers;
