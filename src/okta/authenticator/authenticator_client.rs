@@ -1,5 +1,6 @@
-use crate::okta::api_responses::{Response, TransactionState};
-use crate::okta::okta_api_client::OktaApiClient;
+use crate::okta::authenticator::api_responses::{Response, TransactionState};
+use crate::okta::authenticator::okta_api_client::OktaApiClient;
+
 use crate::verify;
 use anyhow::{anyhow, Result};
 use url::Url;
@@ -14,15 +15,15 @@ use url::Url;
 /// ```rust
 /// let authenticator = Authenticator::new()?;
 /// ```
-pub struct Authenticator {
+pub struct AuthenticatorClient {
     client: OktaApiClient,
 }
 
-impl Authenticator {
+impl AuthenticatorClient {
     /// Creates a new [`Authenticator`] object.
-    pub fn new() -> Result<Authenticator> {
+    pub fn new() -> Result<AuthenticatorClient> {
         let client = OktaApiClient::new().map_err(|e| anyhow!(e))?;
-        Ok(Authenticator { client })
+        Ok(AuthenticatorClient { client })
     }
 
     /// Runs the authentication process for an app/username/password.

@@ -1,8 +1,9 @@
 use crate::aws;
 use crate::aws::sts::AwsCredential;
-use crate::okta::okta_api_client::OktaApiClient;
+use crate::http::api_client::{AcceptType, ApiClient};
 use crate::okta::saml_parsers::OktaAwsSamlParser;
 use anyhow::{anyhow, Result};
+use std::collections::HashMap;
 
 /// This struct contacts the AWS application in Okta, goes through its SAML response, and then
 /// uses the result to generate credentials with STS.
@@ -13,13 +14,13 @@ use anyhow::{anyhow, Result};
 /// let aws_credentials = AwsCredentials::new()?;
 /// ```
 pub struct AwsCredentials {
-    client: OktaApiClient,
+    client: ApiClient,
 }
 
 impl AwsCredentials {
     /// Generates a new [`AwsCredentials`] object.
     pub fn new() -> Result<AwsCredentials> {
-        let client = OktaApiClient::new().map_err(|e| anyhow!(e))?;
+        let client = ApiClient::new().map_err(|e| anyhow!(e))?;
         Ok(AwsCredentials { client })
     }
 
@@ -46,16 +47,17 @@ impl AwsCredentials {
         session_token: String,
         role_arn: Option<String>,
     ) -> Result<Vec<AwsCredential>> {
-        let body = self
-            .client
-            .get(app_url, Some(session_token.clone()))
-            .await
-            .map_err(|e| anyhow!(e))?;
+        let mut params = HashMap::new();
+        params.insert(String::from("sessionToken"), session_token);
 
-        let aws_credentials = self
-            .get_saml_response(body.clone(), role_arn)
-            .await
-            .map_err(|e| anyhow!(e))?;
+        let response = self
+            .client
+            .get(app_url, Some(params), None, AcceptType::Json)
+            .await?;
+
+        let body = response.text().await?;
+
+        let aws_credentials = self.get_saml_response(body.clone(), role_arn).await?;
 
         Ok(aws_credentials)
     }

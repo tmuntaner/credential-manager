@@ -1,6 +1,6 @@
 use crate::aws::sts::AwsCredential;
-use crate::okta::authenticator::Authenticator;
-use crate::okta::aws_credentials::AwsCredentials;
+use crate::okta::authenticator::authenticator_client::AuthenticatorClient;
+use crate::okta::aws::aws_credentials::AwsCredentials;
 use crate::okta::aws_sso::aws_sso_credentials::AwsSSOCredentials;
 use anyhow::Result;
 
@@ -12,7 +12,7 @@ use anyhow::Result;
 /// let client = OktaClient::new()?;
 /// ```
 pub struct OktaClient {
-    authorizer: Authenticator,
+    authorizer: AuthenticatorClient,
     aws_credentials: AwsCredentials,
     aws_sso_credentials: AwsSSOCredentials,
 }
@@ -21,7 +21,7 @@ impl OktaClient {
     /// Generates a new [`OktaClient`] object.
     pub fn new() -> Result<OktaClient> {
         Ok(OktaClient {
-            authorizer: Authenticator::new()?,
+            authorizer: AuthenticatorClient::new()?,
             aws_credentials: AwsCredentials::new()?,
             aws_sso_credentials: AwsSSOCredentials::new()?,
         })
