@@ -2,8 +2,8 @@ mod config;
 mod credentials;
 mod utils;
 
-use crate::config::{Config, ConfigAddSubCommand, ConfigSubCommand};
-use crate::credentials::{Credentials, CredentialsSubCommands};
+use crate::config::Config;
+use crate::credentials::Credentials;
 use anyhow::Result;
 use c9s::settings::AppConfig;
 use clap::{AppSettings, Clap};
@@ -35,16 +35,8 @@ async fn main() -> Result<()> {
     SimpleLogger::new().with_level(LevelFilter::Info).init()?;
 
     match opt.sub_command {
-        SubCommand::Config(val) => match val.sub_command {
-            ConfigSubCommand::Add(val) => match val.sub_command {
-                ConfigAddSubCommand::Aws(val) => val.run(&mut settings)?,
-                ConfigAddSubCommand::AwsSso(val) => val.run(&mut settings)?,
-            },
-        },
-        SubCommand::Creds(val) => match val.sub_command {
-            CredentialsSubCommands::AwsSso(val) => val.run(settings).await?,
-            CredentialsSubCommands::Aws(val) => val.run(settings).await?,
-        },
+        SubCommand::Config(val) => val.run(&mut settings)?,
+        SubCommand::Creds(val) => val.run(settings).await?,
     }
 
     Ok(())

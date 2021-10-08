@@ -5,28 +5,28 @@ use clap::Clap;
 #[derive(Clap)]
 pub struct Config {
     #[clap(subcommand)]
-    pub sub_command: ConfigSubCommand,
+    sub_command: ConfigSubCommand,
 }
 
 #[derive(Clap)]
-pub enum ConfigSubCommand {
+enum ConfigSubCommand {
     Add(ConfigAdd),
 }
 
 #[derive(Clap)]
-pub struct ConfigAdd {
+struct ConfigAdd {
     #[clap(subcommand)]
-    pub sub_command: ConfigAddSubCommand,
+    sub_command: ConfigAddSubCommand,
 }
 
 #[derive(Clap)]
-pub enum ConfigAddSubCommand {
+enum ConfigAddSubCommand {
     Aws(ConfigAddAws),
     AwsSso(ConfigAddAwsSso),
 }
 
 #[derive(Clap)]
-pub struct ConfigAddAws {
+struct ConfigAddAws {
     #[clap(required = true, long)]
     app_url: String,
     #[clap(required = true, short, long)]
@@ -34,7 +34,7 @@ pub struct ConfigAddAws {
 }
 
 #[derive(Clap)]
-pub struct ConfigAddAwsSso {
+struct ConfigAddAwsSso {
     #[clap(required = true, long)]
     app_url: String,
     #[clap(required = true, short, long)]
@@ -43,8 +43,19 @@ pub struct ConfigAddAwsSso {
     region: String,
 }
 
-impl ConfigAddAws {
+impl Config {
     pub fn run(&self, settings: &mut AppConfig) -> Result<()> {
+        match &self.sub_command {
+            ConfigSubCommand::Add(val) => match &val.sub_command {
+                ConfigAddSubCommand::Aws(val) => val.run(settings),
+                ConfigAddSubCommand::AwsSso(val) => val.run(settings),
+            },
+        }
+    }
+}
+
+impl ConfigAddAws {
+    fn run(&self, settings: &mut AppConfig) -> Result<()> {
         let host = AwsHost::new(self.app_url.clone(), self.username.clone())?;
         settings.add_aws_host(host);
         settings.write_config()?;
@@ -54,7 +65,7 @@ impl ConfigAddAws {
 }
 
 impl ConfigAddAwsSso {
-    pub fn run(&self, settings: &mut AppConfig) -> Result<()> {
+    fn run(&self, settings: &mut AppConfig) -> Result<()> {
         let host = AwsSsoHost::new(
             self.app_url.clone(),
             self.username.clone(),

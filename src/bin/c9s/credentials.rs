@@ -5,19 +5,19 @@ use c9s::settings::AppConfig;
 use clap::Clap;
 
 #[derive(Clap)]
-pub enum CredentialsSubCommands {
+pub struct Credentials {
+    #[clap(subcommand)]
+    sub_command: CredentialsSubCommands,
+}
+
+#[derive(Clap)]
+enum CredentialsSubCommands {
     Aws(AwsCredentials),
     AwsSso(AwsSsoCredentials),
 }
 
 #[derive(Clap)]
-pub struct Credentials {
-    #[clap(subcommand)]
-    pub sub_command: CredentialsSubCommands,
-}
-
-#[derive(Clap)]
-pub struct AwsCredentials {
+struct AwsCredentials {
     #[clap(long)]
     app_url: Option<String>,
     #[clap(short, long)]
@@ -29,7 +29,7 @@ pub struct AwsCredentials {
 }
 
 #[derive(Clap)]
-pub struct AwsSsoCredentials {
+struct AwsSsoCredentials {
     #[clap(long)]
     app_url: Option<String>,
     #[clap(short, long)]
@@ -42,8 +42,17 @@ pub struct AwsSsoCredentials {
     role_arn: Option<String>,
 }
 
-impl AwsSsoCredentials {
+impl Credentials {
     pub async fn run(&self, settings: AppConfig) -> Result<()> {
+        match &self.sub_command {
+            CredentialsSubCommands::AwsSso(val) => val.run(settings).await,
+            CredentialsSubCommands::Aws(val) => val.run(settings).await,
+        }
+    }
+}
+
+impl AwsSsoCredentials {
+    async fn run(&self, settings: AppConfig) -> Result<()> {
         let default_settings = match self.app_url.clone() {
             Some(app_url) => settings.find_aws_sso_host(app_url),
             None => settings.aws_sso_hosts(),
@@ -84,7 +93,7 @@ impl AwsSsoCredentials {
 }
 
 impl AwsCredentials {
-    pub async fn run(&self, settings: AppConfig) -> Result<()> {
+    async fn run(&self, settings: AppConfig) -> Result<()> {
         let default_settings = match self.app_url.clone() {
             Some(app_url) => settings.find_aws_host(app_url),
             None => settings.aws_hosts(),
