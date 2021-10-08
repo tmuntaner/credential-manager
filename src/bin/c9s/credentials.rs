@@ -1,7 +1,7 @@
 use crate::utils;
 use anyhow::{anyhow, Result};
 use c9s::okta::okta_client::OktaClient;
-use c9s::settings::{AppConfig, AwsHost, AwsSsoHost};
+use c9s::settings::AppConfig;
 use clap::Clap;
 
 #[derive(Clap)]
@@ -48,10 +48,23 @@ impl AwsSsoCredentials {
             Some(app_url) => settings.find_aws_sso_host(app_url),
             None => settings.aws_sso_hosts(),
         };
-
-        let app_url = self.app_url(&default_settings)?;
-        let username = self.username(&default_settings)?;
-        let region = self.region(&default_settings)?;
+        let app_url = self.app_url.clone().unwrap_or(
+            default_settings
+                .clone()
+                .ok_or_else(|| anyhow!("please supply an app-url"))?
+                .app_url(),
+        );
+        let username = self.username.clone().unwrap_or(
+            default_settings
+                .clone()
+                .ok_or_else(|| anyhow!("please supply a username"))?
+                .username(),
+        );
+        let region = self.region.clone().unwrap_or(
+            default_settings
+                .ok_or_else(|| anyhow!("please supply a region"))?
+                .region(),
+        );
         let password = utils::get_password(app_url.clone(), username.clone(), self.with_password)?;
 
         let client = OktaClient::new()?;
@@ -68,48 +81,6 @@ impl AwsSsoCredentials {
 
         Ok(())
     }
-
-    fn app_url(&self, default_settings: &Option<AwsSsoHost>) -> Result<String> {
-        let username = match self.app_url.clone() {
-            Some(app_url) => app_url,
-            None => match default_settings {
-                Some(default) => default.app_url(),
-                None => {
-                    return Err(anyhow!("please supply an app-url"));
-                }
-            },
-        };
-
-        Ok(username)
-    }
-
-    fn region(&self, default_settings: &Option<AwsSsoHost>) -> Result<String> {
-        let region = match self.region.clone() {
-            Some(region) => region,
-            None => match default_settings {
-                Some(default) => default.region(),
-                None => {
-                    return Err(anyhow!("please supply a region"));
-                }
-            },
-        };
-
-        Ok(region)
-    }
-
-    fn username(&self, default_settings: &Option<AwsSsoHost>) -> Result<String> {
-        let username = match self.username.clone() {
-            Some(username) => username,
-            None => match default_settings {
-                Some(default) => default.username(),
-                None => {
-                    return Err(anyhow!("please supply a username"));
-                }
-            },
-        };
-
-        Ok(username)
-    }
 }
 
 impl AwsCredentials {
@@ -118,9 +89,18 @@ impl AwsCredentials {
             Some(app_url) => settings.find_aws_host(app_url),
             None => settings.aws_hosts(),
         };
-
-        let app_url = self.app_url(&default_settings)?;
-        let username = self.username(&default_settings)?;
+        let app_url = self.app_url.clone().unwrap_or(
+            default_settings
+                .clone()
+                .ok_or_else(|| anyhow!("please supply an app-url"))?
+                .app_url(),
+        );
+        let username = self.username.clone().unwrap_or(
+            default_settings
+                .clone()
+                .ok_or_else(|| anyhow!("please supply a username"))?
+                .username(),
+        );
         let password = utils::get_password(app_url.clone(), username.clone(), self.with_password)?;
 
         let client = OktaClient::new()?;
@@ -136,33 +116,5 @@ impl AwsCredentials {
         }
 
         Ok(())
-    }
-
-    fn app_url(&self, default_settings: &Option<AwsHost>) -> Result<String> {
-        let username = match self.app_url.clone() {
-            Some(app_url) => app_url,
-            None => match default_settings {
-                Some(default) => default.app_url(),
-                None => {
-                    return Err(anyhow!("please supply an app-url"));
-                }
-            },
-        };
-
-        Ok(username)
-    }
-
-    fn username(&self, default_settings: &Option<AwsHost>) -> Result<String> {
-        let username = match self.username.clone() {
-            Some(username) => username,
-            None => match default_settings {
-                Some(default) => default.username(),
-                None => {
-                    return Err(anyhow!("please supply a username"));
-                }
-            },
-        };
-
-        Ok(username)
     }
 }
