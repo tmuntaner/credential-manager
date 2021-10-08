@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use url::Url;
 
 #[derive(Serialize, Deserialize)]
-pub struct Config {
+pub struct AppConfig {
     okta_aws_hosts: Option<Vec<AwsHost>>,
     okta_aws_sso_hosts: Option<Vec<AwsSsoHost>>,
 }
@@ -23,7 +23,7 @@ pub struct AwsSsoHost {
     region: String,
 }
 
-impl Config {
+impl AppConfig {
     pub fn add_aws_host(&mut self, host: AwsHost) {
         let hosts = self.okta_aws_hosts.get_or_insert(vec![]);
 
@@ -75,19 +75,19 @@ impl Config {
     }
 
     pub fn read_config() -> Result<Self> {
-        let config_file = Config::config_file()?;
+        let config_file = AppConfig::config_file()?;
         let config_contents = fs::read(config_file)?;
         let config_contents = String::from_utf8(config_contents)?;
-        let config: Config = toml::from_str(config_contents.as_str())?;
+        let config: AppConfig = toml::from_str(config_contents.as_str())?;
 
         Ok(config)
     }
 
     pub fn write_config(&self) -> Result<()> {
-        let config_dir = Config::config_dir()?;
+        let config_dir = AppConfig::config_dir()?;
         fs::create_dir_all(config_dir)?;
 
-        let config_file = Config::config_file()?;
+        let config_file = AppConfig::config_file()?;
 
         let toml = toml::to_string(&self)?;
         fs::write(config_file, toml).expect("Unable to write file");
@@ -104,7 +104,7 @@ impl Config {
     }
 
     fn config_file() -> Result<PathBuf> {
-        let config_file = Config::config_dir()?.join("settings.toml");
+        let config_file = AppConfig::config_dir()?.join("settings.toml");
 
         Ok(config_file)
     }

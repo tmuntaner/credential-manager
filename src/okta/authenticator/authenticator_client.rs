@@ -22,7 +22,7 @@ pub struct AuthenticatorClient {
 impl AuthenticatorClient {
     /// Creates a new [`Authenticator`] object.
     pub fn new() -> Result<AuthenticatorClient> {
-        let client = OktaApiClient::new().map_err(|e| anyhow!(e))?;
+        let client = OktaApiClient::new()?;
         Ok(AuthenticatorClient { client })
     }
 

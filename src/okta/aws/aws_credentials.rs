@@ -20,7 +20,7 @@ pub struct AwsCredentials {
 impl AwsCredentials {
     /// Generates a new [`AwsCredentials`] object.
     pub fn new() -> Result<AwsCredentials> {
-        let client = ApiClient::new().map_err(|e| anyhow!(e))?;
+        let client = ApiClient::new()?;
         Ok(AwsCredentials { client })
     }
 
