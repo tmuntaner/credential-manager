@@ -5,13 +5,6 @@ use reqwest::Client;
 use serde_json::Value;
 
 /// An API client to contact Okta
-///
-/// # Examples
-///
-/// ```rust
-/// use c9s::okta::authenticator::okta_api_client::OktaApiClient;
-/// let client = OktaApiClient::new().unwrap();
-/// ```
 pub struct OktaApiClient {
     http_client: Client,
 }

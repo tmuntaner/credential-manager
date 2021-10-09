@@ -7,13 +7,6 @@ use std::collections::HashMap;
 
 /// This struct contacts the AWS application in Okta, goes through its SAML response, and then
 /// uses the result to generate credentials with STS.
-///
-/// # Examples
-///
-/// ```rust
-/// use c9s::okta::aws::aws_credentials::AwsCredentials;
-/// let aws_credentials = AwsCredentials::new().unwrap();
-/// ```
 pub struct AwsCredentials {
     client: ApiClient,
 }

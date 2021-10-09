@@ -9,13 +9,6 @@ use url::Url;
 ///
 /// See <https://developer.okta.com/docs/reference/api/authn/#transaction-state> for more details
 /// on how Okta handles the authentication process.
-///
-/// # Examples
-///
-/// ```rust
-/// use c9s::okta::authenticator::authenticator_client::AuthenticatorClient;
-/// let authenticator = AuthenticatorClient::new().unwrap();
-/// ```
 pub struct AuthenticatorClient {
     client: OktaApiClient,
 }
