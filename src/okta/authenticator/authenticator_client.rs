@@ -1,5 +1,6 @@
-use crate::okta::api_responses::{Response, TransactionState};
-use crate::okta::okta_api_client::OktaApiClient;
+use crate::okta::authenticator::api_responses::{Response, TransactionState};
+use crate::okta::authenticator::okta_api_client::OktaApiClient;
+
 use crate::verify;
 use anyhow::{anyhow, Result};
 use url::Url;
@@ -8,31 +9,18 @@ use url::Url;
 ///
 /// See <https://developer.okta.com/docs/reference/api/authn/#transaction-state> for more details
 /// on how Okta handles the authentication process.
-///
-/// # Examples
-///
-/// ```rust
-/// let authenticator = Authenticator::new()?;
-/// ```
-pub struct Authenticator {
+pub struct AuthenticatorClient {
     client: OktaApiClient,
 }
 
-impl Authenticator {
+impl AuthenticatorClient {
     /// Creates a new [`Authenticator`] object.
-    pub fn new() -> Result<Authenticator> {
-        let client = OktaApiClient::new().map_err(|e| anyhow!(e))?;
-        Ok(Authenticator { client })
+    pub fn new() -> Result<AuthenticatorClient> {
+        let client = OktaApiClient::new()?;
+        Ok(AuthenticatorClient { client })
     }
 
     /// Runs the authentication process for an app/username/password.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// let authenticator = Authenticator::new()?;
-    /// let result = authenticator.run("https://the.app.url", "username", "correct battery horse staple")?;
-    /// ```
     pub async fn run(&self, app_url: String, username: String, password: String) -> Result<String> {
         let mut response = self
             .try_authorize(app_url.clone(), username, password)

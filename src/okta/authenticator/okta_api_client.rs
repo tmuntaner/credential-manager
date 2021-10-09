@@ -1,17 +1,10 @@
-use crate::okta::api_responses::{OktaError, Response};
+use crate::okta::authenticator::api_responses::{OktaError, Response};
 use anyhow::{anyhow, Result};
 use reqwest::header::{HeaderValue, ACCEPT};
 use reqwest::Client;
 use serde_json::Value;
-use url::Url;
 
 /// An API client to contact Okta
-///
-/// # Examples
-///
-/// ```rust
-/// let client = OktaApiClient::new()?;
-/// ```
 pub struct OktaApiClient {
     http_client: Client,
 }
@@ -47,21 +40,5 @@ impl OktaApiClient {
             }
             _ => Err(anyhow!("unimplemented")),
         }
-    }
-
-    /// HTTP GET to get a body [`String`]
-    pub async fn get(&self, url: String, session_token: Option<String>) -> Result<String> {
-        let mut url = Url::parse(url.as_str())?;
-
-        if let Some(token) = session_token {
-            url.query_pairs_mut()
-                .append_pair("sessionToken", token.as_str());
-        }
-
-        let res = self.http_client.get(url).send().await?;
-        let body = res.text().await?;
-
-        //println!("Body: {}", body);
-        Ok(body)
     }
 }

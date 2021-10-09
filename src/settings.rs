@@ -5,19 +5,28 @@ use std::path::PathBuf;
 use url::Url;
 
 #[derive(Serialize, Deserialize)]
-pub struct Config {
-    hosts: Option<Vec<Host>>,
+pub struct AppConfig {
+    okta_aws_hosts: Option<Vec<AwsHost>>,
+    okta_aws_sso_hosts: Option<Vec<AwsSsoHost>>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct Host {
+pub struct AwsHost {
     app_url: String,
     username: String,
 }
 
-impl Config {
-    pub fn add_host(&mut self, host: Host) -> Result<()> {
-        let hosts = self.hosts.get_or_insert(vec![]);
+#[derive(Serialize, Deserialize, Clone)]
+pub struct AwsSsoHost {
+    app_url: String,
+    username: String,
+    region: String,
+}
+
+impl AppConfig {
+    pub fn add_aws_host(&mut self, host: AwsHost) {
+        let hosts = self.okta_aws_hosts.get_or_insert(vec![]);
+
         match hosts.iter_mut().find(|i| i.app_url == host.app_url.clone()) {
             Some(existing) => {
                 existing.username = host.username;
@@ -26,35 +35,59 @@ impl Config {
                 hosts.push(host);
             }
         }
-
-        Ok(())
     }
 
-    pub fn host(self) -> Option<Host> {
-        self.hosts?.get(0).cloned()
+    pub fn add_aws_sso_host(&mut self, host: AwsSsoHost) {
+        let hosts = self.okta_aws_sso_hosts.get_or_insert(vec![]);
+
+        match hosts.iter_mut().find(|i| i.app_url == host.app_url.clone()) {
+            Some(existing) => {
+                existing.username = host.username;
+                existing.region = host.region;
+            }
+            None => {
+                hosts.push(host);
+            }
+        }
     }
 
-    pub fn find_host(self, app_url: String) -> Option<Host> {
-        match self.hosts {
+    pub fn aws_hosts(self) -> Option<AwsHost> {
+        self.okta_aws_hosts?.get(0).cloned()
+    }
+
+    pub fn aws_sso_hosts(self) -> Option<AwsSsoHost> {
+        self.okta_aws_sso_hosts?.get(0).cloned()
+    }
+
+    pub fn find_aws_sso_host(self, app_url: String) -> Option<AwsSsoHost> {
+        let hosts = self.okta_aws_sso_hosts;
+        match hosts {
+            Some(hosts) => hosts.iter().find(|host| app_url == host.app_url).cloned(),
+            None => None,
+        }
+    }
+    pub fn find_aws_host(self, app_url: String) -> Option<AwsHost> {
+        let hosts = self.okta_aws_hosts;
+        match hosts {
             Some(hosts) => hosts.iter().find(|host| app_url == host.app_url).cloned(),
             None => None,
         }
     }
 
     pub fn read_config() -> Result<Self> {
-        let config_file = Config::config_file()?;
+        let config_file = AppConfig::config_file()?;
         let config_contents = fs::read(config_file)?;
         let config_contents = String::from_utf8(config_contents)?;
-        let config: Config = toml::from_str(config_contents.as_str())?;
+        let config: AppConfig = toml::from_str(config_contents.as_str())?;
 
         Ok(config)
     }
 
     pub fn write_config(&self) -> Result<()> {
-        let config_dir = Config::config_dir()?;
+        let config_dir = AppConfig::config_dir()?;
         fs::create_dir_all(config_dir)?;
 
-        let config_file = Config::config_file()?;
+        let config_file = AppConfig::config_file()?;
 
         let toml = toml::to_string(&self)?;
         fs::write(config_file, toml).expect("Unable to write file");
@@ -71,13 +104,13 @@ impl Config {
     }
 
     fn config_file() -> Result<PathBuf> {
-        let config_file = Config::config_dir()?.join("settings.toml");
+        let config_file = AppConfig::config_dir()?.join("settings.toml");
 
         Ok(config_file)
     }
 }
 
-impl Host {
+impl AwsHost {
     pub fn new(app_url: String, username: String) -> Result<Self> {
         let mut app_url = Url::parse(app_url.as_str())?;
 
@@ -91,7 +124,7 @@ impl Host {
             .map_err(|e| anyhow!(e))?
             .pop_if_empty();
 
-        Ok(Host {
+        Ok(AwsHost {
             app_url: String::from(app_url),
             username,
         })
@@ -103,5 +136,39 @@ impl Host {
 
     pub fn username(&self) -> String {
         self.username.clone()
+    }
+}
+
+impl AwsSsoHost {
+    pub fn new(app_url: String, username: String, region: String) -> Result<Self> {
+        let mut app_url = Url::parse(app_url.as_str())?;
+
+        // remove query
+        app_url.set_query(None);
+
+        // remove trailing slash
+        app_url
+            .path_segments_mut()
+            .map_err(|_| "cannot be base")
+            .map_err(|e| anyhow!(e))?
+            .pop_if_empty();
+
+        Ok(AwsSsoHost {
+            app_url: String::from(app_url),
+            username,
+            region,
+        })
+    }
+
+    pub fn app_url(&self) -> String {
+        self.app_url.clone()
+    }
+
+    pub fn username(&self) -> String {
+        self.username.clone()
+    }
+
+    pub fn region(&self) -> String {
+        self.region.clone()
     }
 }
