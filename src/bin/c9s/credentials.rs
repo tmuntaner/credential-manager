@@ -12,12 +12,12 @@ pub struct Credentials {
 
 #[derive(Clap)]
 enum CredentialsSubCommands {
-    Aws(AwsCredentials),
-    AwsSso(AwsSsoCredentials),
+    OktaAws(OktaAwsCredentials),
+    OktaAwsSso(OktaAwsSsoCredentials),
 }
 
 #[derive(Clap)]
-struct AwsCredentials {
+struct OktaAwsCredentials {
     #[clap(long)]
     app_url: Option<String>,
     #[clap(short, long)]
@@ -29,7 +29,7 @@ struct AwsCredentials {
 }
 
 #[derive(Clap)]
-struct AwsSsoCredentials {
+struct OktaAwsSsoCredentials {
     #[clap(long)]
     app_url: Option<String>,
     #[clap(short, long)]
@@ -45,13 +45,13 @@ struct AwsSsoCredentials {
 impl Credentials {
     pub async fn run(&self, settings: AppConfig) -> Result<()> {
         match &self.sub_command {
-            CredentialsSubCommands::AwsSso(val) => val.run(settings).await,
-            CredentialsSubCommands::Aws(val) => val.run(settings).await,
+            CredentialsSubCommands::OktaAwsSso(val) => val.run(settings).await,
+            CredentialsSubCommands::OktaAws(val) => val.run(settings).await,
         }
     }
 }
 
-impl AwsSsoCredentials {
+impl OktaAwsSsoCredentials {
     async fn run(&self, settings: AppConfig) -> Result<()> {
         let default_settings = match self.app_url.clone() {
             Some(app_url) => settings.find_aws_sso_host(app_url),
@@ -92,7 +92,7 @@ impl AwsSsoCredentials {
     }
 }
 
-impl AwsCredentials {
+impl OktaAwsCredentials {
     async fn run(&self, settings: AppConfig) -> Result<()> {
         let default_settings = match self.app_url.clone() {
             Some(app_url) => settings.find_aws_host(app_url),

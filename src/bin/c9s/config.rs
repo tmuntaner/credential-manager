@@ -21,12 +21,12 @@ struct ConfigAdd {
 
 #[derive(Clap)]
 enum ConfigAddSubCommand {
-    Aws(ConfigAddAws),
-    AwsSso(ConfigAddAwsSso),
+    OktaAws(ConfigAddOktaAws),
+    OktaAwsSso(ConfigAddOktaAwsSso),
 }
 
 #[derive(Clap)]
-struct ConfigAddAws {
+struct ConfigAddOktaAws {
     #[clap(required = true, long)]
     app_url: String,
     #[clap(required = true, short, long)]
@@ -34,7 +34,7 @@ struct ConfigAddAws {
 }
 
 #[derive(Clap)]
-struct ConfigAddAwsSso {
+struct ConfigAddOktaAwsSso {
     #[clap(required = true, long)]
     app_url: String,
     #[clap(required = true, short, long)]
@@ -47,14 +47,14 @@ impl Config {
     pub fn run(&self, settings: &mut AppConfig) -> Result<()> {
         match &self.sub_command {
             ConfigSubCommand::Add(val) => match &val.sub_command {
-                ConfigAddSubCommand::Aws(val) => val.run(settings),
-                ConfigAddSubCommand::AwsSso(val) => val.run(settings),
+                ConfigAddSubCommand::OktaAws(val) => val.run(settings),
+                ConfigAddSubCommand::OktaAwsSso(val) => val.run(settings),
             },
         }
     }
 }
 
-impl ConfigAddAws {
+impl ConfigAddOktaAws {
     fn run(&self, settings: &mut AppConfig) -> Result<()> {
         let host = AwsHost::new(self.app_url.clone(), self.username.clone())?;
         settings.add_aws_host(host);
@@ -64,7 +64,7 @@ impl ConfigAddAws {
     }
 }
 
-impl ConfigAddAwsSso {
+impl ConfigAddOktaAwsSso {
     fn run(&self, settings: &mut AppConfig) -> Result<()> {
         let host = AwsSsoHost::new(
             self.app_url.clone(),
