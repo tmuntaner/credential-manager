@@ -60,20 +60,6 @@ pub struct AwsRole {
     role_name: String,
 }
 
-impl AwsRole {
-    pub fn account_id(&self) -> String {
-        self.account_id.clone()
-    }
-
-    pub fn role_arn(&self) -> String {
-        self.role_arn.clone()
-    }
-
-    pub fn role_name(&self) -> String {
-        self.role_name.clone()
-    }
-}
-
 // https://docs.aws.amazon.com/singlesignon/latest/PortalAPIReference/ssoportal-api.pdf
 impl SsoPortal {
     pub fn new(portal_base_url: String) -> Result<SsoPortal> {
