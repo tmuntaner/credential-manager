@@ -1,6 +1,7 @@
 use crate::aws::sts::AwsCredential;
 use crate::http::api_client::{AcceptType, ApiClient};
 use anyhow::{anyhow, Result};
+use indicatif::{ProgressBar, ProgressStyle};
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -60,6 +61,12 @@ pub struct AwsRole {
     role_name: String,
 }
 
+impl AwsRole {
+    pub fn role_arn(&self) -> String {
+        self.role_arn.clone()
+    }
+}
+
 // https://docs.aws.amazon.com/singlesignon/latest/PortalAPIReference/ssoportal-api.pdf
 impl SsoPortal {
     pub fn new(portal_base_url: String) -> Result<SsoPortal> {
@@ -93,10 +100,45 @@ impl SsoPortal {
         })
     }
 
+    pub async fn list_credentials(
+        &self,
+        token: String,
+        roles: Vec<AwsRole>,
+    ) -> Result<Vec<AwsCredential>> {
+        let mut credentials = vec![];
+
+        let style = ProgressStyle::default_bar()
+            .template("Generating Credentials:\n[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}")
+            .progress_chars("##-");
+        let progress = ProgressBar::new(roles.len() as u64);
+        progress.set_style(style);
+
+        for role in roles {
+            progress.set_message(role.role_arn());
+            progress.inc(1);
+
+            let credential = self.generate_credentials(token.clone(), role).await?;
+            credentials.push(credential);
+        }
+        progress.finish_with_message("Done");
+
+        Ok(credentials)
+    }
+
     pub async fn list_role_arns(&self, token: String) -> Result<Vec<AwsRole>> {
         let accounts = self.list_accounts(token.clone()).await?;
         let mut roles = vec![];
+
+        let style = ProgressStyle::default_bar()
+            .template("Gathering AWS Roles:\n[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}")
+            .progress_chars("##-");
+        let progress = ProgressBar::new(accounts.len() as u64);
+        progress.set_style(style);
+
         for account in accounts {
+            progress.set_message(account.account_name);
+            progress.inc(1);
+
             let account_roles = self
                 .list_roles(token.clone(), account.account_id.clone())
                 .await?;
@@ -109,11 +151,12 @@ impl SsoPortal {
                 });
             }
         }
+        progress.finish_with_message("done");
 
         Ok(roles)
     }
 
-    pub async fn list_credentials(&self, token: String, role: AwsRole) -> Result<AwsCredential> {
+    async fn generate_credentials(&self, token: String, role: AwsRole) -> Result<AwsCredential> {
         let mut token_url = Url::parse(self.portal_base_url.as_str())?;
         token_url.set_path("/federation/credentials");
 

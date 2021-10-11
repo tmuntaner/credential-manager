@@ -28,7 +28,6 @@ impl AwsSSOCredentials {
             .run(app_url, session_token, portal_url.clone())
             .await?;
         let sso_portal = SsoPortal::new(portal_url)?;
-        let mut credentials = vec![];
 
         let roles = match role_arn {
             Some(arn) => {
@@ -37,11 +36,7 @@ impl AwsSSOCredentials {
             }
             None => sso_portal.list_role_arns(token.clone()).await?,
         };
-
-        for role in roles {
-            let credential = sso_portal.list_credentials(token.clone(), role).await?;
-            credentials.push(credential);
-        }
+        let credentials = sso_portal.list_credentials(token, roles).await?;
 
         Ok(credentials)
     }
