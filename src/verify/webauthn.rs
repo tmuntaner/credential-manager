@@ -3,6 +3,7 @@ use authenticator::{
     AuthenticatorTransports, KeyHandle, SignFlags, StatusUpdate,
 };
 
+use anyhow::{anyhow, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use nom::call;
 use nom::do_parse;
@@ -59,9 +60,8 @@ pub fn webauthn_sign(
     challenge_str: String,
     host: String,
     credential_ids: Vec<String>,
-) -> SignatureResponse {
-    let mut manager =
-        AuthenticatorService::new().expect("The auth service should initialize safely");
+) -> Result<SignatureResponse> {
+    let mut manager = AuthenticatorService::new()?;
     manager.add_u2f_usb_hid_platform_transports();
 
     let origin: String = format!("https://{}", host);
@@ -73,12 +73,17 @@ pub fn webauthn_sign(
         .iter()
         .map(|credential_id| {
             let credential_id =
-                base64::decode_config(credential_id, base64::URL_SAFE_NO_PAD).unwrap();
-            KeyHandle {
-                credential: credential_id,
-                transports: AuthenticatorTransports::empty(),
+                base64::decode_config(credential_id, base64::URL_SAFE_NO_PAD).unwrap_or_default();
+            if credential_id.is_empty() {
+                None
+            } else {
+                Some(KeyHandle {
+                    credential: credential_id,
+                    transports: AuthenticatorTransports::empty(),
+                })
             }
         })
+        .flatten()
         .collect();
 
     let (status_tx, _status_rx) = channel::<StatusUpdate>();
@@ -120,8 +125,9 @@ pub fn webauthn_sign(
 
     let sign_result = sign_rx
         .recv()
-        .expect("Problem receiving, unable to continue");
-    let (_app_id, _used_handle, sign_data, _device_info) = sign_result.expect("Sign failed");
+        .map_err(|_| anyhow!("Problem receiving, unable to continue"))?
+        .map_err(|_| anyhow!("There was an issue authenticating your U2F device. Please ensure that it's set up on your account, plugged in, and that you activate it."))?;
+    let (_app_id, _used_handle, sign_data, _device_info) = sign_result;
     pb.finish_with_message("Processing sign request...");
 
     let (_, (user_present, counter, signature)) =
@@ -132,11 +138,11 @@ pub fn webauthn_sign(
     authenticator_data.push(user_present);
     authenticator_data.extend(counter.to_be_bytes());
 
-    SignatureResponse {
+    Ok(SignatureResponse {
         client_data: base64::encode_config(client_data_json.as_bytes(), base64::STANDARD),
         signature_data: base64::encode_config(signature, base64::STANDARD),
         authenticator_data: base64::encode_config(authenticator_data, base64::STANDARD),
-    }
+    })
 }
 
 fn generate_input_hashes(
