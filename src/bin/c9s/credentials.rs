@@ -1,5 +1,6 @@
 use crate::utils;
 use anyhow::{anyhow, Result};
+use c9s::aws::sts::AwsCredential;
 use c9s::okta::okta_client::OktaClient;
 use c9s::settings::AppConfig;
 use clap::Clap;
@@ -81,12 +82,7 @@ impl OktaAwsSsoCredentials {
             .aws_sso_credentials(username, password, app_url, region, self.role_arn.clone())
             .await?;
 
-        for credential in aws_credentials {
-            println!(
-                "{}\nexport AWS_ACCESS_KEY_ID=\"{}\"\nexport AWS_SECRET_ACCESS_KEY=\"{}\"\nexport AWS_SESSION_TOKEN=\"{}\"\n",
-                credential.role_arn, credential.access_key_id, credential.secret_access_key, credential.session_token
-            );
-        }
+        print_credentials(aws_credentials);
 
         Ok(())
     }
@@ -116,14 +112,17 @@ impl OktaAwsCredentials {
         let aws_credentials = client
             .aws_credentials(username, password, app_url, self.role_arn.clone())
             .await?;
-
-        for credential in aws_credentials {
-            println!(
-                "{}\nexport AWS_ACCESS_KEY_ID=\"{}\"\nexport AWS_SECRET_ACCESS_KEY=\"{}\"\nexport AWS_SESSION_TOKEN=\"{}\"\n",
-                credential.role_arn, credential.access_key_id, credential.secret_access_key, credential.session_token
-            );
-        }
+        print_credentials(aws_credentials);
 
         Ok(())
+    }
+}
+
+fn print_credentials(aws_credentials: Vec<AwsCredential>) {
+    for credential in aws_credentials {
+        println!(
+            "export AWS_ROLE_ARN=\"{}\"\nexport AWS_ACCESS_KEY_ID=\"{}\"\nexport AWS_SECRET_ACCESS_KEY=\"{}\"\nexport AWS_SESSION_TOKEN=\"{}\"\n",
+            credential.role_arn, credential.access_key_id, credential.secret_access_key, credential.session_token
+        );
     }
 }
