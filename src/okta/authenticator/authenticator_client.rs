@@ -32,6 +32,7 @@ impl AuthenticatorClient {
         username: String,
         password: String,
         mfa: Option<MfaSelection>,
+        mfa_provider: Option<String>,
     ) -> Result<String> {
         let mut response = self
             .try_authorize(app_url.clone(), username, password)
@@ -44,7 +45,9 @@ impl AuthenticatorClient {
                 .ok_or_else(|| anyhow!("could not get status"))?
             {
                 TransactionState::MfaRequired => {
-                    response = self.mfa_required(&response, mfa).await?
+                    response = self
+                        .mfa_required(&response, mfa, mfa_provider.clone())
+                        .await?
                 }
                 TransactionState::MfaChallenge => {
                     let result = response
@@ -113,6 +116,7 @@ impl AuthenticatorClient {
         &self,
         response: &Response,
         mfa: Option<MfaSelection>,
+        mfa_provider: Option<String>,
     ) -> Result<Response> {
         let state_token = response
             .state_token()
@@ -122,7 +126,7 @@ impl AuthenticatorClient {
             .factors()
             .ok_or_else(|| anyhow!("could not get factors"))?;
 
-        let factor = self.selected_mfa_factor(factors, mfa)?;
+        let factor = self.selected_mfa_factor(factors, mfa, mfa_provider)?;
 
         let url = factor
             .get_verification_url()
@@ -234,6 +238,7 @@ impl AuthenticatorClient {
         &self,
         factors: Vec<FactorType>,
         mfa: Option<MfaSelection>,
+        mfa_provider: Option<String>,
     ) -> Result<FactorType> {
         let factors: Vec<FactorType> = factors
             .into_iter()
@@ -256,6 +261,15 @@ impl AuthenticatorClient {
                     let factors: Vec<FactorType> = factors
                         .into_iter()
                         .filter(|factor| matches!(factor, FactorType::Totp { .. }))
+                        .filter(|factor| match &mfa_provider {
+                            Some(mfa_provider) => match factor.provider() {
+                                Some(factor_provider) => {
+                                    factor_provider.to_lowercase() == mfa_provider.to_lowercase()
+                                }
+                                None => false,
+                            },
+                            None => false,
+                        })
                         .collect();
                     let factor = factors
                         .get(0)

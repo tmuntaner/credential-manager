@@ -16,6 +16,7 @@ pub struct AwsHost {
     app_url: String,
     username: String,
     mfa: Option<String>,
+    mfa_provider: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -24,6 +25,7 @@ pub struct AwsSsoHost {
     username: String,
     region: String,
     mfa: Option<String>,
+    mfa_provider: Option<String>,
 }
 
 impl AppConfig {
@@ -116,7 +118,12 @@ impl AppConfig {
 }
 
 impl AwsHost {
-    pub fn new(app_url: String, username: String, mfa: Option<String>) -> Result<Self> {
+    pub fn new(
+        app_url: String,
+        username: String,
+        mfa: Option<String>,
+        mfa_provider: Option<String>,
+    ) -> Result<Self> {
         let mut app_url = Url::parse(app_url.as_str())?;
 
         // remove query
@@ -136,6 +143,7 @@ impl AwsHost {
             app_url: String::from(app_url),
             mfa,
             username,
+            mfa_provider,
         })
     }
 
@@ -146,10 +154,6 @@ impl AwsHost {
     pub fn username(&self) -> String {
         self.username.clone()
     }
-
-    pub fn mfa(&self) -> Option<String> {
-        self.mfa.clone()
-    }
 }
 
 impl AwsSsoHost {
@@ -158,6 +162,7 @@ impl AwsSsoHost {
         username: String,
         region: String,
         mfa: Option<String>,
+        mfa_provider: Option<String>,
     ) -> Result<Self> {
         let mut app_url = Url::parse(app_url.as_str())?;
 
@@ -177,6 +182,7 @@ impl AwsSsoHost {
             username,
             region,
             mfa,
+            mfa_provider,
         })
     }
 
@@ -195,16 +201,25 @@ impl AwsSsoHost {
 
 pub trait OktaMfa {
     fn mfa(&self) -> Option<MfaSelection>;
+    fn mfa_provider(&self) -> Option<String>;
 }
 
 impl OktaMfa for AwsHost {
     fn mfa(&self) -> Option<MfaSelection> {
         self.mfa.clone().map(MfaSelection::from_string)
     }
+
+    fn mfa_provider(&self) -> Option<String> {
+        self.mfa_provider.clone()
+    }
 }
 
 impl OktaMfa for AwsSsoHost {
     fn mfa(&self) -> Option<MfaSelection> {
         self.mfa.clone().map(MfaSelection::from_string)
+    }
+
+    fn mfa_provider(&self) -> Option<String> {
+        self.mfa_provider.clone()
     }
 }

@@ -29,6 +29,8 @@ struct OktaAwsCredentials {
     role_arn: Option<String>,
     #[clap(short, long)]
     mfa: Option<String>,
+    #[clap(long)]
+    mfa_provider: Option<String>,
 }
 
 #[derive(Clap)]
@@ -45,6 +47,8 @@ struct OktaAwsSsoCredentials {
     role_arn: Option<String>,
     #[clap(short, long)]
     mfa: Option<String>,
+    #[clap(long)]
+    mfa_provider: Option<String>,
 }
 
 impl Credentials {
@@ -81,6 +85,7 @@ impl OktaAwsSsoCredentials {
                 .region(),
         );
         let mfa = get_mfa_option(self.mfa.clone(), &default_settings);
+        let mfa_provider = get_mfa_provider(self.mfa_provider.clone(), &default_settings);
 
         let password = utils::get_password(app_url.clone(), username.clone(), self.with_password)?;
 
@@ -93,6 +98,7 @@ impl OktaAwsSsoCredentials {
                 region,
                 self.role_arn.clone(),
                 mfa,
+                mfa_provider,
             )
             .await?;
 
@@ -121,12 +127,20 @@ impl OktaAwsCredentials {
                 .username(),
         );
         let mfa = get_mfa_option(self.mfa.clone(), &default_settings);
+        let mfa_provider = get_mfa_provider(self.mfa_provider.clone(), &default_settings);
 
         let password = utils::get_password(app_url.clone(), username.clone(), self.with_password)?;
 
         let client = OktaClient::new()?;
         let aws_credentials = client
-            .aws_credentials(username, password, app_url, self.role_arn.clone(), mfa)
+            .aws_credentials(
+                username,
+                password,
+                app_url,
+                self.role_arn.clone(),
+                mfa,
+                mfa_provider,
+            )
             .await?;
         print_credentials(aws_credentials);
 
@@ -142,6 +156,19 @@ fn get_mfa_option<T: OktaMfa>(
         Some(mfa) => Some(MfaSelection::from_string(mfa)),
         None => match default_settings {
             Some(settings) => settings.mfa(),
+            None => None,
+        },
+    }
+}
+
+fn get_mfa_provider<T: OktaMfa>(
+    mfa_provider: Option<String>,
+    default_settings: &Option<T>,
+) -> Option<String> {
+    match mfa_provider {
+        Some(mfa) => Some(mfa),
+        None => match default_settings {
+            Some(default_settings) => default_settings.mfa_provider(),
             None => None,
         },
     }

@@ -63,10 +63,11 @@ impl OktaClient {
         app_url: String,
         role_arn: Option<String>,
         mfa: Option<MfaSelection>,
+        mfa_provider: Option<String>,
     ) -> Result<Vec<AwsCredential>> {
         let session_token = self
             .authorizer
-            .run(app_url.clone(), username, password, mfa)
+            .run(app_url.clone(), username, password, mfa, mfa_provider)
             .await?;
 
         let credentials = self
@@ -77,6 +78,7 @@ impl OktaClient {
         Ok(credentials)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn aws_sso_credentials(
         &self,
         username: String,
@@ -85,10 +87,11 @@ impl OktaClient {
         region: String,
         role_arn: Option<String>,
         mfa: Option<MfaSelection>,
+        mfa_provider: Option<String>,
     ) -> Result<Vec<AwsCredential>> {
         let session_token = self
             .authorizer
-            .run(app_url.clone(), username, password, mfa)
+            .run(app_url.clone(), username, password, mfa, mfa_provider)
             .await?;
 
         let credentials = self

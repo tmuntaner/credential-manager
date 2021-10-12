@@ -222,6 +222,15 @@ pub enum FactorType {
 }
 
 impl FactorType {
+    pub fn provider(&self) -> Option<String> {
+        match self {
+            FactorType::Push { ref provider, .. } => Some(provider.clone()),
+            FactorType::WebAuthn { .. } => None,
+            FactorType::Totp { ref provider, .. } => Some(provider.clone()),
+            FactorType::Unimplemented => None,
+        }
+    }
+
     pub fn human_friendly_name(&self) -> String {
         match self {
             FactorType::Push { .. } => String::from("Okta Push"),
