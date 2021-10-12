@@ -4,7 +4,7 @@
 
 | Identity Provider | MFA Support | Cloud Provider  |
 |---|---|---|
-| Okta | webauthn (U2F) | AWS (Okta's AWS SAML and AWS SSO applications) |
+| Okta | webauthn (U2F), Okta Push | AWS (Okta's AWS SAML and AWS SSO applications) |
 
 ## Configuration
 

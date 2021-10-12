@@ -1,5 +1,9 @@
-use crate::okta::authenticator::api_responses::{Response, TransactionState};
+use crate::okta::authenticator::api_responses::{
+    FactorResult, FactorType, Response, TransactionState,
+};
 use crate::okta::authenticator::okta_api_client::OktaApiClient;
+use std::io::{self, BufRead, Write};
+use std::{thread, time};
 
 use crate::verify;
 use anyhow::{anyhow, Result};
@@ -34,7 +38,22 @@ impl AuthenticatorClient {
             {
                 TransactionState::MfaRequired => response = self.mfa_required(&response).await?,
                 TransactionState::MfaChallenge => {
-                    response = self.mfa_challenge(&response, app_url.clone()).await?
+                    let result = response.factor_result().ok_or_else(|| anyhow!(""))?;
+                    match result {
+                        FactorResult::Challenge => {
+                            response = self.mfa_challenge(&response, app_url.clone()).await?
+                        }
+                        FactorResult::Waiting => {
+                            response = self.mfa_challenge_waiting(&response).await?
+                        }
+                        FactorResult::Rejected => {
+                            return Err(anyhow!("MFA Challenge was rejected-"))
+                        }
+                        FactorResult::Timeout => return Err(anyhow!("MFA Challenge timed out")),
+                        FactorResult::Unimplemented => {
+                            return Err(anyhow!("unimplemented MFA factor"))
+                        }
+                    }
                 }
                 TransactionState::Success => {
                     let session_token = response
@@ -87,9 +106,7 @@ impl AuthenticatorClient {
             .factors()
             .ok_or_else(|| anyhow!("could not get factors"))?;
 
-        let factor = factors
-            .get(0)
-            .ok_or_else(|| anyhow!("cannot get MFA factor"))?;
+        let factor = self.ask_user_for_factor(factors)?;
 
         let url = factor
             .get_verification_url()
@@ -156,5 +173,59 @@ impl AuthenticatorClient {
             .post(url.as_str(), json)
             .await
             .map_err(|e| anyhow!(e))?)
+    }
+
+    /// Polls during an MFA Challenge
+    ///
+    /// <https://developer.okta.com/docs/reference/api/authn/#response-example-waiting-for-3-number-verification-challenge-response>
+    async fn mfa_challenge_waiting(&self, response: &Response) -> Result<Response> {
+        let state_token = response
+            .state_token()
+            .ok_or_else(|| anyhow!("could not get state token"))?;
+
+        let url = response
+            .next()
+            .ok_or_else(|| anyhow!("could not get next page"))?;
+
+        let json = &serde_json::json!({
+           "stateToken": state_token,
+        });
+
+        let ten_millis = time::Duration::from_millis(1000);
+
+        thread::sleep(ten_millis);
+
+        Ok(self
+            .client
+            .post(url.as_str(), json)
+            .await
+            .map_err(|e| anyhow!(e))?)
+    }
+
+    fn ask_user_for_factor(&self, factors: Vec<FactorType>) -> Result<FactorType> {
+        let min: usize = 0;
+        let max: usize = factors.len();
+
+        eprintln!("Please select a MFA Factor Type:");
+        for (i, factor) in factors.iter().enumerate() {
+            eprintln!("( {} ) {}", i, factor.human_friendly_name());
+        }
+        eprint!("Factor Type? ({} - {}) ", min, max);
+        let _ = io::stdout().flush();
+        let mut buffer = String::new();
+        io::stdin().lock().read_line(&mut buffer)?;
+        // remove \n on unix or \r\n on windows
+        let len = buffer.trim_end_matches(&['\r', '\n'][..]).len();
+        buffer.truncate(len);
+
+        let selection: usize = buffer
+            .parse()
+            .map_err(|_| anyhow!("failed to parse your selection"))?;
+        if selection > max {
+            return Err(anyhow!("you've selected an invalid Factor Type"));
+        }
+        let factor = factors.get(selection as usize).ok_or_else(|| anyhow!(""))?;
+
+        Ok(factor.clone())
     }
 }
