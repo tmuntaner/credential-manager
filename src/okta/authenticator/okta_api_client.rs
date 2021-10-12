@@ -30,7 +30,9 @@ impl OktaApiClient {
         let body = res.text().await?;
 
         match status {
-            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::TOO_MANY_REQUESTS => {
+            reqwest::StatusCode::UNAUTHORIZED
+            | reqwest::StatusCode::TOO_MANY_REQUESTS
+            | reqwest::StatusCode::FORBIDDEN => {
                 let response: OktaError = serde_json::from_str(body.as_str())?;
                 Err(anyhow!(response.summary()))
             }

@@ -31,6 +31,10 @@ struct ConfigAddOktaAws {
     app_url: String,
     #[clap(required = true, short, long)]
     username: String,
+    #[clap(short, long)]
+    mfa: Option<String>,
+    #[clap(long)]
+    mfa_provider: Option<String>,
 }
 
 #[derive(Clap)]
@@ -41,6 +45,10 @@ struct ConfigAddOktaAwsSso {
     username: String,
     #[clap(required = true, short, long)]
     region: String,
+    #[clap(short, long)]
+    mfa: Option<String>,
+    #[clap(long)]
+    mfa_provider: Option<String>,
 }
 
 impl Config {
@@ -56,7 +64,12 @@ impl Config {
 
 impl ConfigAddOktaAws {
     fn run(&self, settings: &mut AppConfig) -> Result<()> {
-        let host = AwsHost::new(self.app_url.clone(), self.username.clone())?;
+        let host = AwsHost::new(
+            self.app_url.clone(),
+            self.username.clone(),
+            self.mfa.clone(),
+            self.mfa_provider.clone(),
+        )?;
         settings.add_aws_host(host);
         settings.write_config()?;
 
@@ -70,6 +83,8 @@ impl ConfigAddOktaAwsSso {
             self.app_url.clone(),
             self.username.clone(),
             self.region.clone(),
+            self.mfa.clone(),
+            self.mfa_provider.clone(),
         )?;
         settings.add_aws_sso_host(host);
         settings.write_config()?;

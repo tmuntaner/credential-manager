@@ -1,6 +1,11 @@
-use crate::okta::authenticator::api_responses::{Response, TransactionState};
+use crate::okta::authenticator::api_responses::{
+    FactorResult, FactorType, Response, TransactionState,
+};
 use crate::okta::authenticator::okta_api_client::OktaApiClient;
+use std::io::{self, BufRead, Write};
+use std::{thread, time};
 
+use crate::okta::okta_client::MfaSelection;
 use crate::verify;
 use anyhow::{anyhow, Result};
 use url::Url;
@@ -21,7 +26,14 @@ impl AuthenticatorClient {
     }
 
     /// Runs the authentication process for an app/username/password.
-    pub async fn run(&self, app_url: String, username: String, password: String) -> Result<String> {
+    pub async fn run(
+        &self,
+        app_url: String,
+        username: String,
+        password: String,
+        mfa: Option<MfaSelection>,
+        mfa_provider: Option<String>,
+    ) -> Result<String> {
         let mut response = self
             .try_authorize(app_url.clone(), username, password)
             .await?;
@@ -32,9 +44,31 @@ impl AuthenticatorClient {
                 .status()
                 .ok_or_else(|| anyhow!("could not get status"))?
             {
-                TransactionState::MfaRequired => response = self.mfa_required(&response).await?,
+                TransactionState::MfaRequired => {
+                    response = self
+                        .mfa_required(&response, mfa, mfa_provider.clone())
+                        .await?
+                }
                 TransactionState::MfaChallenge => {
-                    response = self.mfa_challenge(&response, app_url.clone()).await?
+                    let result = response
+                        .factor_result()
+                        .ok_or_else(|| anyhow!("could not get factor result"))?;
+
+                    match result {
+                        FactorResult::Challenge => {
+                            response = self.mfa_challenge(&response, app_url.clone()).await?
+                        }
+                        FactorResult::Waiting => {
+                            response = self.mfa_challenge_waiting(&response).await?
+                        }
+                        FactorResult::Rejected => {
+                            return Err(anyhow!("MFA Challenge was rejected-"))
+                        }
+                        FactorResult::Timeout => return Err(anyhow!("MFA Challenge timed out")),
+                        FactorResult::Unimplemented => {
+                            return Err(anyhow!("unimplemented MFA factor"))
+                        }
+                    }
                 }
                 TransactionState::Success => {
                     let session_token = response
@@ -78,7 +112,12 @@ impl AuthenticatorClient {
     /// chooses an MFA option and Okta will provide it with a challenge.
     ///
     /// <https://developer.okta.com/docs/reference/api/authn/#verify-factor>
-    async fn mfa_required(&self, response: &Response) -> Result<Response> {
+    async fn mfa_required(
+        &self,
+        response: &Response,
+        mfa: Option<MfaSelection>,
+        mfa_provider: Option<String>,
+    ) -> Result<Response> {
         let state_token = response
             .state_token()
             .ok_or_else(|| anyhow!("could not get state token"))?;
@@ -87,21 +126,31 @@ impl AuthenticatorClient {
             .factors()
             .ok_or_else(|| anyhow!("could not get factors"))?;
 
-        let factor = factors
-            .get(0)
-            .ok_or_else(|| anyhow!("cannot get MFA factor"))?;
+        let factor = self.selected_mfa_factor(factors, mfa, mfa_provider)?;
 
         let url = factor
             .get_verification_url()
             .ok_or_else(|| anyhow!("could not get verification url"))?;
 
-        let json = &serde_json::json!({
-           "stateToken": state_token,
-        });
+        let json = match factor {
+            FactorType::Totp { .. } => {
+                let totp = self.ask_user_for_totp()?;
+
+                serde_json::json!({
+                    "passCode": totp,
+                    "stateToken": state_token,
+                })
+            }
+            _ => {
+                serde_json::json!({
+                    "stateToken": state_token,
+                })
+            }
+        };
 
         Ok(self
             .client
-            .post(url.as_str(), json)
+            .post(url.as_str(), &json)
             .await
             .map_err(|e| anyhow!(e))?)
     }
@@ -156,5 +205,146 @@ impl AuthenticatorClient {
             .post(url.as_str(), json)
             .await
             .map_err(|e| anyhow!(e))?)
+    }
+
+    /// Polls during an MFA Challenge
+    ///
+    /// <https://developer.okta.com/docs/reference/api/authn/#response-example-waiting-for-3-number-verification-challenge-response>
+    async fn mfa_challenge_waiting(&self, response: &Response) -> Result<Response> {
+        let state_token = response
+            .state_token()
+            .ok_or_else(|| anyhow!("could not get state token"))?;
+
+        let url = response
+            .next()
+            .ok_or_else(|| anyhow!("could not get next page"))?;
+
+        let json = &serde_json::json!({
+           "stateToken": state_token,
+        });
+
+        let ten_millis = time::Duration::from_millis(1000);
+
+        thread::sleep(ten_millis);
+
+        Ok(self
+            .client
+            .post(url.as_str(), json)
+            .await
+            .map_err(|e| anyhow!(e))?)
+    }
+
+    fn selected_mfa_factor(
+        &self,
+        factors: Vec<FactorType>,
+        mfa: Option<MfaSelection>,
+        mfa_provider: Option<String>,
+    ) -> Result<FactorType> {
+        let factors: Vec<FactorType> = factors
+            .into_iter()
+            .filter(|factor_type| {
+                match factor_type {
+                    FactorType::WebAuthn { ref profile, .. } => {
+                        // We want to filter out the WebAuthn selections with a profile
+                        // the one without, is a general one which can be used for all
+                        // U2F tokens.
+                        profile.is_none()
+                    }
+                    _ => true,
+                }
+            })
+            .collect();
+
+        match mfa {
+            Some(mfa) => match mfa {
+                MfaSelection::Totp => {
+                    let factors: Vec<FactorType> = factors
+                        .into_iter()
+                        .filter(|factor| matches!(factor, FactorType::Totp { .. }))
+                        .filter(|factor| match &mfa_provider {
+                            Some(mfa_provider) => match factor.provider() {
+                                Some(factor_provider) => {
+                                    factor_provider.to_lowercase() == mfa_provider.to_lowercase()
+                                }
+                                None => false,
+                            },
+                            None => false,
+                        })
+                        .collect();
+                    let factor = factors
+                        .get(0)
+                        .ok_or_else(|| anyhow!("MFA Factor not found"))?
+                        .clone();
+
+                    Ok(factor)
+                }
+                MfaSelection::OktaPush => {
+                    let factors: Vec<FactorType> = factors
+                        .into_iter()
+                        .filter(|factor| matches!(factor, FactorType::Push { .. }))
+                        .collect();
+                    let factor = factors
+                        .get(0)
+                        .ok_or_else(|| anyhow!("MFA Factor not found"))?
+                        .clone();
+
+                    Ok(factor)
+                }
+                MfaSelection::WebAuthn => {
+                    let factors: Vec<FactorType> = factors
+                        .into_iter()
+                        .filter(|factor| matches!(factor, FactorType::WebAuthn { .. }))
+                        .collect();
+                    let factor = factors
+                        .get(0)
+                        .ok_or_else(|| anyhow!("MFA Factor not found"))?
+                        .clone();
+
+                    Ok(factor)
+                }
+                _ => Err(anyhow!("MFA Factor not found")),
+            },
+            None => self.ask_user_for_mfa_factor(factors),
+        }
+    }
+
+    fn ask_user_for_mfa_factor(&self, factors: Vec<FactorType>) -> Result<FactorType> {
+        let min: usize = 0;
+        let max: usize = factors.len();
+
+        eprintln!("Please select a MFA Factor Type:");
+        for (i, factor) in factors.iter().enumerate() {
+            eprintln!("( {} ) {}", i, factor.human_friendly_name());
+        }
+
+        eprint!("Factor Type? ({} - {}) ", min, max);
+        let _ = io::stdout().flush();
+        let mut buffer = String::new();
+        io::stdin().lock().read_line(&mut buffer)?;
+        // remove \n on unix or \r\n on windows
+        let len = buffer.trim_end_matches(&['\r', '\n'][..]).len();
+        buffer.truncate(len);
+
+        let selection: usize = buffer
+            .parse()
+            .map_err(|_| anyhow!("failed to parse your selection"))?;
+        if selection > max {
+            return Err(anyhow!("you've selected an invalid Factor Type"));
+        }
+        let factor = factors.get(selection as usize).ok_or_else(|| anyhow!(""))?;
+
+        Ok(factor.clone())
+    }
+
+    fn ask_user_for_totp(&self) -> Result<String> {
+        eprint!("TOTP Code: ");
+        let _ = io::stdout().flush();
+        let mut buffer = String::new();
+        io::stdin().lock().read_line(&mut buffer)?;
+        // remove \n on unix or \r\n on windows
+        let len = buffer.trim_end_matches(&['\r', '\n'][..]).len();
+        buffer.truncate(len);
+
+        Ok(buffer)
     }
 }

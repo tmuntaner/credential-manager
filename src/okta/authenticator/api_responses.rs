@@ -22,6 +22,20 @@ impl OktaError {
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
+pub enum FactorResult {
+    #[serde(rename = "CHALLENGE")]
+    Challenge,
+    #[serde(rename = "WAITING")]
+    Waiting,
+    #[serde(rename = "REJECTED")]
+    Rejected,
+    #[serde(rename = "TIMEOUT")]
+    Timeout,
+    #[serde(other)]
+    Unimplemented,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 pub enum TransactionState {
     #[serde(rename = "MFA_REQUIRED")]
     MfaRequired,
@@ -41,11 +55,17 @@ pub struct Response {
     #[serde(rename = "_embedded")]
     embedded: Option<Embedded>,
     status: Option<TransactionState>,
+    factor_result: Option<FactorResult>,
     #[serde(rename = "_links")]
     links: Option<HashMap<String, Links>>,
 }
 
 impl Response {
+    /// Tries to return the [`FactorResult`] of a response.
+    pub fn factor_result(&self) -> Option<FactorResult> {
+        self.factor_result.clone()
+    }
+
     /// Tries to return the [`TransactionState`] of a response.
     pub fn status(&self) -> Option<TransactionState> {
         self.status.clone()
@@ -76,7 +96,17 @@ impl Response {
             .unwrap_or_default();
 
         // collect all other MFA factors
-        let mut factors = self.embedded.as_ref()?.factors.clone().unwrap_or_default();
+        let mut factors = self
+            .embedded
+            .as_ref()?
+            .factors
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            // WebAuthn can be ignored because the factor type above handles all U2F Keys
+            // also, we can ignore unimplemented factors
+            .filter(|factor_type| !matches!(factor_type, FactorType::Unimplemented))
+            .collect();
 
         factors_types.append(&mut factors);
         Some(factors_types)
@@ -152,6 +182,11 @@ pub struct Link {
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     credential_id: Option<String>,
+    device_type: Option<String>,
+    keys: Option<Vec<HashMap<String, String>>>,
+    name: Option<String>,
+    platform: Option<String>,
+    version: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -163,16 +198,56 @@ pub enum FactorType {
         #[serde(rename = "_links")]
         links: Option<HashMap<String, Links>>,
     },
+    #[serde(rename = "token:software:totp")]
+    #[serde(rename_all = "camelCase")]
+    Totp {
+        provider: String,
+        vendor_name: String,
+        profile: Option<Profile>,
+
+        #[serde(rename = "_links")]
+        links: Option<HashMap<String, Links>>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Push {
+        provider: String,
+        vendor_name: String,
+        profile: Option<Profile>,
+
+        #[serde(rename = "_links")]
+        links: Option<HashMap<String, Links>>,
+    },
     #[serde(other)]
     Unimplemented,
 }
 
 impl FactorType {
+    pub fn provider(&self) -> Option<String> {
+        match self {
+            FactorType::Push { ref provider, .. } => Some(provider.clone()),
+            FactorType::WebAuthn { .. } => None,
+            FactorType::Totp { ref provider, .. } => Some(provider.clone()),
+            FactorType::Unimplemented => None,
+        }
+    }
+
+    pub fn human_friendly_name(&self) -> String {
+        match self {
+            FactorType::Push { .. } => String::from("Okta Push"),
+            FactorType::WebAuthn { .. } => String::from("WebAuthn (U2F)"),
+            FactorType::Totp { ref provider, .. } => {
+                format!("TOTP ({})", provider)
+            }
+            FactorType::Unimplemented => String::from("Unimplemented"),
+        }
+    }
     /// Tries to get the verification URL for a factor.
     pub fn get_verification_url(&self) -> Option<String> {
         return match self {
             FactorType::WebAuthn { ref links, .. } => links.as_ref()?.get("next")?.link(),
-            FactorType::Unimplemented => None,
+            FactorType::Push { ref links, .. } => links.as_ref()?.get("verify")?.link(),
+            FactorType::Totp { ref links, .. } => links.as_ref()?.get("verify")?.link(),
+            _ => None,
         };
     }
 
@@ -180,11 +255,15 @@ impl FactorType {
     pub fn get_credential_id(&self) -> Option<String> {
         return match self {
             FactorType::WebAuthn { ref profile, .. } => {
-                let profile = profile.as_ref()?;
-
-                Some(profile.credential_id.as_ref()?.clone())
+                Some(profile.as_ref()?.credential_id.as_ref()?.clone())
             }
-            FactorType::Unimplemented => None,
+            FactorType::Push { ref profile, .. } => {
+                Some(profile.as_ref()?.credential_id.as_ref()?.clone())
+            }
+            FactorType::Totp { ref profile, .. } => {
+                Some(profile.as_ref()?.credential_id.as_ref()?.clone())
+            }
+            _ => None,
         };
     }
 }
