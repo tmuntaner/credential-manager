@@ -1,8 +1,8 @@
 use crate::utils;
 use anyhow::{anyhow, Result};
 use c9s::aws::sts::AwsCredential;
-use c9s::okta::okta_client::OktaClient;
-use c9s::settings::AppConfig;
+use c9s::okta::okta_client::{MfaSelection, OktaClient};
+use c9s::settings::{AppConfig, OktaMfa};
 use clap::Clap;
 
 #[derive(Clap)]
@@ -27,6 +27,8 @@ struct OktaAwsCredentials {
     with_password: bool,
     #[clap(short, long)]
     role_arn: Option<String>,
+    #[clap(short, long)]
+    mfa: Option<String>,
 }
 
 #[derive(Clap)]
@@ -41,6 +43,8 @@ struct OktaAwsSsoCredentials {
     region: Option<String>,
     #[clap(short, long)]
     role_arn: Option<String>,
+    #[clap(short, long)]
+    mfa: Option<String>,
 }
 
 impl Credentials {
@@ -72,14 +76,24 @@ impl OktaAwsSsoCredentials {
         );
         let region = self.region.clone().unwrap_or(
             default_settings
+                .clone()
                 .ok_or_else(|| anyhow!("please supply a region"))?
                 .region(),
         );
+        let mfa = get_mfa_option(self.mfa.clone(), &default_settings);
+
         let password = utils::get_password(app_url.clone(), username.clone(), self.with_password)?;
 
         let client = OktaClient::new()?;
         let aws_credentials = client
-            .aws_sso_credentials(username, password, app_url, region, self.role_arn.clone())
+            .aws_sso_credentials(
+                username,
+                password,
+                app_url,
+                region,
+                self.role_arn.clone(),
+                mfa,
+            )
             .await?;
 
         print_credentials(aws_credentials);
@@ -106,15 +120,30 @@ impl OktaAwsCredentials {
                 .ok_or_else(|| anyhow!("please supply a username"))?
                 .username(),
         );
+        let mfa = get_mfa_option(self.mfa.clone(), &default_settings);
+
         let password = utils::get_password(app_url.clone(), username.clone(), self.with_password)?;
 
         let client = OktaClient::new()?;
         let aws_credentials = client
-            .aws_credentials(username, password, app_url, self.role_arn.clone())
+            .aws_credentials(username, password, app_url, self.role_arn.clone(), mfa)
             .await?;
         print_credentials(aws_credentials);
 
         Ok(())
+    }
+}
+
+fn get_mfa_option<T: OktaMfa>(
+    mfa: Option<String>,
+    default_settings: &Option<T>,
+) -> Option<MfaSelection> {
+    match mfa {
+        Some(mfa) => Some(MfaSelection::from_string(mfa)),
+        None => match default_settings {
+            Some(settings) => settings.mfa(),
+            None => None,
+        },
     }
 }
 

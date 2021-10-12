@@ -2,7 +2,7 @@ use crate::aws::sts::AwsCredential;
 use crate::okta::authenticator::authenticator_client::AuthenticatorClient;
 use crate::okta::aws::aws_credentials::AwsCredentials;
 use crate::okta::aws_sso::aws_sso_credentials::AwsSSOCredentials;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 
 /// This is the entrypoint to communicate with Okta to generate temporary credentials.
 ///
@@ -16,6 +16,34 @@ pub struct OktaClient {
     authorizer: AuthenticatorClient,
     aws_credentials: AwsCredentials,
     aws_sso_credentials: AwsSSOCredentials,
+}
+
+#[derive(Copy, Clone)]
+pub enum MfaSelection {
+    WebAuthn,
+    Totp,
+    OktaPush,
+    Invalid,
+}
+
+impl MfaSelection {
+    pub fn from_string(s: String) -> Self {
+        match s.to_lowercase().as_str() {
+            "webauthn" => MfaSelection::WebAuthn,
+            "totp" => MfaSelection::Totp,
+            "push" => MfaSelection::OktaPush,
+            "oktapush" => MfaSelection::OktaPush,
+            _ => MfaSelection::Invalid,
+        }
+    }
+
+    pub fn validate(s: String) -> Result<()> {
+        let selection = MfaSelection::from_string(s);
+        match selection {
+            MfaSelection::Invalid => Err(anyhow!("invalid MFA selection")),
+            _ => Ok(()),
+        }
+    }
 }
 
 impl OktaClient {
@@ -34,10 +62,11 @@ impl OktaClient {
         password: String,
         app_url: String,
         role_arn: Option<String>,
+        mfa: Option<MfaSelection>,
     ) -> Result<Vec<AwsCredential>> {
         let session_token = self
             .authorizer
-            .run(app_url.clone(), username, password)
+            .run(app_url.clone(), username, password, mfa)
             .await?;
 
         let credentials = self
@@ -55,10 +84,11 @@ impl OktaClient {
         app_url: String,
         region: String,
         role_arn: Option<String>,
+        mfa: Option<MfaSelection>,
     ) -> Result<Vec<AwsCredential>> {
         let session_token = self
             .authorizer
-            .run(app_url.clone(), username, password)
+            .run(app_url.clone(), username, password, mfa)
             .await?;
 
         let credentials = self

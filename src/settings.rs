@@ -1,3 +1,4 @@
+use crate::okta::okta_client::MfaSelection;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -14,6 +15,7 @@ pub struct AppConfig {
 pub struct AwsHost {
     app_url: String,
     username: String,
+    mfa: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -21,6 +23,7 @@ pub struct AwsSsoHost {
     app_url: String,
     username: String,
     region: String,
+    mfa: Option<String>,
 }
 
 impl AppConfig {
@@ -30,6 +33,7 @@ impl AppConfig {
         match hosts.iter_mut().find(|i| i.app_url == host.app_url.clone()) {
             Some(existing) => {
                 existing.username = host.username;
+                existing.mfa = host.mfa;
             }
             None => {
                 hosts.push(host);
@@ -44,6 +48,7 @@ impl AppConfig {
             Some(existing) => {
                 existing.username = host.username;
                 existing.region = host.region;
+                existing.mfa = host.mfa;
             }
             None => {
                 hosts.push(host);
@@ -111,7 +116,7 @@ impl AppConfig {
 }
 
 impl AwsHost {
-    pub fn new(app_url: String, username: String) -> Result<Self> {
+    pub fn new(app_url: String, username: String, mfa: Option<String>) -> Result<Self> {
         let mut app_url = Url::parse(app_url.as_str())?;
 
         // remove query
@@ -120,12 +125,16 @@ impl AwsHost {
         // remove trailing slash
         app_url
             .path_segments_mut()
-            .map_err(|_| "cannot be base")
-            .map_err(|e| anyhow!(e))?
+            .map_err(|_| anyhow!("cannot be base"))?
             .pop_if_empty();
+
+        if mfa.is_some() {
+            MfaSelection::validate(mfa.clone().unwrap_or_else(|| "".to_string()))?;
+        }
 
         Ok(AwsHost {
             app_url: String::from(app_url),
+            mfa,
             username,
         })
     }
@@ -137,10 +146,19 @@ impl AwsHost {
     pub fn username(&self) -> String {
         self.username.clone()
     }
+
+    pub fn mfa(&self) -> Option<String> {
+        self.mfa.clone()
+    }
 }
 
 impl AwsSsoHost {
-    pub fn new(app_url: String, username: String, region: String) -> Result<Self> {
+    pub fn new(
+        app_url: String,
+        username: String,
+        region: String,
+        mfa: Option<String>,
+    ) -> Result<Self> {
         let mut app_url = Url::parse(app_url.as_str())?;
 
         // remove query
@@ -149,14 +167,16 @@ impl AwsSsoHost {
         // remove trailing slash
         app_url
             .path_segments_mut()
-            .map_err(|_| "cannot be base")
-            .map_err(|e| anyhow!(e))?
+            .map_err(|_| anyhow!("cannot be base"))?
             .pop_if_empty();
+
+        MfaSelection::validate(mfa.clone().unwrap_or_else(|| "".to_string()))?;
 
         Ok(AwsSsoHost {
             app_url: String::from(app_url),
             username,
             region,
+            mfa,
         })
     }
 
@@ -170,5 +190,21 @@ impl AwsSsoHost {
 
     pub fn region(&self) -> String {
         self.region.clone()
+    }
+}
+
+pub trait OktaMfa {
+    fn mfa(&self) -> Option<MfaSelection>;
+}
+
+impl OktaMfa for AwsHost {
+    fn mfa(&self) -> Option<MfaSelection> {
+        self.mfa.clone().map(MfaSelection::from_string)
+    }
+}
+
+impl OktaMfa for AwsSsoHost {
+    fn mfa(&self) -> Option<MfaSelection> {
+        self.mfa.clone().map(MfaSelection::from_string)
     }
 }

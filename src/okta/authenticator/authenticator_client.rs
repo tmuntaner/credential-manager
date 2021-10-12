@@ -5,6 +5,7 @@ use crate::okta::authenticator::okta_api_client::OktaApiClient;
 use std::io::{self, BufRead, Write};
 use std::{thread, time};
 
+use crate::okta::okta_client::MfaSelection;
 use crate::verify;
 use anyhow::{anyhow, Result};
 use url::Url;
@@ -25,7 +26,13 @@ impl AuthenticatorClient {
     }
 
     /// Runs the authentication process for an app/username/password.
-    pub async fn run(&self, app_url: String, username: String, password: String) -> Result<String> {
+    pub async fn run(
+        &self,
+        app_url: String,
+        username: String,
+        password: String,
+        mfa: Option<MfaSelection>,
+    ) -> Result<String> {
         let mut response = self
             .try_authorize(app_url.clone(), username, password)
             .await?;
@@ -36,9 +43,14 @@ impl AuthenticatorClient {
                 .status()
                 .ok_or_else(|| anyhow!("could not get status"))?
             {
-                TransactionState::MfaRequired => response = self.mfa_required(&response).await?,
+                TransactionState::MfaRequired => {
+                    response = self.mfa_required(&response, mfa).await?
+                }
                 TransactionState::MfaChallenge => {
-                    let result = response.factor_result().ok_or_else(|| anyhow!(""))?;
+                    let result = response
+                        .factor_result()
+                        .ok_or_else(|| anyhow!("could not get factor result"))?;
+
                     match result {
                         FactorResult::Challenge => {
                             response = self.mfa_challenge(&response, app_url.clone()).await?
@@ -97,7 +109,11 @@ impl AuthenticatorClient {
     /// chooses an MFA option and Okta will provide it with a challenge.
     ///
     /// <https://developer.okta.com/docs/reference/api/authn/#verify-factor>
-    async fn mfa_required(&self, response: &Response) -> Result<Response> {
+    async fn mfa_required(
+        &self,
+        response: &Response,
+        mfa: Option<MfaSelection>,
+    ) -> Result<Response> {
         let state_token = response
             .state_token()
             .ok_or_else(|| anyhow!("could not get state token"))?;
@@ -106,7 +122,7 @@ impl AuthenticatorClient {
             .factors()
             .ok_or_else(|| anyhow!("could not get factors"))?;
 
-        let factor = self.ask_user_for_factor(factors)?;
+        let factor = self.selected_mfa_factor(factors, mfa)?;
 
         let url = factor
             .get_verification_url()
@@ -214,7 +230,11 @@ impl AuthenticatorClient {
             .map_err(|e| anyhow!(e))?)
     }
 
-    fn ask_user_for_factor(&self, factors: Vec<FactorType>) -> Result<FactorType> {
+    fn selected_mfa_factor(
+        &self,
+        factors: Vec<FactorType>,
+        mfa: Option<MfaSelection>,
+    ) -> Result<FactorType> {
         let factors: Vec<FactorType> = factors
             .into_iter()
             .filter(|factor_type| {
@@ -230,6 +250,51 @@ impl AuthenticatorClient {
             })
             .collect();
 
+        match mfa {
+            Some(mfa) => match mfa {
+                MfaSelection::Totp => {
+                    let factors: Vec<FactorType> = factors
+                        .into_iter()
+                        .filter(|factor| matches!(factor, FactorType::Totp { .. }))
+                        .collect();
+                    let factor = factors
+                        .get(0)
+                        .ok_or_else(|| anyhow!("MFA Factor not found"))?
+                        .clone();
+
+                    Ok(factor)
+                }
+                MfaSelection::OktaPush => {
+                    let factors: Vec<FactorType> = factors
+                        .into_iter()
+                        .filter(|factor| matches!(factor, FactorType::Push { .. }))
+                        .collect();
+                    let factor = factors
+                        .get(0)
+                        .ok_or_else(|| anyhow!("MFA Factor not found"))?
+                        .clone();
+
+                    Ok(factor)
+                }
+                MfaSelection::WebAuthn => {
+                    let factors: Vec<FactorType> = factors
+                        .into_iter()
+                        .filter(|factor| matches!(factor, FactorType::WebAuthn { .. }))
+                        .collect();
+                    let factor = factors
+                        .get(0)
+                        .ok_or_else(|| anyhow!("MFA Factor not found"))?
+                        .clone();
+
+                    Ok(factor)
+                }
+                _ => Err(anyhow!("MFA Factor not found")),
+            },
+            None => self.ask_user_for_mfa_factor(factors),
+        }
+    }
+
+    fn ask_user_for_mfa_factor(&self, factors: Vec<FactorType>) -> Result<FactorType> {
         let min: usize = 0;
         let max: usize = factors.len();
 
