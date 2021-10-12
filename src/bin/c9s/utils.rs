@@ -13,9 +13,9 @@ pub fn get_password(app_url: String, username: String, with_password: bool) -> R
 
     let password = match with_password {
         true => {
-            let password = rpassword::prompt_password_stdout("Password: ")?;
+            let password = rpassword::prompt_password_stderr("Password: ")?;
 
-            print!("Save password? (y/n) ");
+            eprint!("Save password? (y/n) ");
             let _ = io::stdout().flush();
             let mut buffer = String::new();
             io::stdin().lock().read_line(&mut buffer)?;
