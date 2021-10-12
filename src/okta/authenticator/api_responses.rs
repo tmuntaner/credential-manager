@@ -105,12 +105,7 @@ impl Response {
             .into_iter()
             // WebAuthn can be ignored because the factor type above handles all U2F Keys
             // also, we can ignore unimplemented factors
-            .filter(|factor_type| {
-                !matches!(
-                    factor_type,
-                    FactorType::WebAuthn { .. } | FactorType::Unimplemented
-                )
-            })
+            .filter(|factor_type| !matches!(factor_type, FactorType::Unimplemented))
             .collect();
 
         factors_types.append(&mut factors);

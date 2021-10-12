@@ -215,6 +215,21 @@ impl AuthenticatorClient {
     }
 
     fn ask_user_for_factor(&self, factors: Vec<FactorType>) -> Result<FactorType> {
+        let factors: Vec<FactorType> = factors
+            .into_iter()
+            .filter(|factor_type| {
+                match factor_type {
+                    FactorType::WebAuthn { ref profile, .. } => {
+                        // We want to filter out the WebAuthn selections with a profile
+                        // the one without, is a general one which can be used for all
+                        // U2F tokens.
+                        profile.is_none()
+                    }
+                    _ => true,
+                }
+            })
+            .collect();
+
         let min: usize = 0;
         let max: usize = factors.len();
 
@@ -222,6 +237,7 @@ impl AuthenticatorClient {
         for (i, factor) in factors.iter().enumerate() {
             eprintln!("( {} ) {}", i, factor.human_friendly_name());
         }
+
         eprint!("Factor Type? ({} - {}) ", min, max);
         let _ = io::stdout().flush();
         let mut buffer = String::new();
