@@ -112,13 +112,25 @@ impl AuthenticatorClient {
             .get_verification_url()
             .ok_or_else(|| anyhow!("could not get verification url"))?;
 
-        let json = &serde_json::json!({
-           "stateToken": state_token,
-        });
+        let json = match factor {
+            FactorType::Totp { .. } => {
+                let totp = self.ask_user_for_totp()?;
+
+                serde_json::json!({
+                    "passCode": totp,
+                    "stateToken": state_token,
+                })
+            }
+            _ => {
+                serde_json::json!({
+                    "stateToken": state_token,
+                })
+            }
+        };
 
         Ok(self
             .client
-            .post(url.as_str(), json)
+            .post(url.as_str(), &json)
             .await
             .map_err(|e| anyhow!(e))?)
     }
@@ -227,5 +239,17 @@ impl AuthenticatorClient {
         let factor = factors.get(selection as usize).ok_or_else(|| anyhow!(""))?;
 
         Ok(factor.clone())
+    }
+
+    fn ask_user_for_totp(&self) -> Result<String> {
+        eprint!("TOTP Code: ");
+        let _ = io::stdout().flush();
+        let mut buffer = String::new();
+        io::stdin().lock().read_line(&mut buffer)?;
+        // remove \n on unix or \r\n on windows
+        let len = buffer.trim_end_matches(&['\r', '\n'][..]).len();
+        buffer.truncate(len);
+
+        Ok(buffer)
     }
 }
