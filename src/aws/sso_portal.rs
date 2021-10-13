@@ -1,7 +1,7 @@
 use crate::aws::sts::AwsCredential;
 use crate::http::api_client::{AcceptType, ApiClient};
 use anyhow::{anyhow, Result};
-use indicatif::{ProgressBar, ProgressStyle};
+use futures::future;
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -61,6 +61,15 @@ pub struct AwsRole {
     role_name: String,
 }
 
+struct RolesFuture {
+    account: Account,
+    roles: Result<Vec<Role>>,
+}
+
+struct CredentialsFuture {
+    credentials: Result<AwsCredential>,
+}
+
 impl AwsRole {
     pub fn role_arn(&self) -> String {
         self.role_arn.clone()
@@ -107,20 +116,20 @@ impl SsoPortal {
     ) -> Result<Vec<AwsCredential>> {
         let mut credentials = vec![];
 
-        let style = ProgressStyle::default_bar()
-            .template("Generating Credentials:\n[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}")
-            .progress_chars("##-");
-        let progress = ProgressBar::new(roles.len() as u64);
-        progress.set_style(style);
+        let futures = future::join_all(roles.into_iter().map(|role| {
+            let token = token.clone();
+            async move {
+                let credentials = self.generate_credentials(token, &role).await;
 
-        for role in roles {
-            progress.set_message(role.role_arn());
-            progress.inc(1);
+                CredentialsFuture { credentials }
+            }
+        }))
+        .await;
 
-            let credential = self.generate_credentials(token.clone(), role).await?;
+        for future in futures {
+            let credential = future.credentials?;
             credentials.push(credential);
         }
-        progress.finish_with_message("Done");
 
         Ok(credentials)
     }
@@ -129,40 +138,36 @@ impl SsoPortal {
         let accounts = self.list_accounts(token.clone()).await?;
         let mut roles = vec![];
 
-        let style = ProgressStyle::default_bar()
-            .template("Gathering AWS Roles:\n[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}")
-            .progress_chars("##-");
-        let progress = ProgressBar::new(accounts.len() as u64);
-        progress.set_style(style);
+        let futures = future::join_all(accounts.into_iter().map(|account| {
+            let token = token.clone();
+            async move {
+                let roles = self.list_roles(token, account.account_id.clone()).await;
+                RolesFuture { account, roles }
+            }
+        }))
+        .await;
 
-        for account in accounts {
-            progress.set_message(account.account_name);
-            progress.inc(1);
-
-            let account_roles = self
-                .list_roles(token.clone(), account.account_id.clone())
-                .await?;
-            for role in account_roles {
+        for future in futures {
+            for role in future.roles? {
                 let role_arn = format!("arn:aws:iam::{}:role/{}", role.account_id, role.role_name);
                 roles.push(AwsRole {
                     role_arn,
                     role_name: role.role_name,
-                    account_id: account.account_id.clone(),
+                    account_id: future.account.account_id.clone(),
                 });
             }
         }
-        progress.finish_with_message("done");
 
         Ok(roles)
     }
 
-    async fn generate_credentials(&self, token: String, role: AwsRole) -> Result<AwsCredential> {
+    async fn generate_credentials(&self, token: String, role: &AwsRole) -> Result<AwsCredential> {
         let mut token_url = Url::parse(self.portal_base_url.as_str())?;
         token_url.set_path("/federation/credentials");
 
         let mut params = HashMap::new();
-        params.insert(String::from("account_id"), role.account_id);
-        params.insert(String::from("role_name"), role.role_name);
+        params.insert(String::from("account_id"), role.account_id.clone());
+        params.insert(String::from("role_name"), role.role_name.clone());
 
         let mut headers = HashMap::new();
         headers.insert(String::from("x-amz-sso_bearer_token"), token.clone());
@@ -181,7 +186,7 @@ impl SsoPortal {
 
         Ok(AwsCredential {
             access_key_id: response.role_credentials.access_key_id.clone(),
-            role_arn: role.role_arn,
+            role_arn: role.role_arn.clone(),
             secret_access_key: response.role_credentials.secret_access_key.clone(),
             session_token: response.role_credentials.session_token,
         })

@@ -239,6 +239,7 @@ dependencies = [
  "base64",
  "clap",
  "dirs",
+ "futures",
  "indicatif",
  "keyring",
  "log",
