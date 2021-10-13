@@ -1,4 +1,4 @@
-use crate::aws::sts::AwsCredential;
+use crate::aws::Credential;
 use crate::okta::authenticator::authenticator_client::AuthenticatorClient;
 use crate::okta::aws::aws_credentials::AwsCredentials;
 use crate::okta::aws_sso::aws_sso_credentials::AwsSSOCredentials;
@@ -64,7 +64,7 @@ impl OktaClient {
         role_arn: Option<String>,
         mfa: Option<MfaSelection>,
         mfa_provider: Option<String>,
-    ) -> Result<Vec<AwsCredential>> {
+    ) -> Result<Vec<Credential>> {
         let session_token = self
             .authorizer
             .run(app_url.clone(), username, password, mfa, mfa_provider)
@@ -88,7 +88,7 @@ impl OktaClient {
         role_arn: Option<String>,
         mfa: Option<MfaSelection>,
         mfa_provider: Option<String>,
-    ) -> Result<Vec<AwsCredential>> {
+    ) -> Result<Vec<Credential>> {
         let session_token = self
             .authorizer
             .run(app_url.clone(), username, password, mfa, mfa_provider)
