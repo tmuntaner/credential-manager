@@ -1,4 +1,3 @@
-use indicatif::{ProgressBar, ProgressStyle};
 use rusoto_core::request::HttpClient;
 use rusoto_core::{Region, RusotoError};
 use rusoto_credential::StaticProvider;
@@ -55,12 +54,6 @@ pub async fn generate_sts_credentials(
 
     let mut aws_credentials = vec![];
 
-    let style = ProgressStyle::default_bar()
-        .template("Generating Credentials:\n[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}")
-        .progress_chars("##-");
-    let progress = ProgressBar::new(tasks.len() as u64);
-    progress.set_style(style);
-
     for task in tasks {
         let future = task.await.unwrap();
         let response = future.request.unwrap();
@@ -71,11 +64,7 @@ pub async fn generate_sts_credentials(
             role_arn: future.role_arn.clone(),
             session_token: credentials.session_token,
         });
-
-        progress.set_message(future.role_arn);
-        progress.inc(1);
     }
-    progress.finish_with_message("done");
 
     aws_credentials
 }
