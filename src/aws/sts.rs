@@ -157,7 +157,7 @@ mod tests {
             _input: AssumeRoleRequest,
         ) -> std::prelude::rust_2015::Result<AssumeRoleResponse, RusotoError<AssumeRoleError>>
         {
-            todo!()
+            unimplemented!()
         }
 
         async fn assume_role_with_saml(
@@ -192,7 +192,7 @@ mod tests {
             AssumeRoleWithWebIdentityResponse,
             RusotoError<AssumeRoleWithWebIdentityError>,
         > {
-            todo!()
+            unimplemented!()
         }
 
         async fn decode_authorization_message(
@@ -202,7 +202,7 @@ mod tests {
             DecodeAuthorizationMessageResponse,
             RusotoError<DecodeAuthorizationMessageError>,
         > {
-            todo!()
+            unimplemented!()
         }
 
         async fn get_access_key_info(
@@ -212,7 +212,7 @@ mod tests {
             GetAccessKeyInfoResponse,
             RusotoError<GetAccessKeyInfoError>,
         > {
-            todo!()
+            unimplemented!()
         }
 
         async fn get_caller_identity(
@@ -222,7 +222,7 @@ mod tests {
             GetCallerIdentityResponse,
             RusotoError<GetCallerIdentityError>,
         > {
-            todo!()
+            unimplemented!()
         }
 
         async fn get_federation_token(
@@ -232,7 +232,7 @@ mod tests {
             GetFederationTokenResponse,
             RusotoError<GetFederationTokenError>,
         > {
-            todo!()
+            unimplemented!()
         }
 
         async fn get_session_token(
@@ -242,7 +242,7 @@ mod tests {
             GetSessionTokenResponse,
             RusotoError<GetSessionTokenError>,
         > {
-            todo!()
+            unimplemented!()
         }
     }
 }
