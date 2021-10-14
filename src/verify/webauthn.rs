@@ -5,26 +5,11 @@ use authenticator::{
 
 use anyhow::{anyhow, Result};
 use indicatif::{ProgressBar, ProgressStyle};
-use nom::call;
-use nom::do_parse;
-use nom::named;
-use nom::u32;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::str;
 use std::sync::mpsc::channel;
 use url::Url;
-
-named!( authenticator_data_parser<&[u8], (u8, u32, Vec<u8>)>,
-    do_parse!(
-        user_present: call!(nom::number::complete::be_u8) >>
-        sign_count: u32!(nom::number::Endianness::Big) >>
-        signature: call!(nom::combinator::rest) >>
-        (
-            (user_present, sign_count, signature.to_vec())
-        )
-    )
-);
 
 /// <https://www.w3.org/TR/webauthn-2/#dom-collectedclientdata-tokenbinding>
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -130,9 +115,10 @@ pub fn webauthn_sign(
     let (_app_id, _used_handle, sign_data, _device_info) = sign_result;
     pb.finish_with_message("Processing sign request...");
 
-    let (_, (user_present, counter, signature)) =
-        authenticator_data_parser(sign_data.as_slice()).unwrap();
-
+    let sign_data = sign_data.as_slice();
+    let user_present = sign_data[0];
+    let counter = u32::from_be_bytes([sign_data[1], sign_data[2], sign_data[3], sign_data[4]]);
+    let signature = sign_data[5..].to_vec();
     let mut authenticator_data = vec![];
     authenticator_data.extend(app_bytes);
     authenticator_data.push(user_present);
@@ -162,12 +148,12 @@ fn generate_input_hashes(
 
     let client_data_json = serde_json::to_string(&collected_client_data).unwrap();
     let mut challenge = Sha256::default();
-    challenge.input(client_data_json.as_bytes());
-    let chall_bytes = challenge.result().to_vec();
+    challenge.update(client_data_json.as_bytes());
+    let chall_bytes = challenge.finalize().to_vec();
 
     let mut application = Sha256::default();
-    application.input(rp_id.as_bytes());
-    let app_bytes = application.result().to_vec();
+    application.update(rp_id.as_bytes());
+    let app_bytes = application.finalize().to_vec();
 
     (client_data_json, chall_bytes, app_bytes)
 }
