@@ -1,10 +1,15 @@
 NAME = c9s
 VERSION = 0.1.0
 
+.PHONY: default
+default: dist
+
+.PHONY: clean
 clean:
 	rm -rf package/obs/*.tar.bz2
 	rm -rf $(NAME)-$(VERSION)/
 
+.PHONY: dist
 dist: clean
 	@mkdir -p $(NAME)-$(VERSION)/
 	@cp -r src $(NAME)-$(VERSION)/
