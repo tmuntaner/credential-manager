@@ -1,6 +1,6 @@
 use crate::utils;
 use anyhow::{anyhow, Result};
-use c9s::aws::sts::AwsCredential;
+use c9s::aws::Credential;
 use c9s::okta::okta_client::{MfaSelection, OktaClient};
 use c9s::settings::{AppConfig, OktaMfa};
 use clap::Clap;
@@ -102,7 +102,7 @@ impl OktaAwsSsoCredentials {
             )
             .await?;
 
-        print_credentials(aws_credentials);
+        print_credentials(aws_credentials)?;
 
         Ok(())
     }
@@ -142,7 +142,7 @@ impl OktaAwsCredentials {
                 mfa_provider,
             )
             .await?;
-        print_credentials(aws_credentials);
+        print_credentials(aws_credentials)?;
 
         Ok(())
     }
@@ -174,11 +174,16 @@ fn get_mfa_provider<T: OktaMfa>(
     }
 }
 
-fn print_credentials(aws_credentials: Vec<AwsCredential>) {
+fn print_credentials(aws_credentials: Vec<Credential>) -> Result<()> {
     for credential in aws_credentials {
+        let role_arn = credential
+            .role_arn()
+            .ok_or_else(|| anyhow!("role arn missing for credential"))?;
         println!(
             "export AWS_ROLE_ARN=\"{}\"\nexport AWS_ACCESS_KEY_ID=\"{}\"\nexport AWS_SECRET_ACCESS_KEY=\"{}\"\nexport AWS_SESSION_TOKEN=\"{}\"\n",
-            credential.role_arn, credential.access_key_id, credential.secret_access_key, credential.session_token
+            role_arn, credential.access_key_id(), credential.secret_access_key(), credential.session_token()
         );
     }
+
+    Ok(())
 }

@@ -1,5 +1,5 @@
-use crate::aws::sso_portal::SsoPortal;
-use crate::aws::sts::AwsCredential;
+use crate::aws::sso_portal_client::SsoPortalClient;
+use crate::aws::{Credential, Role};
 use crate::okta::aws_sso::sso_portal_login::SsoPortalLogin;
 use anyhow::Result;
 
@@ -21,22 +21,22 @@ impl AwsSSOCredentials {
         session_token: String,
         region: String,
         role_arn: Option<String>,
-    ) -> Result<Vec<AwsCredential>> {
+    ) -> Result<Vec<Credential>> {
         let portal_url = format!("https://portal.sso.{region}.amazonaws.com", region = region);
         let token = self
             .sso_portal_login
             .run(app_url, session_token, portal_url.clone())
             .await?;
-        let sso_portal = SsoPortal::new(portal_url)?;
+        let sso_client = SsoPortalClient::new(portal_url)?;
 
         let roles = match role_arn {
             Some(arn) => {
-                let role_arn = SsoPortal::parse_role_arn(arn)?;
+                let role_arn = Role::from_arn(&arn)?;
                 vec![role_arn]
             }
-            None => sso_portal.list_role_arns(token.clone()).await?,
+            None => sso_client.list_role_arns(token.clone()).await?,
         };
-        let credentials = sso_portal.list_credentials(token, roles).await?;
+        let credentials = sso_client.list_credentials(token, roles).await?;
 
         Ok(credentials)
     }
