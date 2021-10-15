@@ -6,22 +6,21 @@ use crate::config::Config;
 use crate::credentials::Credentials;
 use anyhow::Result;
 use c9s::settings::AppConfig;
-use clap::{AppSettings, Clap};
+use clap::Parser;
 use log::LevelFilter;
 use simple_logger::SimpleLogger;
 
-#[derive(Clap)]
+#[derive(Parser)]
 #[clap(
     version = "1.0",
     author = "Thomas Muntaner <thomas.muntaner@gmail.com>"
 )]
-#[clap(setting = AppSettings::ColoredHelp)]
 struct Opts {
     #[clap(subcommand)]
     sub_command: SubCommand,
 }
 
-#[derive(Clap)]
+#[derive(Parser)]
 enum SubCommand {
     Config(Config),
     Creds(Credentials),

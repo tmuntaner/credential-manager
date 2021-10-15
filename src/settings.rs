@@ -2,13 +2,25 @@ use crate::okta::okta_client::MfaSelection;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use url::Url;
 
 #[derive(Serialize, Deserialize)]
 pub struct AppConfig {
+    global_settings: Option<GlobalSettings>,
     okta_aws_hosts: Option<Vec<AwsHost>>,
     okta_aws_sso_hosts: Option<Vec<AwsSsoHost>>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct GlobalSettings {
+    use_keyring: Option<bool>,
+}
+
+impl GlobalSettings {
+    fn default() -> Self {
+        Self { use_keyring: None }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -29,6 +41,20 @@ pub struct AwsSsoHost {
 }
 
 impl AppConfig {
+    pub fn set_use_keyring(&mut self, enable_keyring: bool) {
+        let mut global_settings = self
+            .global_settings
+            .get_or_insert(GlobalSettings::default());
+        global_settings.use_keyring = Some(enable_keyring);
+    }
+
+    pub fn keyring_enabled(&self) -> bool {
+        match self.global_settings.clone() {
+            Some(global_settings) => global_settings.use_keyring.unwrap_or(true),
+            None => true,
+        }
+    }
+
     pub fn add_aws_host(&mut self, host: AwsHost) {
         let hosts = self.okta_aws_hosts.get_or_insert(vec![]);
 
@@ -58,23 +84,23 @@ impl AppConfig {
         }
     }
 
-    pub fn aws_hosts(self) -> Option<AwsHost> {
-        self.okta_aws_hosts?.get(0).cloned()
+    pub fn aws_hosts(&self) -> Option<AwsHost> {
+        self.okta_aws_hosts.clone()?.get(0).cloned()
     }
 
-    pub fn aws_sso_hosts(self) -> Option<AwsSsoHost> {
-        self.okta_aws_sso_hosts?.get(0).cloned()
+    pub fn aws_sso_hosts(&self) -> Option<AwsSsoHost> {
+        self.okta_aws_sso_hosts.clone()?.get(0).cloned()
     }
 
-    pub fn find_aws_sso_host(self, app_url: String) -> Option<AwsSsoHost> {
-        let hosts = self.okta_aws_sso_hosts;
+    pub fn find_aws_sso_host(&self, app_url: String) -> Option<AwsSsoHost> {
+        let hosts = self.okta_aws_sso_hosts.clone();
         match hosts {
             Some(hosts) => hosts.iter().find(|host| app_url == host.app_url).cloned(),
             None => None,
         }
     }
-    pub fn find_aws_host(self, app_url: String) -> Option<AwsHost> {
-        let hosts = self.okta_aws_hosts;
+    pub fn find_aws_host(&self, app_url: String) -> Option<AwsHost> {
+        let hosts = self.okta_aws_hosts.clone();
         match hosts {
             Some(hosts) => hosts.iter().find(|host| app_url == host.app_url).cloned(),
             None => None,
@@ -83,6 +109,9 @@ impl AppConfig {
 
     pub fn read_config() -> Result<Self> {
         let config_file = AppConfig::config_file()?;
+        if !Path::new(&config_file).exists() {
+            fs::write(config_file.clone(), "")?;
+        }
         let config_contents = fs::read(config_file)?;
         let config_contents = String::from_utf8(config_contents)?;
         let config: AppConfig = toml::from_str(config_contents.as_str())?;
@@ -106,6 +135,7 @@ impl AppConfig {
         let config_dir = dirs::config_dir()
             .ok_or_else(|| anyhow!("could not determine config directory"))?
             .join("c9s");
+        fs::create_dir_all(config_dir.clone())?;
 
         Ok(config_dir)
     }
