@@ -3,21 +3,21 @@ use anyhow::{anyhow, Result};
 use c9s::aws::Credential;
 use c9s::okta::okta_client::{MfaSelection, OktaClient};
 use c9s::settings::{AppConfig, OktaMfa};
-use clap::Clap;
+use clap::Parser;
 
-#[derive(Clap)]
+#[derive(Parser)]
 pub struct Credentials {
     #[clap(subcommand)]
     sub_command: CredentialsSubCommands,
 }
 
-#[derive(Clap)]
+#[derive(Parser)]
 enum CredentialsSubCommands {
     OktaAws(OktaAwsCredentials),
     OktaAwsSso(OktaAwsSsoCredentials),
 }
 
-#[derive(Clap)]
+#[derive(Parser)]
 struct OktaAwsCredentials {
     #[clap(long)]
     app_url: Option<String>,
@@ -33,7 +33,7 @@ struct OktaAwsCredentials {
     mfa_provider: Option<String>,
 }
 
-#[derive(Clap)]
+#[derive(Parser)]
 struct OktaAwsSsoCredentials {
     #[clap(long)]
     app_url: Option<String>,
@@ -87,7 +87,12 @@ impl OktaAwsSsoCredentials {
         let mfa = get_mfa_option(self.mfa.clone(), &default_settings);
         let mfa_provider = get_mfa_provider(self.mfa_provider.clone(), &default_settings);
 
-        let password = utils::get_password(app_url.clone(), username.clone(), self.with_password)?;
+        let password = utils::get_password(
+            app_url.clone(),
+            username.clone(),
+            self.with_password,
+            settings.keyring_enabled(),
+        )?;
 
         let client = OktaClient::new()?;
         let aws_credentials = client
@@ -129,7 +134,12 @@ impl OktaAwsCredentials {
         let mfa = get_mfa_option(self.mfa.clone(), &default_settings);
         let mfa_provider = get_mfa_provider(self.mfa_provider.clone(), &default_settings);
 
-        let password = utils::get_password(app_url.clone(), username.clone(), self.with_password)?;
+        let password = utils::get_password(
+            app_url.clone(),
+            username.clone(),
+            self.with_password,
+            settings.keyring_enabled(),
+        )?;
 
         let client = OktaClient::new()?;
         let aws_credentials = client

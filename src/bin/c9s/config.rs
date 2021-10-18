@@ -1,31 +1,33 @@
+use crate::utils::true_or_false;
 use anyhow::Result;
 use c9s::settings::{AppConfig, AwsHost, AwsSsoHost};
-use clap::Clap;
+use clap::Parser;
 
-#[derive(Clap)]
+#[derive(Parser)]
 pub struct Config {
     #[clap(subcommand)]
     sub_command: ConfigSubCommand,
 }
 
-#[derive(Clap)]
+#[derive(Parser)]
 enum ConfigSubCommand {
     Add(ConfigAdd),
+    Global(ConfigGlobal),
 }
 
-#[derive(Clap)]
+#[derive(Parser)]
 struct ConfigAdd {
     #[clap(subcommand)]
     sub_command: ConfigAddSubCommand,
 }
 
-#[derive(Clap)]
+#[derive(Parser)]
 enum ConfigAddSubCommand {
     OktaAws(ConfigAddOktaAws),
     OktaAwsSso(ConfigAddOktaAwsSso),
 }
 
-#[derive(Clap)]
+#[derive(Parser)]
 struct ConfigAddOktaAws {
     #[clap(required = true, long)]
     app_url: String,
@@ -37,7 +39,7 @@ struct ConfigAddOktaAws {
     mfa_provider: Option<String>,
 }
 
-#[derive(Clap)]
+#[derive(Parser)]
 struct ConfigAddOktaAwsSso {
     #[clap(required = true, long)]
     app_url: String,
@@ -51,12 +53,34 @@ struct ConfigAddOktaAwsSso {
     mfa_provider: Option<String>,
 }
 
+#[derive(Parser)]
+struct ConfigGlobal {
+    #[clap(subcommand)]
+    sub_command: ConfigGlobalSubCommand,
+}
+
+#[derive(Parser)]
+enum ConfigGlobalSubCommand {
+    UseKeyring(ConfigGlobalUseKeyRing),
+}
+
+#[derive(Parser)]
+/// Whether or not c9s should use a keyring service.
+struct ConfigGlobalUseKeyRing {
+    /// Accepted values: "true" or "false"
+    #[clap(long, parse(try_from_str = true_or_false))]
+    enabled: bool,
+}
+
 impl Config {
     pub fn run(&self, settings: &mut AppConfig) -> Result<()> {
         match &self.sub_command {
             ConfigSubCommand::Add(val) => match &val.sub_command {
                 ConfigAddSubCommand::OktaAws(val) => val.run(settings),
                 ConfigAddSubCommand::OktaAwsSso(val) => val.run(settings),
+            },
+            ConfigSubCommand::Global(val) => match &val.sub_command {
+                ConfigGlobalSubCommand::UseKeyring(val) => val.run(settings),
             },
         }
     }
@@ -87,6 +111,15 @@ impl ConfigAddOktaAwsSso {
             self.mfa_provider.clone(),
         )?;
         settings.add_aws_sso_host(host);
+        settings.write_config()?;
+
+        Ok(())
+    }
+}
+
+impl ConfigGlobalUseKeyRing {
+    fn run(&self, settings: &mut AppConfig) -> Result<()> {
+        settings.set_use_keyring(self.enabled);
         settings.write_config()?;
 
         Ok(())
