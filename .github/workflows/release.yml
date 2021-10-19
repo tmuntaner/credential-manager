@@ -23,12 +23,16 @@ jobs:
           override: true
 
       - name: Build
-        run: cargo build --all --release && strip target/release/c9s && mv target/release/c9s target/release/c9s_amd64
+        run: |
+          cargo build --all --release && strip target/release/c9s && mv target/release/c9s target/release/c9s_amd64
+          cd target/release && sha256sum c9s_amd64 > c9s_amd64.SHA256SUM
 
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          files: target/release/c9s_amd64
+          files: |
+            target/release/c9s_amd64
+            target/release/c9s_amd64.SHA256SUM
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -48,17 +52,21 @@ jobs:
           target: x86_64-apple-darwin
 
       - name: Build
-        run: cargo build --all --release && strip target/release/c9s && mv target/release/c9s target/release/c9s_darwin
+        run: |
+          cargo build --all --release && strip target/release/c9s && mv target/release/c9s target/release/c9s_darwin
+          cd target/release && shasum -a 256 c9s_darwin > c9s_darwin.SHA256SUM
 
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          files: target/release/c9s_darwin
+          files: |
+            target/release/c9s_darwin
+            target/release/c9s_darwin.SHA256SUM
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-windows:
-    name: Checks for Windows
+    name: Release for Windows
     runs-on: windows-latest
     steps:
       - name: Checkout sources
@@ -72,11 +80,17 @@ jobs:
           override: true
 
       - name: Build
-        run: cargo build --all --release
+        run: |
+          cargo build --all --release
+          cd target\release
+          $sum = (CertUtil -hashFile .\c9s.exe SHA256)[1] -replace " ",""
+          "$sum c9s.exe" | Out-File .\c9s.exe.SHA256SUM
 
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          files: target/release/c9s.exe
+          files: |
+            target/release/c9s.exe
+            target/release/c9s.exe.SHA256SUM
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
