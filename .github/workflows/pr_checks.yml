@@ -1,6 +1,6 @@
-on: [push, pull_request]
+name: PR Checks
 
-name: Quickstart
+on: [push, pull_request]
 
 jobs:
   check-linux:
