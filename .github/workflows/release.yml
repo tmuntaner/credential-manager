@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  release-linux:
+    name: Release for Linux
+    runs-on: ubuntu-latest
+    steps:
+      - run: sudo apt-get update -y && sudo apt-get install -y libudev-dev libdbus-1-dev
+
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Build
+        run: cargo build --all --release && strip target/release/c9s && mv target/release/c9s target/release/c9s_amd64
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: target/release/c9s_amd64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-mac:
+    name: Release for Mac
+    runs-on: macos-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          target: x86_64-apple-darwin
+
+      - name: Build
+        run: cargo build --all --release && strip target/release/c9s && mv target/release/c9s target/release/c9s_darwin
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: target/release/c9s_darwin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-windows:
+    name: Checks for Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Build
+        run: cargo build --all --release
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: target/release/c9s.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
