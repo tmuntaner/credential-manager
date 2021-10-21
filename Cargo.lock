@@ -388,6 +388,7 @@ dependencies = [
  "tokio",
  "toml",
  "url",
+ "webauthn",
  "wincred",
  "zbus",
  "zvariant",
@@ -3094,6 +3095,30 @@ checksum = "38eb105f1c59d9eaa6b5cdc92b859d85b926e82cb2e0945cd0c9259faa6fe9fb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webauthn"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "authenticator",
+ "base64",
+ "indicatif",
+ "serde",
+ "serde_json",
+ "sha2",
+ "url",
+ "webauthn-sys",
+ "widestring",
+ "windows",
+]
+
+[[package]]
+name = "webauthn-sys"
+version = "0.1.0"
+dependencies = [
+ "windows",
 ]
 
 [[package]]

@@ -51,9 +51,9 @@ pub fn set_password(target: String, username: String, password: String) -> Resul
     unsafe { drop(Box::from_raw(filetime)) }
 
     if result.as_bool() {
-        Err(anyhow!("failed to save windows credential"))
-    } else {
         Ok(())
+    } else {
+        Err(anyhow!("failed to save windows credential"))
     }
 }
 
@@ -78,8 +78,6 @@ pub fn get_password(target: String) -> Result<Option<String>> {
     };
 
     let secret = if result.as_bool() {
-        None
-    } else {
         let secret = unsafe {
             U16String::from_ptr(
                 (*credential).CredentialBlob as *const u16,
@@ -89,6 +87,8 @@ pub fn get_password(target: String) -> Result<Option<String>> {
         };
 
         Some(secret)
+    } else {
+        None
     };
 
     // <https://docs.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credfree>
