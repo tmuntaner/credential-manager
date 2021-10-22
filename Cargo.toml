@@ -5,11 +5,6 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[build-dependencies]
-
-[target.'cfg(target_os = "windows")'.build-dependencies]
-windows = "0.21.1"
-
 [dev-dependencies]
 httpmock = "0.6"
 
@@ -39,6 +34,7 @@ simple_logger = "1.13.0"
 log = "0.4.14"
 regex = "1.5"
 futures = "0.3"
+webauthn = { path = "crates/webauthn" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "2.3"
@@ -53,5 +49,4 @@ aes = "0.7.5"
 block-modes = "0.8.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = "0.21.1"
-widestring = "0.5.0"
+wincred = { path = "crates/wincred" }
