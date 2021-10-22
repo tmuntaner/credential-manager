@@ -6,7 +6,6 @@ use std::io::{self, BufRead, Write};
 use std::{thread, time};
 
 use crate::okta::okta_client::MfaSelection;
-use crate::verify;
 use anyhow::{anyhow, Result};
 use url::Url;
 
@@ -188,7 +187,7 @@ impl AuthenticatorClient {
             .ok_or_else(|| anyhow!("couldn't get host from url"))?
             .to_string();
 
-        let u2f_response = verify::webauthn::webauthn_sign(challenge, host, credential_ids)?;
+        let u2f_response = webauthn::sign(challenge, host, credential_ids)?;
         let json = &serde_json::json!({
             "stateToken": state_token,
             "clientData": u2f_response.client_data,
