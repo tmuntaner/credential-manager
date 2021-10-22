@@ -37,7 +37,7 @@ pub fn set_password(target: String, username: String, password: String) -> Resul
         LastWritten: unsafe { *filetime },
         CredentialBlobSize: password.len() as u32 * 2,
         CredentialBlob: secret.as_ptr() as *mut u8,
-        Persist: CRED_PERSIST(1),
+        Persist: CRED_PERSIST(2),
         AttributeCount: 0,
         Attributes: std::ptr::null_mut(),
         TargetAlias: PWSTR(std::ptr::null_mut() as *mut u16),
