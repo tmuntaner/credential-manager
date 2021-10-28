@@ -7,8 +7,6 @@ use crate::credentials::Credentials;
 use anyhow::Result;
 use c9s::settings::AppConfig;
 use clap::Parser;
-use log::LevelFilter;
-use simple_logger::SimpleLogger;
 
 #[derive(Parser)]
 #[clap(
@@ -30,8 +28,6 @@ enum SubCommand {
 async fn main() -> Result<()> {
     let opt: Opts = Opts::parse();
     let mut settings = AppConfig::read_config()?;
-
-    SimpleLogger::new().with_level(LevelFilter::Info).init()?;
 
     match opt.sub_command {
         SubCommand::Config(val) => val.run(&mut settings)?,

@@ -15,38 +15,18 @@ serde_json = { version = "1.0" }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1.0.43"
 url = "2.2.2"
-authenticator = "0.3.1"
-sha2 = "0.9"
 base64 = "0.13.0"
 select = "0.5.0"
 sxd-document = "~0.3"
 sxd-xpath = "~0.4"
-rusoto_core = "0.47.0"
-rusoto_sts = "0.47.0"
-rusoto_credential = "0.47.0"
+aws-sdk-sts = "0.0.22-alpha"
 clap = "3.0.0-beta.4"
 async-trait = "0.1.51"
 toml = "0.5.8"
 dirs ="4.0.0"
 rpassword = "5.0"
-indicatif = "0.16.2"
-simple_logger = "1.13.0"
 log = "0.4.14"
 regex = "1.5"
 futures = "0.3"
-webauthn = { path = "crates/webauthn" }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-security-framework = "2.3"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-zbus = "1.9.2"
-zvariant = "2.9.0"
-zvariant_derive = "2.9.0"
-openssl = "0.10.36"
-hkdf = "0.11.0"
-aes = "0.7.5"
-block-modes = "0.8.1"
-
-[target.'cfg(target_os = "windows")'.dependencies]
-wincred = { path = "crates/wincred" }
+tmuntaner-webauthn = "0.1.0-alpha.2"
+tmuntaner-keyring = "0.1.0-alpha.3"

@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
-use c9s::keyring::Keyring;
 use std::io::{self, BufRead, Write};
+use tmuntaner_keyring::KeyringClient;
 use url::Url;
 
 pub fn get_password(
@@ -15,7 +15,7 @@ pub fn get_password(
         .ok_or_else(|| anyhow!("could not find app domain"))?;
     let service = format!("c9s -- {}", app_domain);
 
-    let keyring = Keyring::new(username, service)?;
+    let keyring = KeyringClient::new(username.as_str(), service.as_str(), "c9s")?;
     let password = if keyring_enabled {
         keyring.get_password()?
     } else {
@@ -33,7 +33,7 @@ pub fn get_password(
     Ok(password)
 }
 
-fn prompt_user_for_password(keyring: &Keyring, keyring_enabled: bool) -> Result<String> {
+fn prompt_user_for_password(keyring: &KeyringClient, keyring_enabled: bool) -> Result<String> {
     let password = rpassword::prompt_password_stderr("Password: ")?;
 
     if keyring_enabled {
