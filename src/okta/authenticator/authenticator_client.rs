@@ -187,7 +187,7 @@ impl AuthenticatorClient {
             .ok_or_else(|| anyhow!("couldn't get host from url"))?
             .to_string();
 
-        let u2f_response = webauthn::sign(challenge, host, credential_ids)?;
+        let u2f_response = tmuntaner_webauthn::sign(challenge, host, credential_ids)?;
         let json = &serde_json::json!({
             "stateToken": state_token,
             "clientData": u2f_response.client_data,
