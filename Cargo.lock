@@ -2948,7 +2948,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "widestring",
- "windows",
+ "windows 0.23.0",
  "zbus",
  "zvariant",
  "zvariant_derive",
@@ -2956,9 +2956,9 @@ dependencies = [
 
 [[package]]
 name = "tmuntaner-webauthn"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba09e5e44310425c37c3db84227ee74438e11c05bb68e527b9edd742cf55ea3d"
+checksum = "a0c025dc9786f198a4a9c43fe3034f7499d60509e41c6dab9df202ec83ced1fb"
 dependencies = [
  "anyhow",
  "authenticator",
@@ -2969,7 +2969,7 @@ dependencies = [
  "sha2",
  "url",
  "widestring",
- "windows",
+ "windows 0.24.0",
 ]
 
 [[package]]
@@ -3396,9 +3396,27 @@ version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9bce04249a9644c157f4529ea958f5d9e0129280e3700378884afa2903fd3d56"
 dependencies = [
- "windows_i686_msvc",
- "windows_x86_64_msvc",
+ "windows_i686_msvc 0.23.0",
+ "windows_x86_64_msvc 0.23.0",
 ]
+
+[[package]]
+name = "windows"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9f39345ae0c8ab072c0ac7fe8a8b411636aa34f89be19ddd0d9226544f13944"
+dependencies = [
+ "windows_i686_gnu",
+ "windows_i686_msvc 0.24.0",
+ "windows_x86_64_gnu",
+ "windows_x86_64_msvc 0.24.0",
+]
+
+[[package]]
+name = "windows_i686_gnu"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0866510a3eca9aed73a077490bbbf03e5eaac4e1fd70849d89539e5830501fd"
 
 [[package]]
 name = "windows_i686_msvc"
@@ -3407,10 +3425,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65911a6b53be443df22004ae7d82121dabce94d74ba5735081788115b81cb919"
 
 [[package]]
+name = "windows_i686_msvc"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf0ffed56b7e9369a29078d2ab3aaeceea48eb58999d2cff3aa2494a275b95c6"
+
+[[package]]
+name = "windows_x86_64_gnu"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "384a173630588044205a2993b6864a2f56e5a8c1e7668c07b93ec18cf4888dc4"
+
+[[package]]
 name = "windows_x86_64_msvc"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c8c8e2d709fbc4e6ff5d75503cbad8241c5df62fd60f62c0f8eef6e86689e63"
+
+[[package]]
+name = "windows_x86_64_msvc"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9bd8f062d8ca5446358159d79a90be12c543b3a965c847c8f3eedf14b321d399"
 
 [[package]]
 name = "winreg"
