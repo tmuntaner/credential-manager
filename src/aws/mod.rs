@@ -72,6 +72,7 @@ pub struct Credential {
     access_key_id: String,
     session_token: String,
     role_arn: Option<String>,
+    expiration: String,
 }
 
 impl Credential {
@@ -89,6 +90,10 @@ impl Credential {
 
     pub fn role_arn(&self) -> Option<String> {
         self.role_arn.clone()
+    }
+
+    pub fn expiration(&self) -> String {
+        self.expiration.clone()
     }
 }
 

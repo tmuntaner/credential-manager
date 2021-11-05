@@ -92,6 +92,7 @@ mod tests {
                 access_key_id: format!("TheAccessKeyId for {}", role.role_name()),
                 session_token: format!("TheSessionToken for {}", role.role_name()),
                 role_arn,
+                expiration: "".to_string(),
             })
         }
 

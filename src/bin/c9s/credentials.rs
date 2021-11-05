@@ -3,7 +3,9 @@ use anyhow::{anyhow, Result};
 use c9s::aws::Credential;
 use c9s::okta::okta_client::{MfaSelection, OktaClient};
 use c9s::settings::{AppConfig, OktaMfa};
+use clap::ArgEnum;
 use clap::Parser;
+use serde_json::json;
 
 #[derive(Parser)]
 pub struct Credentials {
@@ -15,6 +17,18 @@ pub struct Credentials {
 enum CredentialsSubCommands {
     OktaAws(OktaAwsCredentials),
     OktaAwsSso(OktaAwsSsoCredentials),
+}
+
+#[derive(ArgEnum, PartialEq, Debug, Clone)]
+enum OutputOptions {
+    Env,
+    AwsProfile,
+}
+
+impl Default for OutputOptions {
+    fn default() -> Self {
+        OutputOptions::Env
+    }
 }
 
 #[derive(Parser)]
@@ -31,6 +45,8 @@ struct OktaAwsCredentials {
     mfa: Option<String>,
     #[clap(long)]
     mfa_provider: Option<String>,
+    #[clap(long, arg_enum)]
+    output: Option<OutputOptions>,
 }
 
 #[derive(Parser)]
@@ -49,6 +65,8 @@ struct OktaAwsSsoCredentials {
     mfa: Option<String>,
     #[clap(long)]
     mfa_provider: Option<String>,
+    #[clap(long, arg_enum)]
+    output: Option<OutputOptions>,
 }
 
 impl Credentials {
@@ -107,7 +125,7 @@ impl OktaAwsSsoCredentials {
             )
             .await?;
 
-        print_credentials(aws_credentials)?;
+        print_credentials(aws_credentials, self.output.clone())?;
 
         Ok(())
     }
@@ -152,7 +170,7 @@ impl OktaAwsCredentials {
                 mfa_provider,
             )
             .await?;
-        print_credentials(aws_credentials)?;
+        print_credentials(aws_credentials, self.output.clone())?;
 
         Ok(())
     }
@@ -184,15 +202,42 @@ fn get_mfa_provider<T: OktaMfa>(
     }
 }
 
-fn print_credentials(aws_credentials: Vec<Credential>) -> Result<()> {
-    for credential in aws_credentials {
-        let role_arn = credential
-            .role_arn()
-            .ok_or_else(|| anyhow!("role arn missing for credential"))?;
-        println!(
-            "export AWS_ROLE_ARN=\"{}\"\nexport AWS_ACCESS_KEY_ID=\"{}\"\nexport AWS_SECRET_ACCESS_KEY=\"{}\"\nexport AWS_SESSION_TOKEN=\"{}\"\n",
-            role_arn, credential.access_key_id(), credential.secret_access_key(), credential.session_token()
-        );
+fn print_credentials(
+    aws_credentials: Vec<Credential>,
+    output: Option<OutputOptions>,
+) -> Result<()> {
+    match output.unwrap_or_default() {
+        OutputOptions::Env => {
+            for credential in aws_credentials {
+                let role_arn = credential
+                    .role_arn()
+                    .ok_or_else(|| anyhow!("role arn missing for credential"))?;
+                println!(
+                    "export AWS_ROLE_ARN=\"{}\"\nexport AWS_ACCESS_KEY_ID=\"{}\"\nexport AWS_SECRET_ACCESS_KEY=\"{}\"\nexport AWS_SESSION_TOKEN=\"{}\"\n",
+                    role_arn, credential.access_key_id(), credential.secret_access_key(), credential.session_token()
+                );
+            }
+        }
+        OutputOptions::AwsProfile => {
+            if aws_credentials.len() > 1 || aws_credentials.is_empty() {
+                return Err(anyhow!(format!(
+                    "command should return 1 credential, but got {}",
+                    aws_credentials.len()
+                )));
+            }
+            let credential = aws_credentials
+                .get(0)
+                .ok_or_else(|| anyhow!("failed to get credential"))?;
+            let json = json!({
+                "Version": 1,
+                "AccessKeyId" : credential.access_key_id(),
+                "SecretAccessKey" : credential.secret_access_key(),
+                "SessionToken" : credential.session_token(),
+                "Expiration" : credential.expiration()
+            });
+
+            println!("{}", json.to_string())
+        }
     }
 
     Ok(())

@@ -32,7 +32,7 @@ c9s config add okta-aws-sso --app-url https://domain.okta.com/home/amazon_aws/0o
 
 ### Okta
 
-#### AWS Credentials
+#### AWS Application
 
 **Defaults:**
 
@@ -58,7 +58,22 @@ If you want to only retrieve credentials for a single role, provide a value for 
 c9s creds okta-aws --role-arn YOUR_ROLE_ARN
 ```
 
-#### AWS SSO Credentials
+**AWS CLI Profile:**
+
+1. Think of a new AWS CLI profile name. Replace `my-new-profile-name` with it in the following steps.
+2. Not the role arn you want to assume as. Replace `my-role-arn` in the `credential_process` with this arn in the next step.
+3. Add a new profile to you AWS CLI config file `~/.aws/config`:
+    ```text
+    [profile my-new-profile]
+    region = eu-west-1
+    credential_process = sh -c "c9s creds okta-aws --role-arn my-role-arn --output aws-profile 2> /dev/tty"
+    ```
+4. Verify the profile with `aws sts get-caller-identity`
+    ```bash
+    aws --profile my-new-profile sts get-caller-identity
+    ```
+
+#### AWS SSO Application
 
 **Defaults:**
 
@@ -83,3 +98,18 @@ If you want to only retrieve credentials for a single role, provide a value for 
 ```bash
 c9s creds okta-aws-sso --role-arn YOUR_ROLE_ARN
 ```
+
+**AWS CLI Profile:**
+
+1. Think of a new AWS CLI profile name. Replace `my-new-profile-name` with it in the following steps.
+2. Not the role arn you want to assume as. Replace `my-role-arn` in the `credential_process` with this arn in the next step.
+3. Add a new profile to you AWS CLI config file `~/.aws/config`:
+    ```text
+    [profile my-new-profile]
+    region = eu-west-1
+    credential_process = sh -c "c9s creds okta-aws-sso --role-arn my-role-arn --output aws-profile 2> /dev/tty"
+    ```
+4. Verify the profile with `aws sts get-caller-identity`
+    ```bash
+    aws --profile my-new-profile sts get-caller-identity
+    ```
