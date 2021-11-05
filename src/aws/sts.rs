@@ -52,6 +52,7 @@ impl StsClient {
                 access_key_id: credentials.access_key_id.unwrap(),
                 role_arn: Some(future.role_arn),
                 session_token: credentials.session_token.unwrap(),
+                expiration: credentials.expiration.unwrap().to_chrono().to_rfc3339(),
             });
         }
 

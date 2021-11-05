@@ -59,6 +59,7 @@ impl SsoPortalApi for SsoPortal {
             role_arn: Some(role.role_arn()),
             secret_access_key: response.role_credentials.secret_access_key.clone(),
             session_token: response.role_credentials.session_token,
+            expiration: response.role_credentials.expiration,
         })
     }
 
@@ -191,6 +192,7 @@ mod tests {
                 secret_access_key: secret_access_key.clone(),
                 access_key_id: access_key_id.clone(),
                 session_token: session_token.clone(),
+                expiration: "".to_string(),
             },
         };
         let json = serde_json::to_string(&response).unwrap();
