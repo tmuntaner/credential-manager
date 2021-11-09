@@ -589,6 +589,7 @@ dependencies = [
  "async-trait",
  "aws-sdk-sts",
  "base64",
+ "chrono",
  "clap",
  "dirs",
  "futures",
@@ -642,6 +643,7 @@ dependencies = [
  "libc",
  "num-integer",
  "num-traits",
+ "time 0.1.43",
  "winapi",
 ]
 
