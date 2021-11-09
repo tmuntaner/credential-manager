@@ -1,9 +1,11 @@
 use crate::aws::{Account, Credential, Role};
 use crate::http::api_client::{AcceptType, ApiClient};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::{Duration, UNIX_EPOCH};
 use url::Url;
 
 // https://docs.aws.amazon.com/singlesignon/latest/PortalAPIReference/ssoportal-api.pdf
@@ -42,24 +44,47 @@ impl SsoPortalApi for SsoPortal {
         let mut headers = HashMap::new();
         headers.insert(String::from("x-amz-sso_bearer_token"), token.clone());
 
-        let response = self
-            .client
-            .get(
-                token_url.to_string(),
-                Some(params),
-                Some(headers),
-                AcceptType::Json,
-            )
-            .await?;
+        let mut retries = 3;
+        let mut wait = 1;
+        let response = loop {
+            match self
+                .client
+                .get(
+                    token_url.to_string(),
+                    Some(params.clone()),
+                    Some(headers.clone()),
+                    AcceptType::Json,
+                )
+                .await
+            {
+                Err(_) => {
+                    if retries > 0 {
+                        retries -= 1;
+                        tokio::time::sleep(Duration::from_secs(wait)).await;
+                        wait *= 2;
+                    } else {
+                        return Err(anyhow!(format!(
+                            "failed to request credentials for role: {}",
+                            role.role_name
+                        )));
+                    }
+                }
+                res => break res,
+            }
+        }?;
+
         let body = response.text().await?;
         let response: RoleCredentialResponse = serde_json::from_str(body.as_str())?;
+        let duration = UNIX_EPOCH + Duration::from_millis(response.role_credentials.expiration);
+        let date_time: DateTime<Utc> = DateTime::from(duration);
+        let expiration = date_time.to_rfc3339();
 
         Ok(Credential {
             access_key_id: response.role_credentials.access_key_id.clone(),
             role_arn: Some(role.role_arn()),
             secret_access_key: response.role_credentials.secret_access_key.clone(),
             session_token: response.role_credentials.session_token,
-            expiration: response.role_credentials.expiration,
+            expiration,
         })
     }
 
@@ -157,7 +182,16 @@ struct ListAccountResponse {
 #[derive(Deserialize, Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct RoleCredentialResponse {
-    role_credentials: Credential,
+    role_credentials: RoleCredential,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RoleCredential {
+    secret_access_key: String,
+    access_key_id: String,
+    session_token: String,
+    expiration: u64,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -187,12 +221,11 @@ mod tests {
         let account_id = String::from("AccountId");
         let role_name = String::from("RoleName");
         let response = RoleCredentialResponse {
-            role_credentials: Credential {
-                role_arn: None,
+            role_credentials: RoleCredential {
                 secret_access_key: secret_access_key.clone(),
                 access_key_id: access_key_id.clone(),
                 session_token: session_token.clone(),
-                expiration: "".to_string(),
+                expiration: 1,
             },
         };
         let json = serde_json::to_string(&response).unwrap();
