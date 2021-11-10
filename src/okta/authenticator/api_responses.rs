@@ -2,25 +2,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct OktaError {
-    error_code: String,
-    error_summary: String,
-    error_link: String,
-    error_id: String,
-}
-
-impl OktaError {
-    /// Returns an error summary
-    pub fn summary(&self) -> String {
-        format!(
-            "okta error code {} - {}",
-            self.error_code, self.error_summary
-        )
-    }
-}
-
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub enum FactorResult {
     #[serde(rename = "CHALLENGE")]

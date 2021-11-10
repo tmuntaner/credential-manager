@@ -1,6 +1,6 @@
 use crate::aws::{Account, Credential, Role};
 use crate::http::api_client::{AcceptType, ApiClient};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -44,35 +44,15 @@ impl SsoPortalApi for SsoPortal {
         let mut headers = HashMap::new();
         headers.insert(String::from("x-amz-sso_bearer_token"), token.clone());
 
-        let mut retries = 3;
-        let mut wait = 1;
-        let response = loop {
-            match self
-                .client
-                .get(
-                    token_url.to_string(),
-                    Some(params.clone()),
-                    Some(headers.clone()),
-                    AcceptType::Json,
-                )
-                .await
-            {
-                Err(_) => {
-                    if retries > 0 {
-                        retries -= 1;
-                        tokio::time::sleep(Duration::from_secs(wait)).await;
-                        wait *= 2;
-                    } else {
-                        return Err(anyhow!(format!(
-                            "failed to request credentials for role: {}",
-                            role.role_name
-                        )));
-                    }
-                }
-                res => break res,
-            }
-        }?;
-
+        let response = self
+            .client
+            .get_backoff(
+                token_url.to_string(),
+                Some(params.clone()),
+                Some(headers.clone()),
+                AcceptType::Json,
+            )
+            .await?;
         let body = response.text().await?;
         let response: RoleCredentialResponse = serde_json::from_str(body.as_str())?;
         let duration = UNIX_EPOCH + Duration::from_millis(response.role_credentials.expiration);
@@ -108,7 +88,7 @@ impl SsoPortalApi for SsoPortal {
 
             let response = self
                 .client
-                .get(
+                .get_backoff(
                     token_url.to_string(),
                     Some(params),
                     Some(headers),
@@ -150,7 +130,7 @@ impl SsoPortalApi for SsoPortal {
 
             let response = self
                 .client
-                .get(
+                .get_backoff(
                     token_url.to_string(),
                     Some(params),
                     Some(headers),
