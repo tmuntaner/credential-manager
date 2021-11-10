@@ -64,7 +64,7 @@ impl SsoPortalLogin {
 
         let response = self
             .client
-            .post(saml_destination.as_str(), &form, AcceptType::Html)
+            .post_form(saml_destination.as_str(), &form, AcceptType::Html)
             .await?;
 
         let hash_query: HashMap<_, _> = response.url().query_pairs().into_owned().collect();
@@ -121,7 +121,7 @@ impl SsoPortalLogin {
 
         let response = self
             .client
-            .post(token_url.as_str(), &form, AcceptType::Json)
+            .post_form(token_url.as_str(), &form, AcceptType::Json)
             .await?;
         let body = response.text().await?;
         let response: TokenResponse = serde_json::from_str(body.as_str())?;

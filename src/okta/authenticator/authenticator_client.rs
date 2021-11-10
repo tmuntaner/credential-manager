@@ -1,10 +1,10 @@
 use crate::okta::authenticator::api_responses::{
     FactorResult, FactorType, Response, TransactionState,
 };
-use crate::okta::authenticator::okta_api_client::OktaApiClient;
 use std::io::{self, BufRead, Write};
 use std::{thread, time};
 
+use crate::http::api_client::ApiClient;
 use crate::okta::okta_client::MfaSelection;
 use anyhow::{anyhow, Result};
 use url::Url;
@@ -14,13 +14,13 @@ use url::Url;
 /// See <https://developer.okta.com/docs/reference/api/authn/#transaction-state> for more details
 /// on how Okta handles the authentication process.
 pub struct AuthenticatorClient {
-    client: OktaApiClient,
+    client: ApiClient,
 }
 
 impl AuthenticatorClient {
     /// Creates a new [`Authenticator`] object.
     pub fn new() -> Result<AuthenticatorClient> {
-        let client = OktaApiClient::new()?;
+        let client = ApiClient::new()?;
         Ok(AuthenticatorClient { client })
     }
 
@@ -98,11 +98,15 @@ impl AuthenticatorClient {
             "password": password,
         });
 
-        Ok(self
+        let response = self
             .client
-            .post(url.as_str(), json)
+            .post_json(url.as_str(), json)
             .await
-            .map_err(|e| anyhow!(e))?)
+            .map_err(|e| anyhow!(e))?;
+
+        let body = response.text().await?;
+        let response: Response = serde_json::from_str(body.as_str())?;
+        Ok(response)
     }
 
     /// An MFA challenge is required.
@@ -147,11 +151,11 @@ impl AuthenticatorClient {
             }
         };
 
-        Ok(self
-            .client
-            .post(url.as_str(), &json)
-            .await
-            .map_err(|e| anyhow!(e))?)
+        let response = self.client.post_json(url.as_str(), &json).await?;
+        let body = response.text().await?;
+        let response: Response = serde_json::from_str(body.as_str())?;
+
+        Ok(response)
     }
 
     /// Attempt an MFA challenge
@@ -199,11 +203,11 @@ impl AuthenticatorClient {
             .next()
             .ok_or_else(|| anyhow!("could not get next page"))?;
 
-        Ok(self
-            .client
-            .post(url.as_str(), json)
-            .await
-            .map_err(|e| anyhow!(e))?)
+        let response = self.client.post_json(url.as_str(), json).await?;
+        let body = response.text().await?;
+        let response: Response = serde_json::from_str(body.as_str())?;
+
+        Ok(response)
     }
 
     /// Polls during an MFA Challenge
@@ -226,11 +230,11 @@ impl AuthenticatorClient {
 
         thread::sleep(ten_millis);
 
-        Ok(self
-            .client
-            .post(url.as_str(), json)
-            .await
-            .map_err(|e| anyhow!(e))?)
+        let response = self.client.post_json(url.as_str(), json).await?;
+        let body = response.text().await?;
+        let response: Response = serde_json::from_str(body.as_str())?;
+
+        Ok(response)
     }
 
     fn selected_mfa_factor(

@@ -1,9 +1,12 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT};
 use reqwest::{Client, Response};
+use serde_json::Value;
 use std::collections::HashMap;
+use std::time::Duration;
 use url::Url;
 
+#[derive(Clone)]
 pub enum AcceptType {
     Json,
     Html,
@@ -20,7 +23,23 @@ impl ApiClient {
         })
     }
 
-    pub async fn post(
+    pub async fn post_json(&self, uri: &str, json: &Value) -> Result<Response> {
+        let response = self
+            .http_client
+            .post(uri)
+            .json(json)
+            .header(ACCEPT, HeaderValue::from_static("application/json"))
+            .send()
+            .await?;
+
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(anyhow!("non 200 response"));
+        }
+
+        Ok(response)
+    }
+
+    pub async fn post_form(
         &self,
         uri: &str,
         form: &HashMap<String, String>,
@@ -37,6 +56,42 @@ impl ApiClient {
             .await?;
 
         Ok(res)
+    }
+
+    pub async fn get_backoff(
+        &self,
+        url: String,
+        params: Option<HashMap<String, String>>,
+        headers: Option<HashMap<String, String>>,
+        accept_type: AcceptType,
+    ) -> Result<Response> {
+        let mut retries = 3;
+        let mut wait = 1;
+
+        let response = loop {
+            match self
+                .get(
+                    url.clone(),
+                    params.clone(),
+                    headers.clone(),
+                    accept_type.clone(),
+                )
+                .await
+            {
+                Err(e) => {
+                    if retries > 0 {
+                        retries -= 1;
+                        tokio::time::sleep(Duration::from_secs(wait)).await;
+                        wait *= 2;
+                    } else {
+                        return Err(e);
+                    }
+                }
+                res => break res?,
+            }
+        };
+
+        Ok(response)
     }
 
     pub async fn get(
@@ -64,6 +119,10 @@ impl ApiClient {
 
         let request = self.http_client.get(url).headers(header_map);
         let response = request.send().await?;
+
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(anyhow!("non 200 response"));
+        }
 
         Ok(response)
     }
