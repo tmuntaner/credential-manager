@@ -2,10 +2,9 @@ use crate::aws::{Account, Credential, Role};
 use crate::http::api_client::{AcceptType, ApiClient};
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{Duration, UNIX_EPOCH};
+use time::format_description::well_known::Rfc3339;
 use url::Url;
 
 // https://docs.aws.amazon.com/singlesignon/latest/PortalAPIReference/ssoportal-api.pdf
@@ -55,16 +54,17 @@ impl SsoPortalApi for SsoPortal {
             .await?;
         let body = response.text().await?;
         let response: RoleCredentialResponse = serde_json::from_str(body.as_str())?;
-        let duration = UNIX_EPOCH + Duration::from_millis(response.role_credentials.expiration);
-        let date_time: DateTime<Utc> = DateTime::from(duration);
-        let expiration = date_time.to_rfc3339();
+        let time = time::OffsetDateTime::from_unix_timestamp_nanos(
+            response.role_credentials.expiration as i128 * 1_000_000i128,
+        )?;
+        let expiration_timestamp = time.format(&Rfc3339).unwrap();
 
         Ok(Credential {
             access_key_id: response.role_credentials.access_key_id.clone(),
             role_arn: Some(role.role_arn()),
             secret_access_key: response.role_credentials.secret_access_key.clone(),
             session_token: response.role_credentials.session_token,
-            expiration,
+            expiration: expiration_timestamp,
         })
     }
 
