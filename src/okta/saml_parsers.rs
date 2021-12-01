@@ -1,10 +1,9 @@
 use crate::aws::sts::SamlAWSRole;
 use anyhow::{anyhow, Result};
+use quick_xml::events::Event;
+use quick_xml::Reader;
 use select::document::Document;
 use select::predicate::Attr;
-use sxd_document::parser;
-use sxd_xpath::nodeset::Node;
-use sxd_xpath::{Context, Factory};
 
 pub struct OktaAwsSsoSamlParser {
     saml_body: String,
@@ -27,36 +26,33 @@ impl OktaAwsSsoSamlParser {
 
     pub fn destination(&self) -> Result<String> {
         let body = self.saml_body.clone();
-        let package = parser::parse(body.as_str())?;
-        let document = package.as_document();
 
-        let xpath = Factory::new()
-            .build("/saml2p:Response//@Destination")?
-            .ok_or_else(|| anyhow!("could not build xpath"))?;
-        let mut context = Context::new();
-        context.set_namespace("saml2p", "urn:oasis:names:tc:SAML:2.0:protocol");
-        let value = xpath.evaluate(&context, document.root())?;
+        let mut reader = Reader::from_str(body.as_str());
+        reader.trim_text(true);
+        let mut buf = Vec::new();
+        let mut ns_buffer = Vec::new();
 
-        let saml_destination = match value {
-            sxd_xpath::Value::Nodeset(ns) => ns
-                .document_order()
-                .into_iter()
-                .map(|node| {
-                    if let Node::Attribute(attr) = node {
-                        Some(String::from(attr.value()))
-                    } else {
-                        None
+        loop {
+            match reader.read_namespaced_event(&mut buf, &mut ns_buffer) {
+                Ok((_, Event::Start(e))) => {
+                    if let b"Response" = e.local_name() {
+                        for el in e.attributes() {
+                            let e = el?;
+                            let key = std::str::from_utf8(e.key)?;
+                            let value = std::str::from_utf8(e.value.as_ref())?;
+                            if key == "Destination" {
+                                return Ok(value.to_string());
+                            }
+                        }
                     }
-                })
-                .next()
-                .ok_or_else(|| anyhow!("could not find destination in saml response"))?,
-            _ => None,
-        };
+                }
+                Ok((_, Event::Eof)) => break,
+                Err(_e) => break,
+                _ => (),
+            }
+        }
 
-        let destination = saml_destination
-            .ok_or_else(|| anyhow!("could not retrieve destination from saml response"))?;
-
-        Ok(destination)
+        Err(anyhow!("destination not found"))
     }
 }
 
@@ -81,33 +77,70 @@ impl OktaAwsSamlParser {
 
     pub fn credentials(&self) -> Result<Vec<SamlAWSRole>> {
         let body = self.saml_body.clone();
-        let package = parser::parse(body.as_str())?;
-        let document = package.as_document();
 
-        let xpath = Factory::new()
-            .build("//saml2:Attribute[@Name='https://aws.amazon.com/SAML/Attributes/Role']/saml2:AttributeValue")?
-            .ok_or_else(|| anyhow!("could not get xpath in SAMLResponse"))?;
+        let mut reader = Reader::from_str(body.as_str());
+        reader.trim_text(true);
+        let mut buf = Vec::new();
+        let mut ns_buffer = Vec::new();
 
-        let mut context = Context::new();
-        context.set_namespace("saml2", "urn:oasis:names:tc:SAML:2.0:assertion");
+        #[derive(Clone, Copy)]
+        enum State {
+            RoleAttributes,
+            Other,
+        }
 
-        let value = xpath.evaluate(&context, document.root())?;
+        #[derive(Clone, Copy)]
+        enum Name {
+            AttributeValue,
+            Other,
+        }
 
-        let credentials = match value {
-            sxd_xpath::Value::Nodeset(ns) => ns
-                .iter()
-                .map(|node| {
-                    let value = node.string_value();
-                    let split: Vec<&str> = value.split(',').collect();
+        let mut name = Name::Other;
+        let mut state = State::Other;
+        let mut credentials: Vec<SamlAWSRole> = vec![];
 
-                    SamlAWSRole {
-                        role_arn: String::from(split[1]),
-                        principal_arn: String::from(split[0]),
+        loop {
+            match reader.read_namespaced_event(&mut buf, &mut ns_buffer) {
+                Ok((_, Event::Start(e))) => match e.local_name() {
+                    b"Attribute" => {
+                        for el in e.attributes() {
+                            let e = el?;
+                            let key = std::str::from_utf8(e.key)?;
+                            let value = std::str::from_utf8(e.value.as_ref())?;
+                            if let ("Name", "https://aws.amazon.com/SAML/Attributes/Role") =
+                                (key, value)
+                            {
+                                state = State::RoleAttributes;
+                                break;
+                            }
+                        }
                     }
-                })
-                .collect(),
-            _ => vec![],
-        };
+                    b"AttributeValue" => {
+                        name = Name::AttributeValue;
+                    }
+                    _ => name = Name::Other,
+                },
+                Ok((_, Event::Text(e))) => {
+                    if let (State::RoleAttributes, Name::AttributeValue) = (state, name) {
+                        let value = e.unescape_and_decode(&reader).unwrap();
+                        let split: Vec<&str> = value.split(',').collect();
+
+                        credentials.push(SamlAWSRole {
+                            role_arn: String::from(split[1]),
+                            principal_arn: String::from(split[0]),
+                        })
+                    }
+                }
+                Ok((_, Event::End(e))) => {
+                    if let b"Attribute" = e.local_name() {
+                        state = State::Other
+                    }
+                }
+                Ok((_, Event::Eof)) => break,
+                Err(_e) => break,
+                _ => (),
+            }
+        }
 
         Ok(credentials)
     }
