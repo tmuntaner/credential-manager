@@ -9,10 +9,6 @@ use url::Url;
 #[serde(rename_all = "camelCase")]
 struct TokenResponse {
     token: String,
-    redirect_url: String,
-    init_type: String,
-    error_message: Option<String>,
-    relay_id: Option<String>,
 }
 
 struct WorkflowStartResponse {
