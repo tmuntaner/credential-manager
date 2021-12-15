@@ -37,11 +37,15 @@ impl MfaSelection {
         }
     }
 
-    pub fn validate(s: String) -> Result<()> {
-        let selection = MfaSelection::from_string(s);
-        match selection {
-            MfaSelection::Invalid => Err(anyhow!("invalid MFA selection")),
-            _ => Ok(()),
+    pub fn validate(mfa_option: Option<String>) -> Result<()> {
+        if let Some(mfa) = mfa_option {
+            let selection = MfaSelection::from_string(mfa);
+            match selection {
+                MfaSelection::Invalid => Err(anyhow!("invalid MFA selection")),
+                _ => Ok(()),
+            }
+        } else {
+            Ok(())
         }
     }
 }
