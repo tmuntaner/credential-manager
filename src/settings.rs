@@ -165,9 +165,7 @@ impl AwsHost {
             .map_err(|_| anyhow!("cannot be base"))?
             .pop_if_empty();
 
-        if mfa.is_some() {
-            MfaSelection::validate(mfa.clone().unwrap_or_else(|| "".to_string()))?;
-        }
+        MfaSelection::validate(mfa.clone())?;
 
         Ok(AwsHost {
             app_url: String::from(app_url),
@@ -205,7 +203,7 @@ impl AwsSsoHost {
             .map_err(|_| anyhow!("cannot be base"))?
             .pop_if_empty();
 
-        MfaSelection::validate(mfa.clone().unwrap_or_else(|| "".to_string()))?;
+        MfaSelection::validate(mfa.clone())?;
 
         Ok(AwsSsoHost {
             app_url: String::from(app_url),
