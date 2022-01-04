@@ -22,6 +22,19 @@ struct Opts {
 enum SubCommand {
     Config(Config),
     Creds(Credentials),
+    Licenses(Licenses),
+}
+
+#[derive(Parser)]
+pub struct Licenses {}
+
+impl Licenses {
+    pub fn run(&self) -> Result<()> {
+        let my_str = include_str!("../../../license.txt");
+        print!("{}", my_str);
+
+        Ok(())
+    }
 }
 
 #[tokio::main]
@@ -32,6 +45,7 @@ async fn main() -> Result<()> {
     match opt.sub_command {
         SubCommand::Config(val) => val.run(&mut settings)?,
         SubCommand::Creds(val) => val.run(settings).await?,
+        SubCommand::Licenses(val) => val.run()?,
     }
 
     Ok(())
