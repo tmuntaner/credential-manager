@@ -22,6 +22,8 @@ jobs:
           toolchain: stable
           override: true
 
+      - run: cargo install --locked cargo-about && cargo about generate about.txt.hbs > license.txt
+
       - name: Build
         run: |
           cargo build --all --release && strip target/release/c9s && mv target/release/c9s target/release/c9s_amd64
@@ -51,6 +53,8 @@ jobs:
           override: true
           target: x86_64-apple-darwin
 
+      - run: cargo install --locked cargo-about && cargo about generate about.txt.hbs > license.txt
+
       - name: Build
         run: |
           cargo build --all --release && strip target/release/c9s && mv target/release/c9s target/release/c9s_darwin
@@ -78,6 +82,8 @@ jobs:
           profile: minimal
           toolchain: stable
           override: true
+
+      - run: cargo install --locked cargo-about && cargo about generate about.txt.hbs > license.txt
 
       - name: Build
         run: |
