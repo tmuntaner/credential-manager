@@ -236,7 +236,7 @@ fn print_credentials(
                 "Expiration" : credential.expiration()
             });
 
-            println!("{}", json.to_string())
+            println!("{}", json)
         }
     }
 
