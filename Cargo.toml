@@ -1,6 +1,6 @@
 [package]
 name = "c9s"
-version = "0.1.0-alpha9"
+version = "0.1.0-alpha10"
 edition = "2018"
 license = "MPL-2.0"
 
@@ -29,6 +29,6 @@ rpassword = "5.0"
 log = "0.4.14"
 regex = "1.5"
 futures = "0.3"
-tmuntaner-webauthn = "0.1.0-alpha.8"
-tmuntaner-keyring = "0.1.0-alpha.9"
+tmuntaner-webauthn = "0.1.0-alpha.9"
+tmuntaner-keyring = "0.1.0-alpha.10"
 quick-xml = "0.22.0"
