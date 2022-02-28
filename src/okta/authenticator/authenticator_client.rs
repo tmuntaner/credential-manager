@@ -177,8 +177,7 @@ impl AuthenticatorClient {
 
         let credential_ids: Vec<String> = factors
             .iter()
-            .map(|factor| factor.get_credential_id())
-            .flatten()
+            .filter_map(|factor| factor.get_credential_id())
             .collect();
 
         let origin = Url::parse(app_url.as_str())?;
