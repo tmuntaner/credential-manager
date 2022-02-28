@@ -588,7 +588,7 @@ dependencies = [
 
 [[package]]
 name = "c9s"
-version = "0.1.0-alpha10"
+version = "0.1.0-alpha11"
 dependencies = [
  "anyhow",
  "async-trait",
