@@ -47,6 +47,8 @@ struct OktaAwsCredentials {
     mfa_provider: Option<String>,
     #[clap(long, arg_enum)]
     output: Option<OutputOptions>,
+    #[clap(long)]
+    desktop_notifications: bool,
 }
 
 #[derive(Parser)]
@@ -67,6 +69,8 @@ struct OktaAwsSsoCredentials {
     mfa_provider: Option<String>,
     #[clap(long, arg_enum)]
     output: Option<OutputOptions>,
+    #[clap(long)]
+    desktop_notifications: bool,
 }
 
 impl Credentials {
@@ -112,7 +116,7 @@ impl OktaAwsSsoCredentials {
             settings.keyring_enabled(),
         )?;
 
-        let client = OktaClient::new()?;
+        let client = OktaClient::new(self.desktop_notifications)?;
         let aws_credentials = client
             .aws_sso_credentials(
                 username,
@@ -159,7 +163,7 @@ impl OktaAwsCredentials {
             settings.keyring_enabled(),
         )?;
 
-        let client = OktaClient::new()?;
+        let client = OktaClient::new(self.desktop_notifications)?;
         let aws_credentials = client
             .aws_credentials(
                 username,

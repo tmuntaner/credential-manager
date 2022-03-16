@@ -5,13 +5,6 @@ use crate::okta::aws_sso::aws_sso_credentials::AwsSSOCredentials;
 use anyhow::{anyhow, Result};
 
 /// This is the entrypoint to communicate with Okta to generate temporary credentials.
-///
-/// # Example
-///
-/// ```rust
-/// use c9s::okta::okta_client::OktaClient;
-/// let client = OktaClient::new().unwrap();
-/// ```
 pub struct OktaClient {
     authorizer: AuthenticatorClient,
     aws_credentials: AwsCredentials,
@@ -52,9 +45,9 @@ impl MfaSelection {
 
 impl OktaClient {
     /// Generates a new [`OktaClient`] object.
-    pub fn new() -> Result<OktaClient> {
+    pub fn new(enable_desktop_notifications: bool) -> Result<OktaClient> {
         Ok(OktaClient {
-            authorizer: AuthenticatorClient::new()?,
+            authorizer: AuthenticatorClient::new(enable_desktop_notifications)?,
             aws_credentials: AwsCredentials::new()?,
             aws_sso_credentials: AwsSSOCredentials::new()?,
         })

@@ -60,6 +60,8 @@ c9s creds okta-aws --role-arn YOUR_ROLE_ARN
 
 **AWS CLI Profile:**
 
+**Note:** Some environments may not work well with stdout prompts to notify a user to plug in a hardware security key. Please see the alternative profile below to help in such scenarios.
+
 1. Think of a new AWS CLI profile name. Replace `my-new-profile-name` with it in the following steps.
 2. Not the role arn you want to assume as. Replace `my-role-arn` in the `credential_process` with this arn in the next step.
 3. Add a new profile to you AWS CLI config file `~/.aws/config`:
@@ -72,6 +74,16 @@ c9s creds okta-aws --role-arn YOUR_ROLE_ARN
     ```bash
     aws --profile my-new-profile sts get-caller-identity
     ```
+
+**Alternate AWS CLI Profile:**
+
+This alternate profile uses desktop notifications instead of a progress bar to alert a user to input a hardware security key.
+
+ ```text
+ [profile my-new-profile]
+ region = eu-west-1
+ credential_process = sh -c "c9s creds okta-aws --role-arn my-role-arn --output aws-profile --desktop-notifications 2> /dev/null"
+ ```
 
 #### AWS SSO Application
 
