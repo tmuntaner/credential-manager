@@ -3,6 +3,7 @@ use anyhow::{anyhow, Result};
 use c9s::aws::Credential;
 use c9s::okta::okta_client::{MfaSelection, OktaClient};
 use c9s::settings::{AppConfig, AwsProvider, OktaMfa};
+use chrono::{DateTime, Utc};
 use clap::ArgEnum;
 use clap::Parser;
 use serde_json::json;
@@ -66,6 +67,14 @@ impl Credentials {
 
 impl AwsCredentials {
     async fn run(&self, settings: AppConfig) -> Result<()> {
+        if let Some(credential) =
+            cached_credential(self.role_arn.clone(), settings.keyring_enabled())
+        {
+            print_credentials(&[credential], self.output)?;
+
+            return Ok(());
+        }
+
         let aws_settings = self.find_settings(&settings)?;
 
         let password = utils::get_password(
@@ -107,7 +116,15 @@ impl AwsCredentials {
             }
         };
 
-        print_credentials(aws_credentials, self.output)?;
+        print_credentials(&aws_credentials, self.output)?;
+        if let Some(role_arn) = &self.role_arn {
+            if aws_credentials.len() == 1 {
+                let credential = aws_credentials
+                    .get(0)
+                    .ok_or_else(|| anyhow!("failed to get credential"))?;
+                utils::set_cached_credential(role_arn, credential, settings.keyring_enabled())?;
+            }
+        }
 
         Ok(())
     }
@@ -220,10 +237,25 @@ fn get_mfa_provider<T: OktaMfa>(
     }
 }
 
-fn print_credentials(
-    aws_credentials: Vec<Credential>,
-    output: Option<OutputOptions>,
-) -> Result<()> {
+fn cached_credential(role_arn: Option<String>, keyring_enabled: bool) -> Option<Credential> {
+    if let Some(role_arn) = role_arn {
+        let credential =
+            utils::get_cached_credential(&role_arn, keyring_enabled).unwrap_or_default();
+        if let Some(credential) = &credential {
+            let date = DateTime::parse_from_rfc3339(credential.expiration().as_str()).ok()?;
+            let utc: DateTime<Utc> = Utc::now();
+            if utc > date {
+                return None;
+            }
+        }
+
+        return credential;
+    }
+
+    None
+}
+
+fn print_credentials(aws_credentials: &[Credential], output: Option<OutputOptions>) -> Result<()> {
     match output.unwrap_or_default() {
         OutputOptions::Env => {
             for credential in aws_credentials {

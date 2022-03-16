@@ -624,6 +624,7 @@ dependencies = [
  "aws-sdk-sts",
  "aws-smithy-types-convert",
  "base64",
+ "chrono",
  "clap",
  "dirs 4.0.0",
  "futures",

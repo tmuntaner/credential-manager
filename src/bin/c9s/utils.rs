@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use c9s::aws::Credential;
 use std::io::{self, BufRead, Write};
 use tmuntaner_keyring::KeyringClient;
 use url::Url;
@@ -31,6 +32,37 @@ pub fn get_password(
     };
 
     Ok(password)
+}
+
+pub fn get_cached_credential(role_arn: &str, keyring_enabled: bool) -> Result<Option<Credential>> {
+    let keyring = KeyringClient::new(role_arn, "c9s", "c9s")?;
+    let cached_credential = if keyring_enabled {
+        keyring.get_password()?
+    } else {
+        None
+    };
+
+    if let Some(cached_credential) = cached_credential {
+        let credentials: Credential = serde_json::from_str(cached_credential.as_str())?;
+
+        return Ok(Some(credentials));
+    }
+
+    Ok(None)
+}
+
+pub fn set_cached_credential(
+    role_arn: &str,
+    credential: &Credential,
+    keyring_enabled: bool,
+) -> Result<()> {
+    if keyring_enabled {
+        let keyring = KeyringClient::new(role_arn, "c9s", "c9s")?;
+        let json = serde_json::to_string(credential)?;
+        keyring.set_password(json)?;
+    }
+
+    Ok(())
 }
 
 fn prompt_user_for_password(keyring: &KeyringClient, keyring_enabled: bool) -> Result<String> {
