@@ -2,7 +2,7 @@ use crate::utils;
 use anyhow::{anyhow, Result};
 use c9s::aws::Credential;
 use c9s::okta::okta_client::{MfaSelection, OktaClient};
-use c9s::settings::{AppConfig, OktaMfa};
+use c9s::settings::{AppConfig, AwsProvider, OktaMfa};
 use clap::ArgEnum;
 use clap::Parser;
 use serde_json::json;
@@ -15,11 +15,10 @@ pub struct Credentials {
 
 #[derive(Parser)]
 enum CredentialsSubCommands {
-    OktaAws(OktaAwsCredentials),
-    OktaAwsSso(OktaAwsSsoCredentials),
+    Aws(AwsCredentials),
 }
 
-#[derive(ArgEnum, PartialEq, Debug, Clone)]
+#[derive(ArgEnum, PartialEq, Debug, Clone, Copy)]
 enum OutputOptions {
     Env,
     AwsProfile,
@@ -32,7 +31,7 @@ impl Default for OutputOptions {
 }
 
 #[derive(Parser)]
-struct OktaAwsCredentials {
+struct AwsCredentials {
     #[clap(long)]
     app_url: Option<String>,
     #[clap(short, long)]
@@ -41,29 +40,9 @@ struct OktaAwsCredentials {
     with_password: bool,
     #[clap(short, long)]
     role_arn: Option<String>,
-    #[clap(short, long)]
-    mfa: Option<String>,
-    #[clap(long)]
-    mfa_provider: Option<String>,
-    #[clap(long, arg_enum)]
-    output: Option<OutputOptions>,
-    #[clap(long)]
-    desktop_notifications: bool,
-}
-
-#[derive(Parser)]
-struct OktaAwsSsoCredentials {
-    #[clap(long)]
-    app_url: Option<String>,
-    #[clap(short, long)]
-    username: Option<String>,
-    #[clap(short, long)]
-    with_password: bool,
     #[clap(long)]
     region: Option<String>,
     #[clap(short, long)]
-    role_arn: Option<String>,
-    #[clap(short, long)]
     mfa: Option<String>,
     #[clap(long)]
     mfa_provider: Option<String>,
@@ -71,113 +50,148 @@ struct OktaAwsSsoCredentials {
     output: Option<OutputOptions>,
     #[clap(long)]
     desktop_notifications: bool,
+    #[clap(long)]
+    cached: bool,
+    #[clap(long, arg_enum)]
+    provider: Option<AwsProvider>,
 }
 
 impl Credentials {
     pub async fn run(&self, settings: AppConfig) -> Result<()> {
         match &self.sub_command {
-            CredentialsSubCommands::OktaAwsSso(val) => val.run(settings).await,
-            CredentialsSubCommands::OktaAws(val) => val.run(settings).await,
+            CredentialsSubCommands::Aws(val) => val.run(settings).await,
         }
     }
 }
 
-impl OktaAwsSsoCredentials {
+impl AwsCredentials {
     async fn run(&self, settings: AppConfig) -> Result<()> {
-        let default_settings = match self.app_url.clone() {
-            Some(app_url) => settings.find_aws_sso_host(app_url),
-            None => settings.aws_sso_hosts(),
-        };
-        let app_url = self.app_url.clone().unwrap_or(
-            default_settings
-                .clone()
-                .ok_or_else(|| anyhow!("please supply an app-url"))?
-                .app_url(),
-        );
-        let username = self.username.clone().unwrap_or(
-            default_settings
-                .clone()
-                .ok_or_else(|| anyhow!("please supply a username"))?
-                .username(),
-        );
-        let region = self.region.clone().unwrap_or(
-            default_settings
-                .clone()
-                .ok_or_else(|| anyhow!("please supply a region"))?
-                .region(),
-        );
-        let mfa = get_mfa_option(self.mfa.clone(), &default_settings);
-        let mfa_provider = get_mfa_provider(self.mfa_provider.clone(), &default_settings);
+        let aws_settings = self.find_settings(&settings)?;
 
         let password = utils::get_password(
-            app_url.clone(),
-            username.clone(),
+            aws_settings.app_url.clone(),
+            aws_settings.username.clone(),
             self.with_password,
             settings.keyring_enabled(),
         )?;
 
         let client = OktaClient::new(self.desktop_notifications)?;
-        let aws_credentials = client
-            .aws_sso_credentials(
-                username,
-                password,
-                app_url,
-                region,
-                self.role_arn.clone(),
-                mfa,
-                mfa_provider,
-            )
-            .await?;
 
-        print_credentials(aws_credentials, self.output.clone())?;
+        let aws_credentials = match aws_settings.provider {
+            AwsProvider::OktaAws => {
+                client
+                    .aws_credentials(
+                        aws_settings.username,
+                        password,
+                        aws_settings.app_url,
+                        self.role_arn.clone(),
+                        aws_settings.mfa,
+                        aws_settings.mfa_provider,
+                    )
+                    .await?
+            }
+            AwsProvider::OktaAwsSso => {
+                client
+                    .aws_sso_credentials(
+                        aws_settings.username,
+                        password,
+                        aws_settings.app_url,
+                        aws_settings
+                            .region
+                            .ok_or_else(|| anyhow!("missing region"))?,
+                        self.role_arn.clone(),
+                        aws_settings.mfa,
+                        aws_settings.mfa_provider,
+                    )
+                    .await?
+            }
+        };
+
+        print_credentials(aws_credentials, self.output)?;
 
         Ok(())
+    }
+
+    fn find_settings(&self, settings: &AppConfig) -> Result<AwsSettings> {
+        let app_url;
+        let username;
+        let mut region = None;
+        let mfa;
+        let mfa_provider;
+
+        let provider = self
+            .provider
+            .unwrap_or_else(|| settings.default_aws_provider());
+
+        match provider {
+            AwsProvider::OktaAws => {
+                let default_settings = match self.app_url.clone() {
+                    Some(app_url) => settings.find_aws_host(app_url),
+                    None => settings.aws_hosts(),
+                };
+
+                mfa = get_mfa_option(self.mfa.clone(), &default_settings);
+                mfa_provider = get_mfa_provider(self.mfa_provider.clone(), &default_settings);
+                app_url = self.app_url.clone().unwrap_or(
+                    default_settings
+                        .clone()
+                        .ok_or_else(|| anyhow!("please supply an app-url"))?
+                        .app_url(),
+                );
+                username = self.username.clone().unwrap_or(
+                    default_settings
+                        .ok_or_else(|| anyhow!("please supply a username"))?
+                        .username(),
+                );
+            }
+            AwsProvider::OktaAwsSso => {
+                let default_settings = match self.app_url.clone() {
+                    Some(app_url) => settings.find_aws_sso_host(app_url),
+                    None => settings.aws_sso_hosts(),
+                };
+
+                mfa = get_mfa_option(self.mfa.clone(), &default_settings);
+                mfa_provider = get_mfa_provider(self.mfa_provider.clone(), &default_settings);
+                app_url = self.app_url.clone().unwrap_or(
+                    default_settings
+                        .clone()
+                        .ok_or_else(|| anyhow!("please supply an app-url"))?
+                        .app_url(),
+                );
+                username = self.username.clone().unwrap_or(
+                    default_settings
+                        .clone()
+                        .ok_or_else(|| anyhow!("please supply a username"))?
+                        .username(),
+                );
+                region = Some(
+                    self.region.clone().unwrap_or(
+                        default_settings
+                            .ok_or_else(|| anyhow!("please supply a region"))?
+                            .region(),
+                    ),
+                );
+            }
+        }
+
+        Ok(AwsSettings {
+            app_url,
+            username,
+            region,
+            mfa,
+            mfa_provider,
+            provider,
+        })
     }
 }
 
-impl OktaAwsCredentials {
-    async fn run(&self, settings: AppConfig) -> Result<()> {
-        let default_settings = match self.app_url.clone() {
-            Some(app_url) => settings.find_aws_host(app_url),
-            None => settings.aws_hosts(),
-        };
-        let app_url = self.app_url.clone().unwrap_or(
-            default_settings
-                .clone()
-                .ok_or_else(|| anyhow!("please supply an app-url"))?
-                .app_url(),
-        );
-        let username = self.username.clone().unwrap_or(
-            default_settings
-                .clone()
-                .ok_or_else(|| anyhow!("please supply a username"))?
-                .username(),
-        );
-        let mfa = get_mfa_option(self.mfa.clone(), &default_settings);
-        let mfa_provider = get_mfa_provider(self.mfa_provider.clone(), &default_settings);
-
-        let password = utils::get_password(
-            app_url.clone(),
-            username.clone(),
-            self.with_password,
-            settings.keyring_enabled(),
-        )?;
-
-        let client = OktaClient::new(self.desktop_notifications)?;
-        let aws_credentials = client
-            .aws_credentials(
-                username,
-                password,
-                app_url,
-                self.role_arn.clone(),
-                mfa,
-                mfa_provider,
-            )
-            .await?;
-        print_credentials(aws_credentials, self.output.clone())?;
-
-        Ok(())
-    }
+struct AwsSettings {
+    app_url: String,
+    username: String,
+    region: Option<String>,
+    mfa: Option<MfaSelection>,
+    mfa_provider: Option<String>,
+    provider: AwsProvider,
 }
 
 fn get_mfa_option<T: OktaMfa>(

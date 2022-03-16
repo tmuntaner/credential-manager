@@ -1,6 +1,6 @@
 use crate::utils::true_or_false;
 use anyhow::Result;
-use c9s::settings::{AppConfig, AwsHost, AwsSsoHost};
+use c9s::settings::{AppConfig, AwsHost, AwsProvider, AwsSsoHost};
 use clap::Parser;
 
 #[derive(Parser)]
@@ -62,6 +62,7 @@ struct ConfigGlobal {
 #[derive(Parser)]
 enum ConfigGlobalSubCommand {
     UseKeyring(ConfigGlobalUseKeyRing),
+    DefaultAwsProvider(DefaultAwsProvider),
 }
 
 #[derive(Parser)]
@@ -70,6 +71,13 @@ struct ConfigGlobalUseKeyRing {
     /// Accepted values: "true" or "false"
     #[clap(long, parse(try_from_str = true_or_false))]
     enabled: bool,
+}
+
+#[derive(Parser)]
+/// Sets the default AWS provider
+struct DefaultAwsProvider {
+    #[clap(long, arg_enum)]
+    provider: AwsProvider,
 }
 
 impl Config {
@@ -81,6 +89,7 @@ impl Config {
             },
             ConfigSubCommand::Global(val) => match &val.sub_command {
                 ConfigGlobalSubCommand::UseKeyring(val) => val.run(settings),
+                ConfigGlobalSubCommand::DefaultAwsProvider(val) => val.run(settings),
             },
         }
     }
@@ -120,6 +129,15 @@ impl ConfigAddOktaAwsSso {
 impl ConfigGlobalUseKeyRing {
     fn run(&self, settings: &mut AppConfig) -> Result<()> {
         settings.set_use_keyring(self.enabled);
+        settings.write_config()?;
+
+        Ok(())
+    }
+}
+
+impl DefaultAwsProvider {
+    fn run(&self, settings: &mut AppConfig) -> Result<()> {
+        settings.set_default_aws_provider(self.provider);
         settings.write_config()?;
 
         Ok(())

@@ -1,5 +1,6 @@
 use crate::okta::okta_client::MfaSelection;
 use anyhow::{anyhow, Result};
+use clap::ArgEnum;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,11 +16,15 @@ pub struct AppConfig {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct GlobalSettings {
     use_keyring: Option<bool>,
+    default_aws_provider: Option<AwsProvider>,
 }
 
 impl GlobalSettings {
     fn default() -> Self {
-        Self { use_keyring: None }
+        Self {
+            use_keyring: None,
+            default_aws_provider: Some(AwsProvider::default()),
+        }
     }
 }
 
@@ -40,7 +45,36 @@ pub struct AwsSsoHost {
     mfa_provider: Option<String>,
 }
 
+#[derive(ArgEnum, PartialEq, Debug, Clone, Copy, Deserialize, Serialize)]
+pub enum AwsProvider {
+    #[serde(rename = "okta-aws")]
+    OktaAws,
+    #[serde(rename = "okta-aws-sso")]
+    OktaAwsSso,
+}
+
+impl Default for AwsProvider {
+    fn default() -> Self {
+        AwsProvider::OktaAws
+    }
+}
+
 impl AppConfig {
+    pub fn set_default_aws_provider(&mut self, provider: AwsProvider) {
+        let mut global_settings = self
+            .global_settings
+            .get_or_insert(GlobalSettings::default());
+
+        global_settings.default_aws_provider = Some(provider);
+    }
+
+    pub fn default_aws_provider(&self) -> AwsProvider {
+        match self.global_settings.clone() {
+            Some(global_settings) => global_settings.default_aws_provider.unwrap_or_default(),
+            None => AwsProvider::default(),
+        }
+    }
+
     pub fn set_use_keyring(&mut self, enable_keyring: bool) {
         let mut global_settings = self
             .global_settings
