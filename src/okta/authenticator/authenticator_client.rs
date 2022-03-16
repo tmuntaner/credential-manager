@@ -7,6 +7,7 @@ use std::{thread, time};
 use crate::http::api_client::ApiClient;
 use crate::okta::okta_client::MfaSelection;
 use anyhow::{anyhow, Result};
+use tmuntaner_webauthn::WebauthnClient;
 use url::Url;
 
 /// Goes through the Okta Authentication state machine to finally generate a session token.
@@ -15,13 +16,17 @@ use url::Url;
 /// on how Okta handles the authentication process.
 pub struct AuthenticatorClient {
     client: ApiClient,
+    enable_desktop_notifications: bool,
 }
 
 impl AuthenticatorClient {
     /// Creates a new [`Authenticator`] object.
-    pub fn new() -> Result<AuthenticatorClient> {
+    pub fn new(enable_desktop_notifications: bool) -> Result<AuthenticatorClient> {
         let client = ApiClient::new()?;
-        Ok(AuthenticatorClient { client })
+        Ok(AuthenticatorClient {
+            client,
+            enable_desktop_notifications,
+        })
     }
 
     /// Runs the authentication process for an app/username/password.
@@ -190,7 +195,12 @@ impl AuthenticatorClient {
             .ok_or_else(|| anyhow!("couldn't get host from url"))?
             .to_string();
 
-        let u2f_response = tmuntaner_webauthn::sign(challenge, host, credential_ids)?;
+        let mut webauthn_client = WebauthnClient::new();
+        if self.enable_desktop_notifications {
+            webauthn_client.add_desktop_notification_notifier();
+        }
+        webauthn_client.add_progress_bar_notifier();
+        let u2f_response = webauthn_client.sign(challenge, host, credential_ids)?;
         let json = &serde_json::json!({
             "stateToken": state_token,
             "clientData": u2f_response.client_data,
