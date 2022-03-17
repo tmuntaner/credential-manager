@@ -3,10 +3,11 @@ use anyhow::{anyhow, Result};
 use c9s::aws::Credential;
 use c9s::okta::okta_client::{MfaSelection, OktaClient};
 use c9s::settings::{AppConfig, OktaMfa, SsoProvider};
-use chrono::{DateTime, Utc};
 use clap::ArgEnum;
 use clap::Parser;
 use serde_json::json;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 #[derive(Parser)]
 pub struct Credentials {
@@ -242,9 +243,9 @@ fn cached_credential(role_arn: Option<String>, keyring_enabled: bool) -> Option<
         let credential =
             utils::get_cached_credential(&role_arn, keyring_enabled).unwrap_or_default();
         if let Some(credential) = &credential {
-            let date = DateTime::parse_from_rfc3339(credential.expiration().as_str()).ok()?;
-            let utc: DateTime<Utc> = Utc::now();
-            if utc > date {
+            let expires = OffsetDateTime::parse(credential.expiration().as_str(), &Rfc3339).ok()?;
+            let now = OffsetDateTime::now_utc();
+            if now > expires {
                 return None;
             }
         }
