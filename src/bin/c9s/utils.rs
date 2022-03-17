@@ -35,8 +35,9 @@ pub fn get_password(
 }
 
 pub fn get_cached_credential(role_arn: &str, keyring_enabled: bool) -> Result<Option<Credential>> {
-    let keyring = KeyringClient::new(role_arn, "c9s", "c9s")?;
     let cached_credential = if keyring_enabled {
+        let service = format!("c9s credential -- {}", role_arn);
+        let keyring = KeyringClient::new(role_arn, &service, "c9s")?;
         keyring.get_password()?
     } else {
         None
@@ -57,7 +58,8 @@ pub fn set_cached_credential(
     keyring_enabled: bool,
 ) -> Result<()> {
     if keyring_enabled {
-        let keyring = KeyringClient::new(role_arn, "c9s", "c9s")?;
+        let service = format!("c9s credential -- {}", role_arn);
+        let keyring = KeyringClient::new(role_arn, &service, "c9s")?;
         let json = serde_json::to_string(credential)?;
         keyring.set_password(json)?;
     }
