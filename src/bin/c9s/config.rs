@@ -1,6 +1,6 @@
 use crate::utils::true_or_false;
 use anyhow::Result;
-use c9s::settings::{AppConfig, AwsHost, AwsProvider, AwsSsoHost};
+use c9s::settings::{AppConfig, AwsDefaults, AwsHost, AwsSsoHost, SsoProvider};
 use clap::Parser;
 
 #[derive(Parser)]
@@ -11,24 +11,25 @@ pub struct Config {
 
 #[derive(Parser)]
 enum ConfigSubCommand {
-    Add(ConfigAdd),
+    Aws(ConfigAws),
     Global(ConfigGlobal),
 }
 
 #[derive(Parser)]
-struct ConfigAdd {
+struct ConfigAws {
     #[clap(subcommand)]
-    sub_command: ConfigAddSubCommand,
+    sub_command: ConfigAwsSubCommand,
 }
 
 #[derive(Parser)]
-enum ConfigAddSubCommand {
-    OktaAws(ConfigAddOktaAws),
-    OktaAwsSso(ConfigAddOktaAwsSso),
+enum ConfigAwsSubCommand {
+    Defaults(ConfigAwsDefaults),
+    OktaAws(ConfigAwsOktaAws),
+    OktaAwsSso(ConfigAwsOktaAwsSso),
 }
 
 #[derive(Parser)]
-struct ConfigAddOktaAws {
+struct ConfigAwsOktaAws {
     #[clap(required = true, long)]
     app_url: String,
     #[clap(required = true, short, long)]
@@ -40,7 +41,7 @@ struct ConfigAddOktaAws {
 }
 
 #[derive(Parser)]
-struct ConfigAddOktaAwsSso {
+struct ConfigAwsOktaAwsSso {
     #[clap(required = true, long)]
     app_url: String,
     #[clap(required = true, short, long)]
@@ -62,7 +63,6 @@ struct ConfigGlobal {
 #[derive(Parser)]
 enum ConfigGlobalSubCommand {
     UseKeyring(ConfigGlobalUseKeyRing),
-    DefaultAwsProvider(DefaultAwsProvider),
 }
 
 #[derive(Parser)]
@@ -75,27 +75,27 @@ struct ConfigGlobalUseKeyRing {
 
 #[derive(Parser)]
 /// Sets the default AWS provider
-struct DefaultAwsProvider {
+struct ConfigAwsDefaults {
     #[clap(long, arg_enum)]
-    provider: AwsProvider,
+    sso_provider: SsoProvider,
 }
 
 impl Config {
     pub fn run(&self, settings: &mut AppConfig) -> Result<()> {
         match &self.sub_command {
-            ConfigSubCommand::Add(val) => match &val.sub_command {
-                ConfigAddSubCommand::OktaAws(val) => val.run(settings),
-                ConfigAddSubCommand::OktaAwsSso(val) => val.run(settings),
+            ConfigSubCommand::Aws(val) => match &val.sub_command {
+                ConfigAwsSubCommand::Defaults(val) => val.run(settings),
+                ConfigAwsSubCommand::OktaAws(val) => val.run(settings),
+                ConfigAwsSubCommand::OktaAwsSso(val) => val.run(settings),
             },
             ConfigSubCommand::Global(val) => match &val.sub_command {
                 ConfigGlobalSubCommand::UseKeyring(val) => val.run(settings),
-                ConfigGlobalSubCommand::DefaultAwsProvider(val) => val.run(settings),
             },
         }
     }
 }
 
-impl ConfigAddOktaAws {
+impl ConfigAwsOktaAws {
     fn run(&self, settings: &mut AppConfig) -> Result<()> {
         let host = AwsHost::new(
             self.app_url.clone(),
@@ -110,7 +110,7 @@ impl ConfigAddOktaAws {
     }
 }
 
-impl ConfigAddOktaAwsSso {
+impl ConfigAwsOktaAwsSso {
     fn run(&self, settings: &mut AppConfig) -> Result<()> {
         let host = AwsSsoHost::new(
             self.app_url.clone(),
@@ -135,9 +135,11 @@ impl ConfigGlobalUseKeyRing {
     }
 }
 
-impl DefaultAwsProvider {
+impl ConfigAwsDefaults {
     fn run(&self, settings: &mut AppConfig) -> Result<()> {
-        settings.set_default_aws_provider(self.provider);
+        let defaults = AwsDefaults::new(self.sso_provider);
+
+        settings.set_aws_defaults(defaults);
         settings.write_config()?;
 
         Ok(())

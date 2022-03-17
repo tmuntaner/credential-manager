@@ -2,7 +2,7 @@ use crate::utils;
 use anyhow::{anyhow, Result};
 use c9s::aws::Credential;
 use c9s::okta::okta_client::{MfaSelection, OktaClient};
-use c9s::settings::{AppConfig, AwsProvider, OktaMfa};
+use c9s::settings::{AppConfig, OktaMfa, SsoProvider};
 use chrono::{DateTime, Utc};
 use clap::ArgEnum;
 use clap::Parser;
@@ -50,11 +50,11 @@ struct AwsCredentials {
     #[clap(long, arg_enum)]
     output: Option<OutputOptions>,
     #[clap(long)]
-    desktop_notifications: bool,
+    enable_desktop_notifications: bool,
     #[clap(long)]
     cached: bool,
     #[clap(long, arg_enum)]
-    provider: Option<AwsProvider>,
+    sso_provider: Option<SsoProvider>,
 }
 
 impl Credentials {
@@ -84,10 +84,10 @@ impl AwsCredentials {
             settings.keyring_enabled(),
         )?;
 
-        let client = OktaClient::new(self.desktop_notifications)?;
+        let client = OktaClient::new(self.enable_desktop_notifications)?;
 
         let aws_credentials = match aws_settings.provider {
-            AwsProvider::OktaAws => {
+            SsoProvider::OktaAws => {
                 client
                     .aws_credentials(
                         aws_settings.username,
@@ -99,7 +99,7 @@ impl AwsCredentials {
                     )
                     .await?
             }
-            AwsProvider::OktaAwsSso => {
+            SsoProvider::OktaAwsSso => {
                 client
                     .aws_sso_credentials(
                         aws_settings.username,
@@ -137,11 +137,11 @@ impl AwsCredentials {
         let mfa_provider;
 
         let provider = self
-            .provider
-            .unwrap_or_else(|| settings.default_aws_provider());
+            .sso_provider
+            .unwrap_or_else(|| settings.aws_defaults().sso_provider());
 
         match provider {
-            AwsProvider::OktaAws => {
+            SsoProvider::OktaAws => {
                 let default_settings = match self.app_url.clone() {
                     Some(app_url) => settings.find_aws_host(app_url),
                     None => settings.aws_hosts(),
@@ -161,7 +161,7 @@ impl AwsCredentials {
                         .username(),
                 );
             }
-            AwsProvider::OktaAwsSso => {
+            SsoProvider::OktaAwsSso => {
                 let default_settings = match self.app_url.clone() {
                     Some(app_url) => settings.find_aws_sso_host(app_url),
                     None => settings.aws_sso_hosts(),
@@ -208,7 +208,7 @@ struct AwsSettings {
     region: Option<String>,
     mfa: Option<MfaSelection>,
     mfa_provider: Option<String>,
-    provider: AwsProvider,
+    provider: SsoProvider,
 }
 
 fn get_mfa_option<T: OktaMfa>(

@@ -16,14 +16,14 @@ pub struct AppConfig {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct GlobalSettings {
     use_keyring: Option<bool>,
-    default_aws_provider: Option<AwsProvider>,
+    aws_defaults: Option<AwsDefaults>,
 }
 
 impl GlobalSettings {
     fn default() -> Self {
         Self {
             use_keyring: None,
-            default_aws_provider: Some(AwsProvider::default()),
+            aws_defaults: Some(AwsDefaults::default()),
         }
     }
 }
@@ -45,33 +45,38 @@ pub struct AwsSsoHost {
     mfa_provider: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct AwsDefaults {
+    sso_provider: SsoProvider,
+}
+
 #[derive(ArgEnum, PartialEq, Debug, Clone, Copy, Deserialize, Serialize)]
-pub enum AwsProvider {
+pub enum SsoProvider {
     #[serde(rename = "okta-aws")]
     OktaAws,
     #[serde(rename = "okta-aws-sso")]
     OktaAwsSso,
 }
 
-impl Default for AwsProvider {
+impl Default for SsoProvider {
     fn default() -> Self {
-        AwsProvider::OktaAws
+        SsoProvider::OktaAws
     }
 }
 
 impl AppConfig {
-    pub fn set_default_aws_provider(&mut self, provider: AwsProvider) {
+    pub fn set_aws_defaults(&mut self, defaults: AwsDefaults) {
         let mut global_settings = self
             .global_settings
             .get_or_insert(GlobalSettings::default());
 
-        global_settings.default_aws_provider = Some(provider);
+        global_settings.aws_defaults = Some(defaults);
     }
 
-    pub fn default_aws_provider(&self) -> AwsProvider {
+    pub fn aws_defaults(&self) -> AwsDefaults {
         match self.global_settings.clone() {
-            Some(global_settings) => global_settings.default_aws_provider.unwrap_or_default(),
-            None => AwsProvider::default(),
+            Some(global_settings) => global_settings.aws_defaults.unwrap_or_default(),
+            None => AwsDefaults::default(),
         }
     }
 
@@ -283,5 +288,15 @@ impl OktaMfa for AwsSsoHost {
 
     fn mfa_provider(&self) -> Option<String> {
         self.mfa_provider.clone()
+    }
+}
+
+impl AwsDefaults {
+    pub fn new(sso_provider: SsoProvider) -> Self {
+        Self { sso_provider }
+    }
+
+    pub fn sso_provider(&self) -> SsoProvider {
+        self.sso_provider
     }
 }
