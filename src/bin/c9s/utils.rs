@@ -68,7 +68,7 @@ pub fn set_cached_credential(
 }
 
 fn prompt_user_for_password(keyring: &KeyringClient, keyring_enabled: bool) -> Result<String> {
-    let password = rpassword::prompt_password_stderr("Password: ")?;
+    let password = rpassword::prompt_password("Password: ")?;
 
     if keyring_enabled {
         eprint!("Save password? (y/n) ");
