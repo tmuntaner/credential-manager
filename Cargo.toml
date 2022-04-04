@@ -29,6 +29,6 @@ rpassword = "6.0"
 log = "0.4.16"
 regex = "1.5"
 futures = "0.3"
-tmuntaner-webauthn = { version = "0.1.0-alpha.11", features = ["full"] }
+tmuntaner-webauthn = { version = "0.1.0-alpha.12", features = ["full"] }
 tmuntaner-keyring = "0.1.0-alpha.11"
 quick-xml = "0.22.0"

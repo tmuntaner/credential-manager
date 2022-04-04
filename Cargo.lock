@@ -3142,9 +3142,9 @@ dependencies = [
 
 [[package]]
 name = "tmuntaner-webauthn"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23b8fa8cefc86ee6733788a0b2ea2c6c0a12d5246c7ed8c7e84711f932d4f22a"
+checksum = "4fe339902588609f860e40244524541a4c412f8d83390053422299b79c51a664"
 dependencies = [
  "anyhow",
  "authenticator",
