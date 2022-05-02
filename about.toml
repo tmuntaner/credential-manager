@@ -129,3 +129,11 @@ license = "ISC"
 path = "LICENSE"
 license = "ISC"
 checksum = "5b698ca13897be3afdb7174256fa1574f8c6892b8bea1a66dd6469d3fe27885a"
+
+[fuchsia-cprng.clarify]
+license = "BSD-3-Clause"
+
+[[fuchsia-cprng.clarify.files]]
+path = "LICENSE"
+license = "BSD-3-Clause"
+checksum = "03b114f53e6587a398931762ee11e2395bfdba252a329940e2c8c9e81813845b"
