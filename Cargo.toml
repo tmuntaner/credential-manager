@@ -1,6 +1,6 @@
 [package]
 name = "c9s"
-version = "0.1.0-alpha11"
+version = "0.1.0-alpha12"
 edition = "2018"
 license = "MPL-2.0"
 
