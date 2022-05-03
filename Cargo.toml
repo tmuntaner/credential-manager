@@ -26,7 +26,7 @@ async-trait = "0.1.53"
 toml = "0.5.9"
 dirs = "4.0.0"
 rpassword = "6.0"
-log = "0.4.16"
+log = "0.4.17"
 regex = "1.5"
 futures = "0.3"
 tmuntaner-webauthn = { version = "0.1.0-alpha.12", features = ["full"] }
