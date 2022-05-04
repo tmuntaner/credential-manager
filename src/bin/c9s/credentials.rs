@@ -150,17 +150,20 @@ impl AwsCredentials {
 
                 mfa = get_mfa_option(self.mfa.clone(), &default_settings);
                 mfa_provider = get_mfa_provider(self.mfa_provider.clone(), &default_settings);
-                app_url = self.app_url.clone().unwrap_or(
-                    default_settings
+                app_url = match self.app_url.clone() {
+                    None => default_settings
                         .clone()
                         .ok_or_else(|| anyhow!("please supply an app-url"))?
                         .app_url(),
-                );
-                username = self.username.clone().unwrap_or(
-                    default_settings
+                    Some(url) => url,
+                };
+
+                username = match self.username.clone() {
+                    None => default_settings
                         .ok_or_else(|| anyhow!("please supply a username"))?
                         .username(),
-                );
+                    Some(url) => url,
+                };
             }
             SsoProvider::OktaAwsSso => {
                 let default_settings = match self.app_url.clone() {
@@ -170,25 +173,32 @@ impl AwsCredentials {
 
                 mfa = get_mfa_option(self.mfa.clone(), &default_settings);
                 mfa_provider = get_mfa_provider(self.mfa_provider.clone(), &default_settings);
-                app_url = self.app_url.clone().unwrap_or(
-                    default_settings
+
+                app_url = match self.app_url.clone() {
+                    None => default_settings
                         .clone()
                         .ok_or_else(|| anyhow!("please supply an app-url"))?
                         .app_url(),
-                );
-                username = self.username.clone().unwrap_or(
-                    default_settings
+                    Some(url) => url,
+                };
+
+                username = match self.username.clone() {
+                    None => default_settings
                         .clone()
                         .ok_or_else(|| anyhow!("please supply a username"))?
                         .username(),
-                );
-                region = Some(
-                    self.region.clone().unwrap_or(
-                        default_settings
+                    Some(url) => url,
+                };
+
+                region = match self.region.clone() {
+                    None => {
+                        let region = default_settings
                             .ok_or_else(|| anyhow!("please supply a region"))?
-                            .region(),
-                    ),
-                );
+                            .region();
+                        Some(region)
+                    }
+                    Some(region) => Some(region),
+                };
             }
         }
 
