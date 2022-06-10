@@ -285,7 +285,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "80fd2c81e2782d1f57a532543524c59b9c32dcc9132a7a2d308864c05b645e98"
 dependencies = [
  "aws-smithy-http",
- "aws-smithy-types",
+ "aws-smithy-types 0.42.0",
  "aws-types",
  "http",
  "lazy_static",
@@ -307,7 +307,7 @@ dependencies = [
  "aws-smithy-http",
  "aws-smithy-http-tower",
  "aws-smithy-query",
- "aws-smithy-types",
+ "aws-smithy-types 0.42.0",
  "aws-smithy-xml",
  "aws-types",
  "bytes",
@@ -367,7 +367,7 @@ dependencies = [
  "aws-smithy-async",
  "aws-smithy-http",
  "aws-smithy-http-tower",
- "aws-smithy-types",
+ "aws-smithy-types 0.42.0",
  "bytes",
  "fastrand",
  "http",
@@ -388,7 +388,7 @@ version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "119f6f903f5c27308c732f6c7e460aee91e083b3229db2b21fa40436fc60eda7"
 dependencies = [
- "aws-smithy-types",
+ "aws-smithy-types 0.42.0",
  "bytes",
  "bytes-utils",
  "futures-core",
@@ -424,7 +424,7 @@ version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14ec1e497d5e75d42787c9440bbbed5fcdb02b0bdc41fd8b7fe270449e66deff"
 dependencies = [
- "aws-smithy-types",
+ "aws-smithy-types 0.42.0",
  "urlencoding",
 ]
 
@@ -441,12 +441,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "aws-smithy-types-convert"
-version = "0.42.0"
+name = "aws-smithy-types"
+version = "0.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "763749e8cb47dce1416b260ff97085bb51b014058f103be73f9c01f0b0e14fa4"
+checksum = "72afd4e14f068f773d53123b28cabbfd44cfb1f69418f83fa16f2fca65959daf"
 dependencies = [
- "aws-smithy-types",
+ "itoa",
+ "num-integer",
+ "ryu",
+ "time 0.3.9",
+]
+
+[[package]]
+name = "aws-smithy-types-convert"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d79e3d74c885daf9b574e102a2628df878b18d5973c0991d5397823738b8ff05"
+dependencies = [
+ "aws-smithy-types 0.43.0",
  "time 0.3.9",
 ]
 
@@ -468,7 +480,7 @@ dependencies = [
  "aws-smithy-async",
  "aws-smithy-client",
  "aws-smithy-http",
- "aws-smithy-types",
+ "aws-smithy-types 0.42.0",
  "http",
  "rustc_version 0.4.0",
  "tracing",
