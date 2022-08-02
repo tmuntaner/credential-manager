@@ -326,7 +326,7 @@ dependencies = [
  "percent-encoding",
  "regex",
  "ring",
- "time 0.3.11",
+ "time 0.3.12",
  "tracing",
 ]
 
@@ -421,7 +421,7 @@ dependencies = [
  "itoa",
  "num-integer",
  "ryu",
- "time 0.3.11",
+ "time 0.3.12",
 ]
 
 [[package]]
@@ -431,7 +431,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16790b33ece427233b3cf591463bf3c3deafa0b8a305f387aa281b409b81795a"
 dependencies = [
  "aws-smithy-types",
- "time 0.3.11",
+ "time 0.3.12",
 ]
 
 [[package]]
@@ -584,7 +584,7 @@ dependencies = [
  "select",
  "serde",
  "serde_json",
- "time 0.3.11",
+ "time 0.3.12",
  "tmuntaner-keyring",
  "tmuntaner-webauthn",
  "tokio",
@@ -703,7 +703,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94d4706de1b0fa5b132270cddffa8585166037822e260a944fe161acd137ca05"
 dependencies = [
  "percent-encoding",
- "time 0.3.11",
+ "time 0.3.12",
  "version_check",
 ]
 
@@ -719,7 +719,7 @@ dependencies = [
  "publicsuffix",
  "serde",
  "serde_json",
- "time 0.3.11",
+ "time 0.3.12",
  "url",
 ]
 
@@ -1625,7 +1625,7 @@ dependencies = [
  "dirs-next",
  "objc-foundation",
  "objc_id",
- "time 0.3.11",
+ "time 0.3.12",
 ]
 
 [[package]]
@@ -2830,11 +2830,12 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.11"
+version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72c91f41dcb2f096c05f0873d667dceec1087ce5bcf984ec8ffb19acddbb3217"
+checksum = "74b7cc93fc23ba97fde84f7eea56c55d1ba183f495c6715defdfc7b9cb8c870f"
 dependencies = [
  "itoa",
+ "js-sys",
  "libc",
  "num_threads",
  "time-macros",
