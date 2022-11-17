@@ -1,6 +1,6 @@
 [package]
 name = "c9s"
-version = "0.1.0-alpha14"
+version = "0.1.0-alpha15"
 edition = "2021"
 license = "MPL-2.0"
 
@@ -18,10 +18,10 @@ anyhow = "1.0"
 url = "2.2.2"
 base64 = "0.13.0"
 select = "0.5.0"
-aws-sdk-sts = "0.14.0"
-aws-smithy-types-convert = { version = "0.44.0", features = ["convert-time"] }
+aws-sdk-sts = "0.21.0"
+aws-smithy-types-convert = { version = "0.51.0", features = ["convert-time"] }
 time = { version = "0.3.13", features = ["formatting", "parsing"] }
-clap = { version = "3.2.23", features = ["derive"] }
+clap = { version = "4.0.26", features = ["derive"] }
 async-trait = "0.1.57"
 toml = "0.5.9"
 dirs = "4.0.0"
@@ -29,6 +29,6 @@ rpassword = "7.0"
 log = "0.4.17"
 regex = "1.6"
 futures = "0.3"
-tmuntaner-webauthn = { version = "0.1.0-alpha.13", features = ["full"] }
-tmuntaner-keyring = "0.1.0-alpha.12"
-quick-xml = "0.23.0"
+tmuntaner-webauthn = { version = "0.1.0-alpha.15", features = ["full"] }
+tmuntaner-keyring = "0.1.0-alpha.15"
+quick-xml = "0.26.0"

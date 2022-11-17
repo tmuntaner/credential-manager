@@ -1,7 +1,7 @@
 use crate::aws::sts::SamlAWSRole;
 use anyhow::{anyhow, Result};
 use quick_xml::events::Event;
-use quick_xml::Reader;
+use quick_xml::NsReader;
 use select::document::Document;
 use select::predicate::Attr;
 
@@ -27,18 +27,18 @@ impl OktaAwsSsoSamlParser {
     pub fn destination(&self) -> Result<String> {
         let body = self.saml_body.clone();
 
-        let mut reader = Reader::from_str(body.as_str());
+        let mut reader = NsReader::from_str(body.as_str());
         reader.trim_text(true);
         let mut buf = Vec::new();
-        let mut ns_buffer = Vec::new();
 
         loop {
-            match reader.read_namespaced_event(&mut buf, &mut ns_buffer) {
+            match reader.read_resolved_event_into(&mut buf) {
                 Ok((_, Event::Start(e))) => {
-                    if let b"Response" = e.local_name() {
+                    let (_, local) = reader.resolve_element(e.name());
+                    if let b"Response" = local.as_ref() {
                         for el in e.attributes() {
                             let e = el?;
-                            let key = std::str::from_utf8(e.key)?;
+                            let key = std::str::from_utf8(e.key.as_ref())?;
                             let value = std::str::from_utf8(e.value.as_ref())?;
                             if key == "Destination" {
                                 return Ok(value.to_string());
@@ -78,10 +78,9 @@ impl OktaAwsSamlParser {
     pub fn credentials(&self) -> Result<Vec<SamlAWSRole>> {
         let body = self.saml_body.clone();
 
-        let mut reader = Reader::from_str(body.as_str());
+        let mut reader = NsReader::from_str(body.as_str());
         reader.trim_text(true);
         let mut buf = Vec::new();
-        let mut ns_buffer = Vec::new();
 
         #[derive(Clone, Copy)]
         enum State {
@@ -100,29 +99,32 @@ impl OktaAwsSamlParser {
         let mut credentials: Vec<SamlAWSRole> = vec![];
 
         loop {
-            match reader.read_namespaced_event(&mut buf, &mut ns_buffer) {
-                Ok((_, Event::Start(e))) => match e.local_name() {
-                    b"Attribute" => {
-                        for el in e.attributes() {
-                            let e = el?;
-                            let key = std::str::from_utf8(e.key)?;
-                            let value = std::str::from_utf8(e.value.as_ref())?;
-                            if let ("Name", "https://aws.amazon.com/SAML/Attributes/Role") =
-                                (key, value)
-                            {
-                                state = State::RoleAttributes;
-                                break;
+            match reader.read_resolved_event_into(&mut buf) {
+                Ok((_, Event::Start(e))) => {
+                    let (_, local) = reader.resolve_element(e.name());
+                    match local.as_ref() {
+                        b"Attribute" => {
+                            for el in e.attributes() {
+                                let e = el?;
+                                let key = std::str::from_utf8(e.key.as_ref())?;
+                                let value = std::str::from_utf8(e.value.as_ref())?;
+                                if let ("Name", "https://aws.amazon.com/SAML/Attributes/Role") =
+                                    (key, value)
+                                {
+                                    state = State::RoleAttributes;
+                                    break;
+                                }
                             }
                         }
+                        b"AttributeValue" => {
+                            name = Name::AttributeValue;
+                        }
+                        _ => name = Name::Other,
                     }
-                    b"AttributeValue" => {
-                        name = Name::AttributeValue;
-                    }
-                    _ => name = Name::Other,
-                },
+                }
                 Ok((_, Event::Text(e))) => {
                     if let (State::RoleAttributes, Name::AttributeValue) = (state, name) {
-                        let value = e.unescape_and_decode(&reader).unwrap();
+                        let value = std::str::from_utf8(e.as_ref())?;
                         let split: Vec<&str> = value.split(',').collect();
 
                         credentials.push(SamlAWSRole {
@@ -132,7 +134,8 @@ impl OktaAwsSamlParser {
                     }
                 }
                 Ok((_, Event::End(e))) => {
-                    if let b"Attribute" = e.local_name() {
+                    let (_, local) = reader.resolve_element(e.name());
+                    if let b"Attribute" = local.as_ref() {
                         state = State::Other
                     }
                 }

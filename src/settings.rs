@@ -1,6 +1,6 @@
 use crate::okta::okta_client::MfaSelection;
 use anyhow::{anyhow, Result};
-use clap::ArgEnum;
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -50,7 +50,7 @@ pub struct AwsDefaults {
     sso_provider: SsoProvider,
 }
 
-#[derive(ArgEnum, PartialEq, Eq, Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(ValueEnum, PartialEq, Eq, Debug, Clone, Copy, Deserialize, Serialize)]
 pub enum SsoProvider {
     #[serde(rename = "okta-aws")]
     OktaAws,
