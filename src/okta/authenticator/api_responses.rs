@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum FactorResult {
     #[serde(rename = "CHALLENGE")]
     Challenge,
@@ -16,7 +16,7 @@ pub enum FactorResult {
     Unimplemented,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum TransactionState {
     #[serde(rename = "MFA_REQUIRED")]
     MfaRequired,
@@ -132,7 +132,7 @@ struct Embedded {
     challenge: Option<Challenge>,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum Links {
     Single(Link),
@@ -152,14 +152,14 @@ impl Links {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Link {
     name: Option<String>,
     href: String,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     credential_id: Option<String>,
@@ -170,7 +170,7 @@ pub struct Profile {
     version: Option<String>,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase", tag = "factorType")]
 pub enum FactorType {
     WebAuthn {
@@ -224,17 +224,17 @@ impl FactorType {
     }
     /// Tries to get the verification URL for a factor.
     pub fn get_verification_url(&self) -> Option<String> {
-        return match self {
+        match self {
             FactorType::WebAuthn { ref links, .. } => links.as_ref()?.get("next")?.link(),
             FactorType::Push { ref links, .. } => links.as_ref()?.get("verify")?.link(),
             FactorType::Totp { ref links, .. } => links.as_ref()?.get("verify")?.link(),
             _ => None,
-        };
+        }
     }
 
     /// Tries to get the credential ID for a factor.
     pub fn get_credential_id(&self) -> Option<String> {
-        return match self {
+        match self {
             FactorType::WebAuthn { ref profile, .. } => {
                 Some(profile.as_ref()?.credential_id.as_ref()?.clone())
             }
@@ -245,6 +245,6 @@ impl FactorType {
                 Some(profile.as_ref()?.credential_id.as_ref()?.clone())
             }
             _ => None,
-        };
+        }
     }
 }
