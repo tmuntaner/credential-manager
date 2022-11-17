@@ -69,14 +69,14 @@ enum ConfigGlobalSubCommand {
 /// Whether or not c9s should use a keyring service.
 struct ConfigGlobalUseKeyRing {
     /// Accepted values: "true" or "false"
-    #[clap(long, parse(try_from_str = true_or_false))]
+    #[clap(long, value_parser = true_or_false)]
     enabled: bool,
 }
 
 #[derive(Parser)]
 /// Sets the default AWS provider
 struct ConfigAwsDefaults {
-    #[clap(long, arg_enum)]
+    #[clap(long, value_enum)]
     sso_provider: SsoProvider,
 }
 

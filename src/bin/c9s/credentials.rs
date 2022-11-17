@@ -3,8 +3,8 @@ use anyhow::{anyhow, Result};
 use c9s::aws::Credential;
 use c9s::okta::okta_client::{MfaSelection, OktaClient};
 use c9s::settings::{AppConfig, OktaMfa, SsoProvider};
-use clap::ArgEnum;
 use clap::Parser;
+use clap::ValueEnum;
 use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -20,7 +20,7 @@ enum CredentialsSubCommands {
     Aws(AwsCredentials),
 }
 
-#[derive(ArgEnum, PartialEq, Debug, Clone, Copy)]
+#[derive(ValueEnum, PartialEq, Debug, Clone, Copy)]
 enum OutputOptions {
     Env,
     AwsProfile,
@@ -48,13 +48,13 @@ struct AwsCredentials {
     mfa: Option<String>,
     #[clap(long)]
     mfa_provider: Option<String>,
-    #[clap(long, arg_enum)]
+    #[clap(long, value_enum)]
     output: Option<OutputOptions>,
     #[clap(long)]
     enable_desktop_notifications: bool,
     #[clap(long)]
     cached: bool,
-    #[clap(long, arg_enum)]
+    #[clap(long, value_enum)]
     sso_provider: Option<SsoProvider>,
 }
 
