@@ -50,7 +50,7 @@ pub struct AwsDefaults {
     sso_provider: SsoProvider,
 }
 
-#[derive(ArgEnum, PartialEq, Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(ArgEnum, PartialEq, Eq, Debug, Clone, Copy, Deserialize, Serialize)]
 pub enum SsoProvider {
     #[serde(rename = "okta-aws")]
     OktaAws,
