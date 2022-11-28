@@ -25,7 +25,7 @@ clap = { version = "4.0.27", features = ["derive"] }
 async-trait = "0.1.57"
 toml = "0.5.9"
 dirs = "4.0.0"
-rpassword = "7.0"
+rpassword = "7.2"
 log = "0.4.17"
 regex = "1.6"
 futures = "0.3"
