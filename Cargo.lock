@@ -482,6 +482,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
 
 [[package]]
+name = "base64"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ea22880d78093b0cbe17c89f64a7d457941e65759157ec6cb31a31d652b05e5"
+
+[[package]]
 name = "basic-cookies"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -587,7 +593,7 @@ dependencies = [
  "async-trait",
  "aws-sdk-sts",
  "aws-smithy-types-convert",
- "base64",
+ "base64 0.20.0",
  "clap",
  "dirs",
  "futures",
@@ -1337,7 +1343,7 @@ dependencies = [
  "assert-json-diff",
  "async-object-pool",
  "async-trait",
- "base64",
+ "base64 0.13.1",
  "basic-cookies",
  "crossbeam-utils",
  "form_urlencoded",
@@ -2395,7 +2401,7 @@ version = "0.11.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68cc60575865c7831548863cc02356512e3f1dc2f3f82cb837d7fc4cc8f3c97c"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "bytes",
  "cookie",
  "cookie_store",
@@ -2524,7 +2530,7 @@ version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0864aeff53f8c05aa08d86e5ef839d3dfcf07aeba2db32f12db0ef716e87bd55"
 dependencies = [
- "base64",
+ "base64 0.13.1",
 ]
 
 [[package]]
@@ -3034,7 +3040,7 @@ checksum = "537a5c72cc11bbcd94f0db1f2866b09e63c7a35a7e8d782a7640878f1b518225"
 dependencies = [
  "anyhow",
  "authenticator",
- "base64",
+ "base64 0.13.1",
  "indicatif",
  "notify-rust",
  "serde",
