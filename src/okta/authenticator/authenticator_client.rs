@@ -343,7 +343,7 @@ impl AuthenticatorClient {
         if selection > max {
             return Err(anyhow!("you've selected an invalid Factor Type"));
         }
-        let factor = factors.get(selection as usize).ok_or_else(|| anyhow!(""))?;
+        let factor = factors.get(selection).ok_or_else(|| anyhow!(""))?;
 
         Ok(factor.clone())
     }
