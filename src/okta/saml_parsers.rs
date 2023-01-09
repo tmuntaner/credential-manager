@@ -1,5 +1,6 @@
 use crate::aws::sts::SamlAWSRole;
 use anyhow::{anyhow, Result};
+use base64::{alphabet, engine, Engine};
 use quick_xml::events::Event;
 use quick_xml::NsReader;
 use select::document::Document;
@@ -158,13 +159,15 @@ impl BaseSamlParser {
     fn new(body: String) -> Result<BaseSamlParser> {
         let document = Document::from(body.as_str());
         let node = document.find(Attr("name", "SAMLResponse")).next();
+        let base64urlsafe =
+            engine::GeneralPurpose::new(&alphabet::STANDARD, engine::general_purpose::PAD);
 
         if let Some(element) = node {
             let response: String = element
                 .attr("value")
                 .map(|value| value.parse())
                 .ok_or_else(|| anyhow!("could not get SAMLResponse"))??;
-            let decoded = String::from_utf8(base64::decode(response.clone())?)?;
+            let decoded = String::from_utf8(base64urlsafe.decode(response.clone())?)?;
 
             Ok(BaseSamlParser {
                 raw: response,
