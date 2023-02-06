@@ -329,7 +329,7 @@ impl AuthenticatorClient {
             eprintln!("( {} ) {}", i, factor.human_friendly_name());
         }
 
-        eprint!("Factor Type? ({} - {}) ", min, max);
+        eprint!("Factor Type? ({min} - {max}) ");
         let _ = io::stdout().flush();
         let mut buffer = String::new();
         io::stdin().lock().read_line(&mut buffer)?;

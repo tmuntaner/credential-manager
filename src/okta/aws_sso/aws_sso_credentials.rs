@@ -22,7 +22,7 @@ impl AwsSSOCredentials {
         region: String,
         role_arn: Option<String>,
     ) -> Result<Vec<Credential>> {
-        let portal_url = format!("https://portal.sso.{region}.amazonaws.com", region = region);
+        let portal_url = format!("https://portal.sso.{region}.amazonaws.com");
         let token = self
             .sso_portal_login
             .run(app_url, session_token, portal_url.clone())

@@ -217,7 +217,7 @@ impl FactorType {
             FactorType::Push { .. } => String::from("Okta Push"),
             FactorType::WebAuthn { .. } => String::from("WebAuthn (U2F)"),
             FactorType::Totp { ref provider, .. } => {
-                format!("TOTP ({})", provider)
+                format!("TOTP ({provider})")
             }
             FactorType::Unimplemented => String::from("Unimplemented"),
         }

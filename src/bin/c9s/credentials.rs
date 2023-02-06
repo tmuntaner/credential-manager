@@ -297,7 +297,7 @@ fn print_credentials(aws_credentials: &[Credential], output: Option<OutputOption
                 "Expiration" : credential.expiration()
             });
 
-            println!("{}", json)
+            println!("{json}")
         }
     }
 
