@@ -113,7 +113,7 @@ mod tests {
 
         async fn list_roles(&self, _token: String, account_id: String) -> Result<Vec<Role>> {
             Ok(vec![Role {
-                role_name: format!("Role for account {}", account_id),
+                role_name: format!("Role for account {account_id}"),
                 account_id,
             }])
         }
@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn test_new() {
         let client = SsoPortalClient::new(String::from("https://foo.com"));
-        assert_eq!(true, client.is_ok());
+        assert!(client.is_ok());
     }
 
     #[tokio::test]

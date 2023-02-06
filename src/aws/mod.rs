@@ -105,7 +105,7 @@ mod tests {
     fn test_parse_role_arn() {
         let account_id = String::from("000222111000");
         let role_name = String::from("the arn");
-        let arn = format!("arn:aws:iam::{}:role/{}", account_id, role_name);
+        let arn = format!("arn:aws:iam::{account_id}:role/{role_name}");
 
         let parsed = Role::from_arn(&arn).unwrap();
 

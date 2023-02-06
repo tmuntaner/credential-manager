@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn test_new() {
         let client = SsoPortal::new(String::from("https://www.foo.com"));
-        assert_eq!(true, client.is_ok());
+        assert!(client.is_ok());
     }
 
     #[tokio::test]
@@ -234,7 +234,7 @@ mod tests {
         response_mock.assert();
         assert_eq!(
             credentials.role_arn,
-            Some(format!("arn:aws:iam::{}:role/{}", account_id, role_name))
+            Some(format!("arn:aws:iam::{account_id}:role/{role_name}"))
         );
         assert_eq!(credentials.session_token, session_token);
         assert_eq!(credentials.secret_access_key, secret_access_key);
