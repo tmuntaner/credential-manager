@@ -18,8 +18,8 @@ anyhow = "1.0"
 url = "2.2.2"
 base64 = "0.21.0"
 select = "0.6.0"
-aws-sdk-sts = "0.23.0"
-aws-smithy-types-convert = { version = "0.53.1", features = ["convert-time"] }
+aws-sdk-sts = "0.24.0"
+aws-smithy-types-convert = { version = "0.54.1", features = ["convert-time"] }
 time = { version = "0.3.13", features = ["formatting", "parsing"] }
 clap = { version = "4.1.4", features = ["derive"] }
 async-trait = "0.1.64"
