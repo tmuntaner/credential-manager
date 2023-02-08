@@ -23,7 +23,7 @@ aws-smithy-types-convert = { version = "0.54.2", features = ["convert-time"] }
 time = { version = "0.3.13", features = ["formatting", "parsing"] }
 clap = { version = "4.1.4", features = ["derive"] }
 async-trait = "0.1.64"
-toml = "0.7.1"
+toml = "0.7.2"
 dirs = "4.0.0"
 rpassword = "7.2"
 log = "0.4.17"
