@@ -20,16 +20,11 @@ enum CredentialsSubCommands {
     Aws(AwsCredentials),
 }
 
-#[derive(ValueEnum, PartialEq, Debug, Clone, Copy)]
+#[derive(ValueEnum, PartialEq, Debug, Clone, Copy, Default)]
 enum OutputOptions {
+    #[default]
     Env,
     AwsProfile,
-}
-
-impl Default for OutputOptions {
-    fn default() -> Self {
-        OutputOptions::Env
-    }
 }
 
 #[derive(Parser)]
