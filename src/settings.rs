@@ -50,18 +50,13 @@ pub struct AwsDefaults {
     sso_provider: SsoProvider,
 }
 
-#[derive(ValueEnum, PartialEq, Eq, Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(ValueEnum, PartialEq, Eq, Debug, Clone, Copy, Deserialize, Serialize, Default)]
 pub enum SsoProvider {
     #[serde(rename = "okta-aws")]
+    #[default]
     OktaAws,
     #[serde(rename = "okta-aws-sso")]
     OktaAwsSso,
-}
-
-impl Default for SsoProvider {
-    fn default() -> Self {
-        SsoProvider::OktaAws
-    }
 }
 
 impl AppConfig {
