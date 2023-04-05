@@ -1,6 +1,7 @@
 use crate::aws::Credential;
 use anyhow::{anyhow, Result};
-use aws_sdk_sts::output::AssumeRoleWithSamlOutput;
+use aws_sdk_sts::config::Region;
+use aws_sdk_sts::operation::assume_role_with_saml::AssumeRoleWithSamlOutput;
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use futures::future;
 use time::format_description::well_known::Rfc3339;
@@ -19,7 +20,7 @@ impl StsClient {
     ) -> Result<Vec<Credential>> {
         let futures = future::join_all(saml_aws_credentials.into_iter().map(|role| {
             let config = aws_sdk_sts::Config::builder()
-                .region(Some(aws_sdk_sts::Region::new(String::from("eu-central-1"))))
+                .region(Some(Region::new(String::from("eu-central-1"))))
                 .build();
             let bar = aws_sdk_sts::Client::from_conf(config);
             let saml = bar
