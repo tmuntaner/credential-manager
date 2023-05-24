@@ -499,9 +499,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-types"
-version = "0.55.2"
+version = "0.55.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58db46fc1f4f26be01ebdb821751b4e2482cd43aa2b64a0348fb89762defaffa"
+checksum = "16a3d0bf4f324f4ef9793b86a1701d9700fbcdbd12a846da45eed104c634c6e8"
 dependencies = [
  "base64-simd",
  "itoa",
@@ -512,9 +512,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-types-convert"
-version = "0.55.2"
+version = "0.55.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "641f27a35715504a92eb27e27b1cd0f4f864ec4c441c48922911aa10affa5e2b"
+checksum = "08d826bceaef81b3a8435f99b5da0e7e9ad3379bc91c8893e87cd3daa63c4423"
 dependencies = [
  "aws-smithy-types",
  "time",
