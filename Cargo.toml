@@ -21,7 +21,7 @@ select = "0.6.0"
 aws-sdk-sts = "0.28.0"
 aws-smithy-types-convert = { version = "0.55.3", features = ["convert-time"] }
 time = { version = "0.3.21", features = ["formatting", "parsing"] }
-clap = { version = "4.3.1", features = ["derive"] }
+clap = { version = "4.3.2", features = ["derive"] }
 async-trait = "0.1.68"
 toml = "0.7.4"
 dirs = "5.0.1"
