@@ -22,7 +22,7 @@ aws-sdk-sts = "0.28.0"
 aws-smithy-types-convert = { version = "0.55.3", features = ["convert-time"] }
 time = { version = "0.3.22", features = ["formatting", "parsing"] }
 clap = { version = "4.3.9", features = ["derive"] }
-async-trait = "0.1.68"
+async-trait = "0.1.69"
 toml = "0.7.5"
 dirs = "5.0.1"
 rpassword = "7.2"
