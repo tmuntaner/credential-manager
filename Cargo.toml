@@ -27,7 +27,7 @@ toml = "0.7.5"
 dirs = "5.0.1"
 rpassword = "7.2"
 log = "0.4.19"
-regex = "1.8"
+regex = "1.9"
 futures = "0.3"
 tmuntaner-webauthn = { version = "0.1.0-alpha.18", features = ["full"] }
 tmuntaner-keyring = "0.1.0-alpha.15"
