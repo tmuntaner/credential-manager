@@ -18,8 +18,8 @@ anyhow = "1.0"
 url = "2.4.0"
 base64 = "0.21.2"
 select = "0.6.0"
-aws-sdk-sts = "0.28.0"
-aws-smithy-types-convert = { version = "0.55.3", features = ["convert-time"] }
+aws-sdk-sts = "0.30.0"
+aws-smithy-types-convert = { version = "0.56.1", features = ["convert-time"] }
 time = { version = "0.3.23", features = ["formatting", "parsing"] }
 clap = { version = "4.3.11", features = ["derive"] }
 async-trait = "0.1.71"
@@ -31,4 +31,4 @@ regex = "1.8"
 futures = "0.3"
 tmuntaner-webauthn = { version = "0.1.0-alpha.18", features = ["full"] }
 tmuntaner-keyring = "0.1.0-alpha.15"
-quick-xml = "0.29.0"
+quick-xml = "0.30.0"

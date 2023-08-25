@@ -61,7 +61,7 @@ pub enum SsoProvider {
 
 impl AppConfig {
     pub fn set_aws_defaults(&mut self, defaults: AwsDefaults) {
-        let mut global_settings = self
+        let global_settings = self
             .global_settings
             .get_or_insert(GlobalSettings::default());
 
@@ -76,7 +76,7 @@ impl AppConfig {
     }
 
     pub fn set_use_keyring(&mut self, enable_keyring: bool) {
-        let mut global_settings = self
+        let global_settings = self
             .global_settings
             .get_or_insert(GlobalSettings::default());
         global_settings.use_keyring = Some(enable_keyring);
