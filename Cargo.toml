@@ -18,7 +18,7 @@ anyhow = "1.0"
 url = "2.4.1"
 base64 = "0.21.4"
 select = "0.6.0"
-aws-sdk-sts = "0.30.0"
+aws-sdk-sts = "0.31.1"
 aws-smithy-types-convert = { version = "0.56.1", features = ["convert-time"] }
 time = { version = "0.3.28", features = ["formatting", "parsing"] }
 clap = { version = "4.4.4", features = ["derive"] }
