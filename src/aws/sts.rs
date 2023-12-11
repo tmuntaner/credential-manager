@@ -52,16 +52,15 @@ impl StsClient {
                 .ok_or_else(|| anyhow!("Could not get credentials from STS"))?;
             let expiration_timestamp = credentials
                 .expiration
-                .unwrap()
                 .to_time()
                 .unwrap()
                 .format(&Rfc3339)
                 .unwrap();
             aws_credentials.push(Credential {
-                secret_access_key: credentials.secret_access_key.unwrap(),
-                access_key_id: credentials.access_key_id.unwrap(),
+                secret_access_key: credentials.secret_access_key,
+                access_key_id: credentials.access_key_id,
                 role_arn: Some(future.role_arn),
-                session_token: credentials.session_token.unwrap(),
+                session_token: credentials.session_token,
                 expiration: expiration_timestamp,
             });
         }
