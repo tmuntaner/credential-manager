@@ -11,6 +11,10 @@ updates:
       interval: "daily"
     reviewers:
       - "tmuntaner"
+    groups:
+      aws:
+        patterns:
+          - "aws*"
   - package-ecosystem: github-actions
     directory: /
     schedule:
