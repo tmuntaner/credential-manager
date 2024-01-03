@@ -284,7 +284,7 @@ impl AuthenticatorClient {
                         })
                         .collect();
                     let factor = factors
-                        .get(0)
+                        .first()
                         .ok_or_else(|| anyhow!("MFA Factor not found"))?
                         .clone();
 
@@ -296,7 +296,7 @@ impl AuthenticatorClient {
                         .filter(|factor| matches!(factor, FactorType::Push { .. }))
                         .collect();
                     let factor = factors
-                        .get(0)
+                        .first()
                         .ok_or_else(|| anyhow!("MFA Factor not found"))?
                         .clone();
 
@@ -308,7 +308,7 @@ impl AuthenticatorClient {
                         .filter(|factor| matches!(factor, FactorType::WebAuthn { .. }))
                         .collect();
                     let factor = factors
-                        .get(0)
+                        .first()
                         .ok_or_else(|| anyhow!("MFA Factor not found"))?
                         .clone();
 
