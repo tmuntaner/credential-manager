@@ -297,9 +297,9 @@ mod tests {
 
         response_1_mock.assert();
         response_2_mock.assert();
-        assert_eq!(accounts.get(0).unwrap().account_id, account_1_id);
-        assert_eq!(accounts.get(0).unwrap().account_name, account_1_name);
-        assert_eq!(accounts.get(0).unwrap().email_address, account_1_email);
+        assert_eq!(accounts.first().unwrap().account_id, account_1_id);
+        assert_eq!(accounts.first().unwrap().account_name, account_1_name);
+        assert_eq!(accounts.first().unwrap().email_address, account_1_email);
         assert_eq!(accounts.get(1).unwrap().account_id, account_2_id);
         assert_eq!(accounts.get(1).unwrap().account_name, account_2_name);
         assert_eq!(accounts.get(1).unwrap().email_address, account_2_email);
@@ -360,8 +360,8 @@ mod tests {
 
         response_1_mock.assert();
         response_2_mock.assert();
-        assert_eq!(roles.get(0).unwrap().account_id(), account_id);
-        assert_eq!(roles.get(0).unwrap().role_name(), role_name_1);
+        assert_eq!(roles.first().unwrap().account_id(), account_id);
+        assert_eq!(roles.first().unwrap().role_name(), role_name_1);
         assert_eq!(roles.get(1).unwrap().account_id(), account_id);
         assert_eq!(roles.get(1).unwrap().role_name(), role_name_2);
     }

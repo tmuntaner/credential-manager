@@ -119,11 +119,11 @@ impl AppConfig {
     }
 
     pub fn aws_hosts(&self) -> Option<AwsHost> {
-        self.okta_aws_hosts.clone()?.get(0).cloned()
+        self.okta_aws_hosts.clone()?.first().cloned()
     }
 
     pub fn aws_sso_hosts(&self) -> Option<AwsSsoHost> {
-        self.okta_aws_sso_hosts.clone()?.get(0).cloned()
+        self.okta_aws_sso_hosts.clone()?.first().cloned()
     }
 
     pub fn find_aws_sso_host(&self, app_url: String) -> Option<AwsSsoHost> {

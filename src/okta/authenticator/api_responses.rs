@@ -145,7 +145,7 @@ impl Links {
         match self {
             Links::Single(l) => Some(l.href.clone()),
             Links::Multi(list) => {
-                let link = list.get(0)?;
+                let link = list.first()?;
                 Some(link.href.clone())
             }
         }

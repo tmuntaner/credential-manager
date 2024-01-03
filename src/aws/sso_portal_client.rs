@@ -143,15 +143,15 @@ mod tests {
         ];
         let credentials = client.list_credentials(token, roles).await.unwrap();
         assert_eq!(
-            credentials.get(0).unwrap().secret_access_key,
+            credentials.first().unwrap().secret_access_key,
             String::from("TheSecretAccessKey for Role1")
         );
         assert_eq!(
-            credentials.get(0).unwrap().access_key_id,
+            credentials.first().unwrap().access_key_id,
             String::from("TheAccessKeyId for Role1")
         );
         assert_eq!(
-            credentials.get(0).unwrap().session_token,
+            credentials.first().unwrap().session_token,
             String::from("TheSessionToken for Role1")
         );
         assert_eq!(
@@ -176,14 +176,14 @@ mod tests {
         let token = String::from("TheToken");
         let role_arns = client.list_role_arns(token).await.unwrap();
         assert_eq!(
-            role_arns.get(0).unwrap().role_name,
+            role_arns.first().unwrap().role_name,
             "Role for account AccountId1"
         );
         assert_eq!(
             role_arns.get(1).unwrap().role_name,
             "Role for account AccountId2"
         );
-        assert_eq!(role_arns.get(0).unwrap().account_id, "AccountId1");
+        assert_eq!(role_arns.first().unwrap().account_id, "AccountId1");
         assert_eq!(role_arns.get(1).unwrap().account_id, "AccountId2");
     }
 }

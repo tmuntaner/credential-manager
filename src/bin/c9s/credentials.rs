@@ -116,7 +116,7 @@ impl AwsCredentials {
         if let Some(role_arn) = &self.role_arn {
             if aws_credentials.len() == 1 {
                 let credential = aws_credentials
-                    .get(0)
+                    .first()
                     .ok_or_else(|| anyhow!("failed to get credential"))?;
                 utils::set_cached_credential(role_arn, credential, settings.keyring_enabled())?;
             }
@@ -282,7 +282,7 @@ fn print_credentials(aws_credentials: &[Credential], output: Option<OutputOption
                 )));
             }
             let credential = aws_credentials
-                .get(0)
+                .first()
                 .ok_or_else(|| anyhow!("failed to get credential"))?;
             let json = json!({
                 "Version": 1,

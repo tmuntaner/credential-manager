@@ -3,7 +3,7 @@ Version:        0.1.0
 Release:        0
 Summary:        A cloud credential manager
 License:        MIT
-URL:            https://github.com/Firstyear/kanidm
+URL:            https://github.com/tmuntaner/credential-manager
 Source:         c9s-%{version}.tar.bz2
 Source1:        vendor.tar.bz2
 Source2:        cargo.config
