@@ -7,7 +7,7 @@ license = "MPL-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dev-dependencies]
-httpmock = "0.6"
+httpmock = "0.7"
 
 [dependencies]
 reqwest = { version = "0.11", features = ["json", "cookies"] }
