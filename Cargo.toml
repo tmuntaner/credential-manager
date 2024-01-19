@@ -19,7 +19,7 @@ url = "2.5.0"
 base64 = "0.21.7"
 select = "0.6.0"
 aws-sdk-sts = "1.10.0"
-aws-smithy-types-convert = { version = "0.60.2", features = ["convert-time"] }
+aws-smithy-types-convert = { version = "0.60.3", features = ["convert-time"] }
 time = { version = "0.3.31", features = ["formatting", "parsing"] }
 clap = { version = "4.4.16", features = ["derive"] }
 async-trait = "0.1.77"
