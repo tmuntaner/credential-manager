@@ -30,7 +30,7 @@ jobs:
           cd target/release && sha256sum c9s_amd64 > c9s_amd64.SHA256SUM
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             target/release/c9s_amd64
@@ -61,7 +61,7 @@ jobs:
           cd target/release && shasum -a 256 c9s_darwin > c9s_darwin.SHA256SUM
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             target/release/c9s_darwin
@@ -93,7 +93,7 @@ jobs:
           "$sum c9s.exe" | Out-File .\c9s.exe.SHA256SUM
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             target/release/c9s.exe
