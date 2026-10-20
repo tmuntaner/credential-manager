@@ -1,39 +1,34 @@
-/*
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
-
 use aes::cipher::block_padding::Pkcs7;
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
 use aes::Aes128;
-use anyhow::Result;
 use cbc::{Decryptor, Encryptor};
 use openssl::bn::BigNum;
 use openssl::rand::rand_bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::TryInto;
-use zbus::dbus_proxy;
-use zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
-use zvariant_derive::Type;
+use std::string::FromUtf8Error;
+use thiserror::Error;
+use zbus::proxy;
+use zbus::Type;
+use zbus::{ObjectPath, OwnedObjectPath, OwnedVariant, Variant};
 
 type Aes128CbcEnc = Encryptor<Aes128>;
 type Aes128CbcDec = Decryptor<Aes128>;
 
 /// https://specifications.freedesktop.org/secret-service/latest/re01.html
-#[dbus_proxy(
+#[proxy(
     interface = "org.freedesktop.Secret.Service",
     default_service = "org.freedesktop.secrets",
     default_path = "/org/freedesktop/secrets",
     assume_defaults = true
 )]
 pub trait Secrets {
-    fn open_session(&self, algorithm: &str, input: Value<'_>) -> zbus::Result<OpenSessionResult>;
+    fn open_session(&self, algorithm: &str, input: Variant<'_>) -> zbus::Result<OpenSessionResult>;
 
     fn create_collection(
         &self,
-        properties: HashMap<&str, Value<'_>>,
+        properties: HashMap<&str, Variant<'_>>,
         alias: &str,
     ) -> zbus::Result<CreateCollectionResult>;
 
@@ -52,19 +47,32 @@ pub trait Secrets {
 
     fn set_alias(&self, name: &str, collection: ObjectPath<'_>) -> zbus::Result<()>;
 
-    #[dbus_proxy(property)]
-    fn collections(&self) -> zbus::fdo::Result<Vec<ObjectPath<'_>>>;
+    #[zbus(property)]
+    fn collections(&self) -> zbus::fdo::Result<Vec<OwnedObjectPath>>;
 }
 
 #[derive(Deserialize, Serialize, Type)]
 pub struct OpenSessionResult {
-    output: OwnedValue,
+    output: OwnedVariant,
     result: OwnedObjectPath,
 }
 
+#[derive(Debug, Error)]
+pub enum ToServerPublicKeyError {
+    #[error(transparent)]
+    OpenSSLRandError(#[from] openssl::error::ErrorStack),
+
+    #[error("to bytes error")]
+    ToBytesError,
+}
+
 impl OpenSessionResult {
-    pub fn server_public_key(&self) -> Result<BigNum> {
-        let val: Vec<_> = self.output.clone().try_into()?;
+    pub fn server_public_key(&self) -> Result<BigNum, ToServerPublicKeyError> {
+        let val: Vec<_> = self
+            .output
+            .clone()
+            .try_into()
+            .map_err(|_| ToServerPublicKeyError::ToBytesError)?;
 
         let result = BigNum::from_slice(val.as_slice())?;
 
@@ -113,13 +121,25 @@ pub struct Secret {
     content_type: String,
 }
 
+#[derive(Debug, Error)]
+pub enum SecretError {
+    #[error(transparent)]
+    InvalidLength(#[from] crypto_common::InvalidLength),
+
+    #[error(transparent)]
+    OpenSSLRandError(#[from] openssl::error::ErrorStack),
+
+    #[error(transparent)]
+    StringError(#[from] FromUtf8Error),
+}
+
 impl Secret {
     pub fn new(
         session: OwnedObjectPath,
         aes: Vec<u8>,
         value: String,
         content_type: String,
-    ) -> Result<Self> {
+    ) -> Result<Self, SecretError> {
         let (value, parameters) = Secret::encrypt(value, aes)?;
 
         Ok(Secret {
@@ -130,19 +150,19 @@ impl Secret {
         })
     }
 
-    pub fn secret(&self, aes: Vec<u8>) -> Result<String> {
+    pub fn secret(&self, aes: Vec<u8>) -> Result<String, SecretError> {
         let mut value = self.value.clone();
         let value = value.as_mut_slice();
         let parameter = self.parameters.clone();
 
         let decryptor = Aes128CbcDec::new_from_slices(aes.as_slice(), parameter.as_slice())?;
-        let result = decryptor.decrypt_padded_vec_mut::<Pkcs7>(value).unwrap();
+        let result = decryptor.decrypt_padded_vec::<Pkcs7>(value).unwrap();
         let secret = String::from_utf8(result)?;
 
         Ok(secret)
     }
 
-    fn encrypt(secret: String, aes: Vec<u8>) -> Result<(Vec<u8>, Vec<u8>)> {
+    fn encrypt(secret: String, aes: Vec<u8>) -> Result<(Vec<u8>, Vec<u8>), SecretError> {
         let mut value = secret.into_bytes();
         let value = value.as_mut_slice();
 
@@ -151,7 +171,7 @@ impl Secret {
         let aes_iv = aes_iv.to_vec();
 
         let encryptor = Aes128CbcEnc::new_from_slices(aes.as_slice(), aes_iv.as_slice())?;
-        let result = encryptor.encrypt_padded_vec_mut::<Pkcs7>(value);
+        let result = encryptor.encrypt_padded_vec::<Pkcs7>(value);
 
         Ok((result, aes_iv))
     }

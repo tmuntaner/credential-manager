@@ -17,7 +17,8 @@ Group:          Productivity/Security
 %description
 c9s is cloud credential manager.
 
-Currently, it supports generating temporary AWS credentials from Okta.
+Currently, it supports generating temporary AWS credentials (IAM roles and IAM Identity Center) from authentik,
+with TOTP and WebAuthn multi-factor authentication.
 
 %prep
 %setup -q

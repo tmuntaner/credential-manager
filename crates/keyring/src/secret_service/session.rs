@@ -1,22 +1,17 @@
-/*
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
-
-use crate::secret_service::proxy::secrets::{OpenSessionResult, SecretsProxyBlocking};
-use anyhow::Result;
+use crate::secret_service::proxy::secrets::ToServerPublicKeyError;
+use crate::secret_service::proxy::secrets::{OpenSessionResult, SecretsProxy};
 use hkdf::Hkdf;
 use openssl::bn::BigNum;
 use sha2::Sha256;
 use std::borrow::Borrow;
-use zbus::blocking::Connection;
-use zvariant::OwnedObjectPath;
+use thiserror::Error;
+use zbus::Connection;
+use zbus::OwnedObjectPath;
 
 pub const SERVICE_NAME: &str = "org.freedesktop.secrets";
 
 pub struct Session<'a> {
-    secrets: SecretsProxyBlocking<'a>,
+    secrets: SecretsProxy<'a>,
     connection: Connection,
     session_path: OwnedObjectPath,
     aes_key: Vec<u8>,
@@ -24,18 +19,31 @@ pub struct Session<'a> {
 
 pub const DH_ALGORITHM: &str = "dh-ietf1024-sha256-aes128-cbc-pkcs7";
 
+#[derive(Debug, Error)]
+pub enum SessionError {
+    #[error(transparent)]
+    OpenSSL(#[from] openssl::error::ErrorStack),
+
+    #[error(transparent)]
+    ZBus(#[from] zbus::Error),
+
+    #[error(transparent)]
+    ServerPublicKey(#[from] ToServerPublicKeyError),
+}
+
 impl Session<'_> {
-    pub fn new() -> Result<Self> {
+    pub async fn new() -> Result<Self, SessionError> {
         let generator = BigNum::from_u32(2u32)?;
         let p = BigNum::get_rfc2409_prime_1024()?;
         let dh = openssl::dh::Dh::from_pqg(p, None, generator)?;
         let key = dh.generate_key()?;
         let public_key = key.public_key();
 
-        let connection = zbus::blocking::Connection::session()?;
-        let secrets: SecretsProxyBlocking = SecretsProxyBlocking::new(&connection)?;
-        let session: OpenSessionResult =
-            secrets.open_session(DH_ALGORITHM, public_key.to_vec().as_slice().into())?;
+        let connection = Connection::session().await?;
+        let secrets: SecretsProxy = SecretsProxy::new(&connection).await?;
+        let session: OpenSessionResult = secrets
+            .open_session(DH_ALGORITHM, public_key.to_vec().as_slice().into())
+            .await?;
 
         let server_public_key = session.server_public_key()?;
         let common_key = key.compute_key(server_public_key.borrow())?;
@@ -57,7 +65,7 @@ impl Session<'_> {
         })
     }
 
-    pub fn secrets_proxy(&self) -> &SecretsProxyBlocking<'_> {
+    pub fn secrets_proxy(&self) -> &SecretsProxy<'_> {
         &self.secrets
     }
 

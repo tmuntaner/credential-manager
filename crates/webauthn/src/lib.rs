@@ -1,14 +1,9 @@
-/*
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
-
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod utils;
 
 pub trait WebauthnNotifier {
-    fn notify_start(&self) -> Result<()>;
-    fn notify_end(&self) -> Result<()>;
+    fn notify_start(&self) -> Result<(), WebauthnError>;
+    fn notify_end(&self) -> Result<(), WebauthnError>;
 }
 
 #[cfg(feature = "progress_bar")]
@@ -23,39 +18,23 @@ mod desktop_notifications;
 #[cfg(feature = "notifications")]
 use crate::desktop_notifications::DesktopNotificationsFallbackNotifier;
 
-#[cfg(target_os = "windows")]
-mod windows;
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod mozilla;
 
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
+mod errors;
 
-/// <https://www.w3.org/TR/webauthn-2/#dictdef-collectedclientdata>
-#[derive(Debug, Serialize, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CollectedClientData {
-    #[serde(rename = "type")]
-    sign_type: String,
-    challenge: String,
-    origin: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cross_origin: Option<bool>,
-    token_binding: Option<TokenBinding>,
-}
+pub use errors::WebauthnError;
 
-/// <https://www.w3.org/TR/webauthn-2/#dom-collectedclientdata-tokenbinding>
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct TokenBinding {
-    status: String,
-    id: Option<String>,
-}
-
-pub struct SignatureResponse {
-    pub client_data: String,
-    pub signature_data: String,
-    pub authenticator_data: String,
+/// The raw parts of a WebAuthn assertion. Encoding them is up to the caller.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WebauthnAssertion {
+    /// The key handle that signed (the assertion `id` / `rawId`).
+    pub credential_id: Vec<u8>,
+    pub client_data_json: Vec<u8>,
+    /// `rpIdHash(32) || flags(1) || counter(4)`
+    pub authenticator_data: Vec<u8>,
+    /// DER ECDSA
+    pub signature: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -88,23 +67,28 @@ impl WebauthnClient {
         self.add_notifier(notifier)
     }
 
-    #[cfg(target_os = "windows")]
-    pub fn sign(
+    /// Signs a WebAuthn challenge. `challenge` is the base64url string from the server and is placed
+    /// verbatim in the client data, `credential_ids` are base64url. `rp_id` and `origin` come from the
+    /// caller (the IdP host and `https://<host>`).
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn sign_assertion(
         self,
-        challenge_str: String,
-        host: String,
+        challenge: String,
+        rp_id: String,
+        origin: String,
         credential_ids: Vec<String>,
-    ) -> Result<SignatureResponse> {
-        windows::sign(challenge_str, host, credential_ids)
+    ) -> Result<WebauthnAssertion, WebauthnError> {
+        mozilla::sign_assertion(challenge, rp_id, origin, credential_ids, self.notifiers)
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn sign(
+    #[cfg(target_os = "windows")]
+    pub fn sign_assertion(
         self,
-        challenge_str: String,
-        host: String,
-        credential_ids: Vec<String>,
-    ) -> Result<SignatureResponse> {
-        mozilla::sign(challenge_str, host, credential_ids, self.notifiers)
+        _challenge: String,
+        _rp_id: String,
+        _origin: String,
+        _credential_ids: Vec<String>,
+    ) -> Result<WebauthnAssertion, WebauthnError> {
+        Err(WebauthnError::UnsupportedPlatform)
     }
 }

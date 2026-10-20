@@ -1,0 +1,7 @@
+{
+  "flow_info": {"title": "Welcome to authentik!", "background": "/static/dist/assets/images/flow_background.jpg", "background_themed_urls": null, "cancel_url": "/flows/-/cancel/", "layout": "stacked"},
+  "component": "ak-stage-autosubmit",
+  "url": "https://signin.aws.amazon.com/saml",
+  "attrs": {"SAMLResponse": "@assertion_sts.xml (base64 of the file, inserted by the test)"},
+  "title": "Redirecting to AWS..."
+}

@@ -1,0 +1,9 @@
+{
+  "flow_info": {"title": "Welcome to authentik!", "background": "/static/dist/assets/images/flow_background.jpg", "background_themed_urls": null, "cancel_url": "/flows/-/cancel/", "layout": "stacked"},
+  "component": "ak-stage-identification",
+  "user_fields": ["email", "upn", "username"],
+  "password_fields": false,
+  "captcha_stage": null,
+  "sources": [],
+  "passkey_challenge": null
+}

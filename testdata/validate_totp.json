@@ -1,0 +1,9 @@
+{
+  "flow_info": {"title": "Welcome to authentik!", "background": "/static/dist/assets/images/flow_background.jpg", "background_themed_urls": null, "cancel_url": "/flows/-/cancel/", "layout": "stacked"},
+  "component": "ak-stage-authenticator-validate",
+  "pending_user": "user@example.com",
+  "device_challenges": [
+    {"device_class": "totp", "device_uid": "1", "challenge": {}, "last_used": "2026-10-19T08:00:00.000000Z"}
+  ],
+  "configuration_stages": []
+}

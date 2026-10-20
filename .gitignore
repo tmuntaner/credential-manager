@@ -4,3 +4,5 @@
 package/obs/*.tar.bz2
 license.html
 license.txt
+
+requests/*

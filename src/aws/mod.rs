@@ -1,10 +1,24 @@
-use anyhow::{anyhow, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
-mod sso_portal_api;
-pub mod sso_portal_client;
+pub mod sso;
 pub mod sts;
+
+#[derive(Debug, Error)]
+pub enum RoleError {
+    #[error(transparent)]
+    Regex(#[from] regex::Error),
+
+    #[error("arn could not be parsed")]
+    UnparsableArn,
+
+    #[error("could not parse account id")]
+    MissingAccountId,
+
+    #[error("could not parse role name")]
+    MissingRoleName,
+}
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -40,21 +54,19 @@ impl Role {
         self.account_id.clone()
     }
 
-    pub fn from_arn(arn: &str) -> Result<Self> {
+    pub fn from_arn(arn: &str) -> Result<Self, RoleError> {
         let re = Regex::new(r"arn:aws:iam::([0-9]*):role/(.*)")?;
-        let captures = re
-            .captures(arn)
-            .ok_or_else(|| anyhow!("arn could not be parsed"))?;
+        let captures = re.captures(arn).ok_or(RoleError::UnparsableArn)?;
 
         let account_id = captures
             .get(1)
-            .ok_or_else(|| anyhow!("could not parse account id"))?
+            .ok_or(RoleError::MissingAccountId)?
             .as_str()
             .to_string();
 
         let role_name = captures
             .get(2)
-            .ok_or_else(|| anyhow!("could not parse role name"))?
+            .ok_or(RoleError::MissingRoleName)?
             .as_str()
             .to_string();
 

@@ -1,0 +1,66 @@
+{
+  "flow_info": {
+    "title": "Example Login",
+    "background": "/static/dist/assets/images/flow_background.jpg",
+    "background_themed_urls": null,
+    "cancel_url": "/flows/-/cancel/",
+    "layout": "stacked"
+  },
+  "component": "ak-stage-authenticator-validate",
+  "response_errors": {
+    "non_field_errors": [
+      {
+        "string": "Empty response",
+        "code": "invalid"
+      }
+    ]
+  },
+  "pending_user": "user",
+  "pending_user_avatar": "data:image/svg+xml;base64,PHN2Zy8+",
+  "device_challenges": [
+    {
+      "device_class": "totp",
+      "device_uid": "1",
+      "challenge": {},
+      "last_used": "2026-01-01T00:00:00.000000Z"
+    },
+    {
+      "device_class": "webauthn",
+      "device_uid": "2",
+      "challenge": {
+        "challenge": "oSnOBM8ZrrXS-wx_YfEf50lukiE1Q_-9pTBEetuD8U-8umByEG28Ibo5xCZoGPFTNkEZFh_3Igx4hjHpw4vMVX",
+        "timeout": 60000,
+        "rpId": "id.example.com",
+        "allowCredentials": [
+          {
+            "id": "mrUjrpAszQeEbZJl9KvPaN",
+            "type": "public-key"
+          },
+          {
+            "id": "caD0pc9m9WV01LjUQiSuzU",
+            "type": "public-key"
+          },
+          {
+            "id": "91-aETCqmKHHq03N3b0hO5zwZ7Ieulykb3KMV812h8pDokHlzmR6zGGOkaxzrIm-",
+            "type": "public-key"
+          },
+          {
+            "id": "Zv08AlYYXYSxJYyUqBuEKYLOCnun3R-X-7yaTfEhINmwK98KA9iWpsjw29IBhPhE",
+            "type": "public-key"
+          },
+          {
+            "id": "ty_SOCq0Oj0SoM72bypnJl7S-SB-iqhe52V4QBsiJ12zZEb9-MEil8A7IN_qO4nv_lhCemBmk5qkcB_hVDV5Tp",
+            "type": "public-key"
+          },
+          {
+            "id": "Z8eHErEqa6QZVut0D62rK6rpA2f5T3qPczXB1bhS2F3clGHvwBkbptvfD3w3yyW3RQ2yqnlQwbmsrxzBolia4Y",
+            "type": "public-key"
+          }
+        ],
+        "userVerification": "preferred"
+      },
+      "last_used": "2026-01-01T00:00:00.000000Z"
+    }
+  ],
+  "configuration_stages": []
+}
