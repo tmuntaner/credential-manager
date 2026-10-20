@@ -6,6 +6,10 @@ license = "MPL-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[workspace]
+resolver = "3"
+members = ["crates/webauthn", "crates/keyring"]
+
 [dev-dependencies]
 httpmock = "0.7"
 
@@ -29,6 +33,6 @@ rpassword = "7.3"
 log = "0.4.21"
 regex = "1.10"
 futures = "0.3"
-tmuntaner-webauthn = { version = "0.1.0-alpha.18", features = ["full"] }
-tmuntaner-keyring = "0.1.0-alpha.15"
+webauthn = { path = "./crates/webauthn", features = ["full"] }
+keyring = { path = "./crates/keyring"}
 quick-xml = "0.31.0"

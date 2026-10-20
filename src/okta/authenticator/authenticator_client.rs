@@ -7,7 +7,7 @@ use std::{thread, time};
 use crate::http::api_client::ApiClient;
 use crate::okta::okta_client::MfaSelection;
 use anyhow::{anyhow, Result};
-use tmuntaner_webauthn::WebauthnClient;
+use webauthn::WebauthnClient;
 use url::Url;
 
 /// Goes through the Okta Authentication state machine to finally generate a session token.
