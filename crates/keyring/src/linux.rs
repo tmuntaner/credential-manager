@@ -52,14 +52,14 @@ impl<'a> Keyring<'a> {
         }
 
         let secret = collection
-            .get(0)
+            .first()
             .ok_or_else(|| anyhow!("could not get secret"))?
             .secret(self.session.aes_key())?;
 
         Ok(Some(secret))
     }
 
-    fn default_collection(&self) -> Result<Collection> {
+    fn default_collection(&self) -> Result<Collection<'_>> {
         let path = self.session.secrets_proxy().read_alias("default")?;
         let path_str = path.as_str().to_string();
         let connection = self.session.connection();

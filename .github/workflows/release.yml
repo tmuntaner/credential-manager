@@ -22,7 +22,7 @@ jobs:
           toolchain: stable
           override: true
 
-      - run: cargo install --locked --features cli cargo-about && cargo about generate about.txt.hbs > license.txt
+      - run: cargo install --locked --features cli cargo-about && cargo about generate about.txt.hbs -o license.txt
 
       - name: Build
         run: |
@@ -53,7 +53,7 @@ jobs:
           override: true
           target: x86_64-apple-darwin
 
-      - run: cargo install --locked --features cli cargo-about && cargo about generate about.txt.hbs > license.txt
+      - run: cargo install --locked --features cli cargo-about && cargo about generate about.txt.hbs -o license.txt
 
       - name: Build
         run: |
@@ -83,7 +83,7 @@ jobs:
           toolchain: stable
           override: true
 
-      - run: cargo install --locked --features cli cargo-about && cargo about generate about.txt.hbs > license.txt
+      - run: cargo install --locked --features cli cargo-about && cargo about generate about.txt.hbs -o license.txt
 
       - name: Build
         run: |

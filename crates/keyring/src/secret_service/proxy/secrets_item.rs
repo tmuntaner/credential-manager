@@ -43,6 +43,7 @@ trait Item {
 }
 
 #[derive(Deserialize, Serialize, Type)]
+#[allow(dead_code)]
 pub struct SecretInput {
     inner: Secret,
 }

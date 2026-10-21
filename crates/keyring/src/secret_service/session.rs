@@ -57,7 +57,7 @@ impl Session<'_> {
         })
     }
 
-    pub fn secrets_proxy(&self) -> &SecretsProxyBlocking {
+    pub fn secrets_proxy(&self) -> &SecretsProxyBlocking<'_> {
         &self.secrets
     }
 

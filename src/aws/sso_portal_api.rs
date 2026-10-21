@@ -23,6 +23,7 @@ impl SsoPortal {
     }
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait SsoPortalApi {
     async fn generate_credentials(&self, token: String, role: &Role) -> Result<Credential>;

@@ -48,14 +48,14 @@ impl<'a> WincredClient<'a> {
             Flags: CRED_FLAGS(CRED_FLAG_NONE),
             Type: CRED_TYPE(CRED_TYPE_GENERIC),
             TargetName: target,
-            Comment: PWSTR(std::ptr::null_mut() as *mut u16),
+            Comment: PWSTR(std::ptr::null_mut()),
             LastWritten: last_written,
             CredentialBlobSize: password.len() as u32 * 2,
             CredentialBlob: secret.as_ptr() as *mut u8, // byte array
             Persist: CRED_PERSIST_LOCAL_MACHINE,        // persist
             AttributeCount: 0,
             Attributes: std::ptr::null_mut(),
-            TargetAlias: PWSTR(std::ptr::null_mut() as *mut u16),
+            TargetAlias: PWSTR(std::ptr::null_mut()),
             UserName: username,
         };
 

@@ -77,24 +77,28 @@ impl OpenSessionResult {
 }
 
 #[derive(Deserialize, Serialize, Type)]
+#[allow(dead_code)]
 pub struct CreateCollectionResult {
     collection: OwnedObjectPath,
     prompt: OwnedObjectPath,
 }
 
 #[derive(Deserialize, Serialize, Type)]
+#[allow(dead_code)]
 pub struct SearchItemsResult {
     unlocked: Vec<OwnedObjectPath>,
     locked: Vec<OwnedObjectPath>,
 }
 
 #[derive(Deserialize, Serialize, Type)]
+#[allow(dead_code)]
 pub struct LockResult {
     object_paths: Vec<OwnedObjectPath>,
     prompt: OwnedObjectPath,
 }
 
 #[derive(Deserialize, Serialize, Type)]
+#[allow(dead_code)]
 pub struct UnlockResult {
     object_paths: Vec<OwnedObjectPath>,
     prompt: OwnedObjectPath,

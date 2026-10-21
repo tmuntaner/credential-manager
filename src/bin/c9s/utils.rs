@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use c9s::aws::Credential;
-use std::io::{self, BufRead, Write};
 use keyring::KeyringClient;
+use std::io::{self, BufRead, Write};
 use url::Url;
 
 pub fn get_password(
