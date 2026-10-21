@@ -70,7 +70,6 @@ impl SsoPortalLogin {
             .url()
             .host_str()
             .ok_or_else(|| anyhow!("could not get host"))?
-            .to_string()
             .split('.')
             .next()
             .ok_or_else(|| anyhow!("could not get org-id"))?

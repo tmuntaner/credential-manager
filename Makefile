@@ -12,7 +12,7 @@ clean:
 
 .PHONY: dist
 dist: clean
-	cargo about generate about.txt.hbs > license.txt
+	cargo about generate about.txt.hbs -o license.txt
 	@mkdir -p $(NAME)-$(VERSION)/
 	@cp -r src $(NAME)-$(VERSION)/
 	@cp -r Cargo.* $(NAME)-$(VERSION)/

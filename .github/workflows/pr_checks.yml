@@ -7,7 +7,16 @@ jobs:
     name: Checks for Linux
     runs-on: ubuntu-latest
     steps:
-      - run: sudo apt-get update -y && sudo apt-get install -y libudev-dev libdbus-1-dev
+      - run: sudo apt-get update -y && sudo apt-get install -y libudev-dev libdbus-1-dev gnome-keyring dbus-x11
+
+      # A session bus and an unlocked keyring for the keyring example.
+      - run: |
+          mkdir -p /home/runner/.cache/
+          mkdir -p /home/runner/.local/share/keyrings/
+          chmod 700 -R /home/runner/.local/
+      - run: DBUS_SESSION_BUS_ADDRESS=`dbus-daemon --session --print-address --fork` && echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> $GITHUB_ENV
+      - run: echo 'the-super-secret' | gnome-keyring-daemon --unlock
+      - run: eval $(echo 'the-super-secret' | gnome-keyring-daemon --start -d --components secrets) && echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> $GITHUB_ENV
 
       - name: Checkout sources
         uses: actions/checkout@v4
@@ -20,12 +29,25 @@ jobs:
           override: true
           components: rustfmt, clippy
 
-      - run: cargo install --locked cargo-about && cargo about generate about.txt.hbs > license.txt
+      - run: cargo install --locked --features cli cargo-about && cargo about generate about.txt.hbs -o license.txt
+
+      - name: Run build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --workspace --all-features
 
       - name: Run cargo test
         uses: actions-rs/cargo@v1
         with:
           command: test
+          args: --workspace
+
+      - name: Run keyring example
+        uses: actions-rs/cargo@v1
+        with:
+          command: run
+          args: -p keyring --example example
 
       - name: Run cargo fmt
         uses: actions-rs/cargo@v1
@@ -37,7 +59,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: -- -D warnings
+          args: --workspace --all-targets -- -D warnings
 
   mac:
     name: Checks for Mac
@@ -55,12 +77,25 @@ jobs:
           target: x86_64-apple-darwin
           components: rustfmt, clippy
 
-      - run: cargo install --locked cargo-about && cargo about generate about.txt.hbs > license.txt
+      - run: cargo install --locked --features cli cargo-about && cargo about generate about.txt.hbs -o license.txt
+
+      - name: Run build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --workspace --all-features
 
       - name: Run cargo test
         uses: actions-rs/cargo@v1
         with:
           command: test
+          args: --workspace
+
+      - name: Run keyring example
+        uses: actions-rs/cargo@v1
+        with:
+          command: run
+          args: -p keyring --example example
 
       - name: Run cargo fmt
         uses: actions-rs/cargo@v1
@@ -72,7 +107,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: -- -D warnings
+          args: --workspace --all-targets -- -D warnings
 
   windows:
     name: Checks for Windows
@@ -89,12 +124,25 @@ jobs:
           override: true
           components: rustfmt, clippy
 
-      - run: cargo install --locked cargo-about && cargo about generate about.txt.hbs > license.txt
+      - run: cargo install --locked --features cli cargo-about && cargo about generate about.txt.hbs -o license.txt
+
+      - name: Run build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --workspace --all-features
 
       - name: Run cargo test
         uses: actions-rs/cargo@v1
         with:
           command: test
+          args: --workspace
+
+      - name: Run keyring example
+        uses: actions-rs/cargo@v1
+        with:
+          command: run
+          args: -p keyring --example example
 
       - name: Run cargo fmt
         uses: actions-rs/cargo@v1
@@ -106,4 +154,4 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: -- -D warnings
+          args: --workspace --all-targets -- -D warnings
