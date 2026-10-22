@@ -1,0 +1,32 @@
+name: "install dependencies"
+description: "Installs the Rust toolchain, build cache and cargo tooling"
+
+inputs:
+  extra-system-packages:
+    description: "Space-separated apt packages to install on Linux, in addition to the build dependencies"
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install system packages
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y libudev-dev libdbus-1-dev gnome-keyring dbus-x11
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      with:
+        toolchain: stable
+        components: clippy, rustfmt
+
+    - name: Cache cargo artifacts
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+    - name: Install cargo-deny and cargo-about
+      uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2
+      with:
+        tool: cargo-deny,cargo-about
