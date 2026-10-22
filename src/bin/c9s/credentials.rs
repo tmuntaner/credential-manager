@@ -1,14 +1,28 @@
 use crate::utils;
 use anyhow::{anyhow, Result};
-use c9s::authentik::client::AuthentikClient;
-use c9s::authentik::mfa::MfaSelection;
-use c9s::aws::Credential;
-use c9s::settings::{AppConfig, MfaConfig, SsoProvider};
+use base::models::mfa::MfaSelection;
+use c9s::domain::models::aws::Credential;
+use c9s::domain::models::login::{AwsOverrides, RancherOverrides};
+use c9s::domain::models::rancher_credentials::RancherCredential;
+use c9s::domain::models::settings::{AppConfig, AwsAppType};
+use c9s::domain::models::user_credentials::UserCredentials;
+use c9s::domain::ports::login::LoginResolver;
+use c9s::domain::ports::rancher::{KubeconfigRenderer, RancherCredentialIssuer};
+
+use c9s::domain::models::idp::IdpType;
+use c9s::domain::ports::aws::AwsCredentialIssuer;
+use c9s::domain::services::aws_credential_issuer::AwsCredentialIssuerService;
+use c9s::domain::services::login_resolver::LoginResolverService;
+use c9s::domain::services::rancher_credential_issuer::RancherCredentialIssuerService;
+use c9s::outbound::authentik::{AuthentikClient, AuthentikOidc};
+use c9s::outbound::aws::{SsoCredentials, StsCredentials};
+use c9s::outbound::rancher::{RancherClient, RancherKubeconfig};
 use clap::Parser;
 use clap::ValueEnum;
 use serde_json::json;
-use time::format_description::well_known::Rfc3339;
+use std::time::Duration;
 use time::OffsetDateTime;
+use utils::parse_ttl;
 
 #[derive(Parser)]
 pub struct Credentials {
@@ -19,7 +33,44 @@ pub struct Credentials {
 #[derive(Parser)]
 enum CredentialsSubCommands {
     Aws(AwsCredentials),
+    Rancher(RancherCredentials),
 }
+
+#[derive(ValueEnum, PartialEq, Debug, Clone, Copy, Default)]
+enum RancherOutput {
+    /// A kubeconfig for the cluster
+    #[default]
+    Kubeconfig,
+    /// The output of a kubectl credential plugin
+    ExecCredential,
+}
+
+/// Creates a short-lived token for a cluster behind Rancher
+#[derive(Parser)]
+struct RancherCredentials {
+    /// The Rancher url, defaults to the first configured one
+    #[clap(long)]
+    url: Option<String>,
+    #[clap(short, long)]
+    username: Option<String>,
+    #[clap(short, long)]
+    with_password: bool,
+    #[clap(short, long)]
+    mfa: Option<MfaSelection>,
+    /// The display name of the cluster in Rancher
+    #[clap(short, long)]
+    cluster: String,
+    /// How long the token lives, e.g., 30m, 1h, or 1d
+    #[clap(long, default_value = "1h", value_parser = parse_ttl)]
+    ttl: Duration,
+    #[clap(long, value_enum)]
+    output: Option<RancherOutput>,
+    #[clap(long)]
+    enable_desktop_notifications: bool,
+}
+
+/// A token that expires within this long is not handed out from the cache.
+const CACHE_MARGIN: time::Duration = time::Duration::seconds(60);
 
 #[derive(ValueEnum, PartialEq, Debug, Clone, Copy, Default)]
 enum OutputOptions {
@@ -40,28 +91,31 @@ struct AwsCredentials {
     role_arn: Option<String>,
     #[clap(long)]
     region: Option<String>,
-    #[clap(short, long)]
-    mfa: Option<String>,
     #[clap(long, value_enum)]
     output: Option<OutputOptions>,
     #[clap(long)]
     enable_desktop_notifications: bool,
     #[clap(long)]
     cached: bool,
+    #[clap(short, long)]
+    mfa: Option<MfaSelection>,
+    /// Only needed when it can't be discovered by the configured hosts
     #[clap(long, value_enum)]
-    sso_provider: Option<SsoProvider>,
+    app_type: Option<AwsAppType>,
 }
 
 impl Credentials {
     pub async fn run(&self, settings: AppConfig) -> Result<()> {
+        let resolver = LoginResolverService::new(settings.clone());
         match &self.sub_command {
-            CredentialsSubCommands::Aws(val) => val.run(settings).await,
+            CredentialsSubCommands::Aws(val) => val.run(resolver, settings).await,
+            CredentialsSubCommands::Rancher(val) => val.run(resolver, settings).await,
         }
     }
 }
 
 impl AwsCredentials {
-    async fn run(&self, settings: AppConfig) -> Result<()> {
+    async fn run(&self, resolver: LoginResolverService, settings: AppConfig) -> Result<()> {
         if let Some(credential) =
             cached_credential(self.role_arn.clone(), settings.keyring_enabled())
         {
@@ -70,44 +124,22 @@ impl AwsCredentials {
             return Ok(());
         }
 
-        let aws_settings = self.find_settings(&settings)?;
+        let login = resolver.resolve_aws(&self.overrides())?;
 
         let password = utils::get_password(
-            aws_settings.app_url.clone(),
-            aws_settings.username.clone(),
+            login.password_url().to_string(),
+            login.username.clone(),
             self.with_password,
             settings.keyring_enabled(),
         )?;
 
-        let client = AuthentikClient::new(self.enable_desktop_notifications)?;
-
-        let aws_credentials = match aws_settings.provider {
-            SsoProvider::AuthentikAws => {
-                client
-                    .aws_credentials(
-                        aws_settings.username,
-                        password,
-                        aws_settings.app_url,
-                        self.role_arn.clone(),
-                        aws_settings.mfa,
-                    )
-                    .await?
-            }
-            SsoProvider::AuthentikAwsSso => {
-                client
-                    .aws_sso_credentials(
-                        aws_settings.username,
-                        password,
-                        aws_settings.app_url,
-                        aws_settings
-                            .region
-                            .ok_or_else(|| anyhow!("missing region"))?,
-                        self.role_arn.clone(),
-                        aws_settings.mfa,
-                    )
-                    .await?
-            }
-        };
+        let aws_credentials = AwsCredentialIssuerService::new(
+            Box::new(AuthentikClient::new(self.enable_desktop_notifications)),
+            Box::new(StsCredentials::new()),
+            Box::new(SsoCredentials::new()?),
+        )
+        .issue(&login, &password, self.role_arn.as_deref())
+        .await?;
 
         print_credentials(&aws_credentials, self.output)?;
         if let Some(role_arn) = &self.role_arn {
@@ -122,122 +154,91 @@ impl AwsCredentials {
         Ok(())
     }
 
-    fn find_settings(&self, settings: &AppConfig) -> Result<AwsSettings> {
-        let app_url;
-        let username;
-        let mut region = None;
-        let mfa;
-
-        let provider = self
-            .sso_provider
-            .unwrap_or_else(|| settings.aws_defaults().sso_provider());
-
-        match provider {
-            SsoProvider::AuthentikAws => {
-                let default_settings = match self.app_url.clone() {
-                    Some(app_url) => settings.find_aws_host(app_url),
-                    None => settings.aws_hosts(),
-                };
-
-                mfa = get_mfa_option(self.mfa.clone(), &default_settings);
-                app_url = match self.app_url.clone() {
-                    None => default_settings
-                        .clone()
-                        .ok_or_else(|| anyhow!("please supply an app-url"))?
-                        .app_url(),
-                    Some(url) => url,
-                };
-
-                username = match self.username.clone() {
-                    None => default_settings
-                        .ok_or_else(|| anyhow!("please supply a username"))?
-                        .username(),
-                    Some(url) => url,
-                };
-            }
-            SsoProvider::AuthentikAwsSso => {
-                let default_settings = match self.app_url.clone() {
-                    Some(app_url) => settings.find_aws_sso_host(app_url),
-                    None => settings.aws_sso_hosts(),
-                };
-
-                mfa = get_mfa_option(self.mfa.clone(), &default_settings);
-
-                app_url = match self.app_url.clone() {
-                    None => default_settings
-                        .clone()
-                        .ok_or_else(|| anyhow!("please supply an app-url"))?
-                        .app_url(),
-                    Some(url) => url,
-                };
-
-                username = match self.username.clone() {
-                    None => default_settings
-                        .clone()
-                        .ok_or_else(|| anyhow!("please supply a username"))?
-                        .username(),
-                    Some(url) => url,
-                };
-
-                region = match self.region.clone() {
-                    None => {
-                        let region = default_settings
-                            .ok_or_else(|| anyhow!("please supply a region"))?
-                            .region();
-                        Some(region)
-                    }
-                    Some(region) => Some(region),
-                };
-            }
+    fn overrides(&self) -> AwsOverrides {
+        AwsOverrides {
+            app_url: self.app_url.clone(),
+            app_type: self.app_type,
+            username: self.username.clone(),
+            mfa: self.mfa,
+            region: self.region.clone(),
         }
-
-        Ok(AwsSettings {
-            app_url,
-            username,
-            region,
-            mfa,
-            provider,
-        })
     }
 }
 
-struct AwsSettings {
-    app_url: String,
-    username: String,
-    region: Option<String>,
-    mfa: Option<MfaSelection>,
-    provider: SsoProvider,
-}
+impl RancherCredentials {
+    async fn run(&self, resolver: LoginResolverService, settings: AppConfig) -> Result<()> {
+        let rancher = resolver.resolve_rancher(&self.overrides())?;
+        let cache_key = format!("rancher:{}:{}", rancher.url, self.cluster);
+        let keyring_enabled = settings.keyring_enabled();
 
-fn get_mfa_option<T: MfaConfig>(
-    mfa: Option<String>,
-    default_settings: &Option<T>,
-) -> Option<MfaSelection> {
-    match mfa {
-        Some(mfa) => Some(MfaSelection::from_string(mfa)),
-        None => match default_settings {
-            Some(settings) => settings.mfa(),
-            None => None,
-        },
+        let cached: Option<RancherCredential> =
+            utils::get_cached_credential(&cache_key, keyring_enabled).unwrap_or_default();
+        if let Some(credential) = cached
+            .filter(|credential| credential.is_valid_at(OffsetDateTime::now_utc(), CACHE_MARGIN))
+        {
+            return self.print(&credential);
+        }
+
+        let password = utils::get_password(
+            rancher.idp_url.clone(),
+            rancher.username.clone(),
+            self.with_password,
+            keyring_enabled,
+        )?;
+
+        let authorizer = match rancher.idp_type {
+            IdpType::Authentik => Box::new(AuthentikOidc::new(
+                rancher.idp_url,
+                rancher.client_id,
+                self.enable_desktop_notifications,
+            )),
+        };
+
+        let credential = RancherCredentialIssuerService::new(
+            authorizer,
+            Box::new(RancherClient::new(&rancher.url)?),
+        )
+        .issue(
+            UserCredentials {
+                username: rancher.username,
+                password,
+                mfa: rancher.mfa,
+            },
+            &self.cluster,
+            self.ttl,
+        )
+        .await?;
+
+        self.print(&credential)?;
+        utils::set_cached_credential(&cache_key, &credential, keyring_enabled)?;
+
+        Ok(())
+    }
+
+    fn print(&self, credential: &RancherCredential) -> Result<()> {
+        let renderer = RancherKubeconfig;
+        match self.output.unwrap_or_default() {
+            RancherOutput::Kubeconfig => print!("{}", renderer.kubeconfig(credential)),
+            RancherOutput::ExecCredential => println!("{}", renderer.exec_credential(credential)),
+        }
+
+        Ok(())
+    }
+
+    fn overrides(&self) -> RancherOverrides {
+        RancherOverrides {
+            url: self.url.clone(),
+            username: self.username.clone(),
+            mfa: self.mfa,
+        }
     }
 }
 
 fn cached_credential(role_arn: Option<String>, keyring_enabled: bool) -> Option<Credential> {
-    if let Some(role_arn) = role_arn {
-        let credential =
-            utils::get_cached_credential(&role_arn, keyring_enabled).unwrap_or_default();
-        if let Some(credential) = &credential {
-            let expires = OffsetDateTime::parse(credential.expiration().as_str(), &Rfc3339).ok()?;
-            let now = OffsetDateTime::now_utc();
-            if now > expires {
-                return None;
-            }
-        }
+    let credential: Option<Credential> =
+        utils::get_cached_credential(&role_arn?, keyring_enabled).unwrap_or_default();
 
-        return credential;
-    }
-
-    None
+    credential.filter(|credential| credential.is_valid_at(OffsetDateTime::now_utc()))
 }
 
 fn print_credentials(aws_credentials: &[Credential], output: Option<OutputOptions>) -> Result<()> {
@@ -281,154 +282,96 @@ fn print_credentials(aws_credentials: &[Credential], output: Option<OutputOption
 #[cfg(test)]
 mod tests {
     use super::*;
-    use c9s::settings::AwsHost;
 
-    const AWS_URL: &str = "https://id.example.com/application/saml/aws/sso/binding/init";
     const SSO_URL: &str = "https://id.example.com/application/saml/sso/sso/binding/init";
-
-    fn settings(default_provider: &str) -> AppConfig {
-        toml::from_str(&format!(
-            r#"
-            [global_settings.aws_defaults]
-            sso_provider = "{default_provider}"
-
-            [[authentik_aws_hosts]]
-            app_url = "{AWS_URL}"
-            username = "aws-user@example.com"
-            mfa = "totp"
-
-            [[authentik_aws_sso_hosts]]
-            app_url = "{SSO_URL}"
-            username = "sso-user@example.com"
-            region = "eu-central-1"
-            mfa = "webauthn"
-            "#
-        ))
-        .unwrap()
-    }
 
     fn aws_credentials(args: &[&str]) -> Result<AwsCredentials, clap::Error> {
         let mut argv = vec!["creds", "aws"];
         argv.extend(args);
 
         let credentials = Credentials::try_parse_from(argv)?;
-        let CredentialsSubCommands::Aws(aws) = credentials.sub_command;
+        let CredentialsSubCommands::Aws(aws) = credentials.sub_command else {
+            panic!("expected the aws subcommand");
+        };
 
         Ok(aws)
     }
 
+    fn rancher_credentials(args: &[&str]) -> Result<RancherCredentials, clap::Error> {
+        let mut argv = vec!["creds", "rancher"];
+        argv.extend(args);
+
+        let credentials = Credentials::try_parse_from(argv)?;
+        let CredentialsSubCommands::Rancher(rancher) = credentials.sub_command else {
+            panic!("expected the rancher subcommand");
+        };
+
+        Ok(rancher)
+    }
+
     #[test]
-    fn parses_the_authentik_providers() {
-        for (name, provider) in [
-            ("authentik-aws", SsoProvider::AuthentikAws),
-            ("authentik-aws-sso", SsoProvider::AuthentikAwsSso),
-        ] {
-            let aws = aws_credentials(&["--sso-provider", name]).unwrap();
-            assert_eq!(aws.sso_provider, Some(provider));
+    fn parses_the_app_types() {
+        for (name, app_type) in [("aws", AwsAppType::Aws), ("aws-sso", AwsAppType::AwsSso)] {
+            let aws = aws_credentials(&["--app-type", name]).unwrap();
+            assert_eq!(aws.app_type, Some(app_type));
         }
+        assert!(aws_credentials(&["--app-type", "authentik-aws"]).is_err());
     }
 
     #[test]
     fn the_okta_provider_and_mfa_provider_flag_are_gone() {
-        assert!(aws_credentials(&["--sso-provider", "okta-aws"]).is_err());
+        assert!(aws_credentials(&["--app-type", "okta-aws"]).is_err());
         assert!(aws_credentials(&["--mfa-provider", "google"]).is_err());
     }
 
     #[test]
-    fn uses_the_default_provider_and_its_first_host() {
-        let aws = aws_credentials(&[]).unwrap();
-
-        let found = aws.find_settings(&settings("authentik-aws")).unwrap();
-        assert_eq!(found.provider, SsoProvider::AuthentikAws);
-        assert_eq!(found.app_url, AWS_URL);
-        assert_eq!(found.username, "aws-user@example.com");
-        assert!(found.region.is_none());
-        assert!(matches!(found.mfa, Some(MfaSelection::Totp)));
-
-        let found = aws.find_settings(&settings("authentik-aws-sso")).unwrap();
-        assert_eq!(found.provider, SsoProvider::AuthentikAwsSso);
-        assert_eq!(found.app_url, SSO_URL);
-        assert_eq!(found.region.as_deref(), Some("eu-central-1"));
-        assert!(matches!(found.mfa, Some(MfaSelection::WebAuthn)));
-    }
-
-    #[test]
-    fn flags_override_the_stored_host() {
+    fn the_flags_become_the_overrides() {
         let aws = aws_credentials(&[
-            "--sso-provider",
-            "authentik-aws-sso",
+            "--app-type",
+            "aws-sso",
             "--app-url",
             SSO_URL,
-            "--username",
-            "other@example.com",
+            "-u",
+            "user",
+            "-m",
+            "TOTP",
             "--region",
             "us-east-1",
-            "--mfa",
-            "totp",
         ])
         .unwrap();
 
-        let found = aws.find_settings(&settings("authentik-aws")).unwrap();
-        assert_eq!(found.username, "other@example.com");
-        assert_eq!(found.region.as_deref(), Some("us-east-1"));
-        assert!(matches!(found.mfa, Some(MfaSelection::Totp)));
-    }
+        let overrides = aws.overrides();
+        assert_eq!(overrides.app_type, Some(AwsAppType::AwsSso));
+        assert_eq!(overrides.app_url.as_deref(), Some(SSO_URL));
+        assert_eq!(overrides.username.as_deref(), Some("user"));
+        assert_eq!(overrides.mfa, Some(MfaSelection::Totp));
+        assert_eq!(overrides.region.as_deref(), Some("us-east-1"));
 
-    #[test]
-    fn settings_are_required_when_nothing_is_stored() {
-        let empty: AppConfig = toml::from_str("").unwrap();
-
-        let err = aws_credentials(&[])
+        let rancher = rancher_credentials(&["-c", "x", "--url", "https://r", "-m", "webauthn"])
             .unwrap()
-            .find_settings(&empty)
-            .err()
-            .unwrap();
-        assert_eq!(err.to_string(), "please supply an app-url");
-
-        let err = aws_credentials(&["--sso-provider", "authentik-aws-sso", "--app-url", SSO_URL])
-            .unwrap()
-            .find_settings(&empty)
-            .err()
-            .unwrap();
-        assert_eq!(err.to_string(), "please supply a username");
+            .overrides();
+        assert_eq!(rancher.url.as_deref(), Some("https://r"));
+        assert_eq!(rancher.mfa, Some(MfaSelection::WebAuthn));
+        assert!(rancher.username.is_none());
     }
 
     #[test]
-    fn a_url_that_is_not_stored_needs_a_username() {
-        let aws = aws_credentials(&["--app-url", "https://other.example.com/init"]).unwrap();
-
-        let err = aws.find_settings(&settings("authentik-aws")).err().unwrap();
-        assert_eq!(err.to_string(), "please supply a username");
+    fn an_unknown_mfa_is_rejected_while_parsing() {
+        assert!(aws_credentials(&["-m", "sms"]).is_err());
+        assert!(rancher_credentials(&["-c", "x", "-m", "sms"]).is_err());
     }
 
     #[test]
-    fn an_sso_url_without_a_region_needs_one() {
-        let aws = aws_credentials(&[
-            "--sso-provider",
-            "authentik-aws-sso",
-            "--app-url",
-            "https://other.example.com/init",
-            "--username",
-            "u",
-        ])
-        .unwrap();
+    fn rancher_needs_a_cluster_and_defaults_to_an_hour() {
+        assert!(rancher_credentials(&[]).is_err());
 
-        let err = aws.find_settings(&settings("authentik-aws")).err().unwrap();
-        assert_eq!(err.to_string(), "please supply a region");
-    }
+        let rancher = rancher_credentials(&["--cluster", "op-prg2-1"]).unwrap();
+        assert_eq!(rancher.ttl, Duration::from_secs(3600));
+        assert!(rancher.output.is_none());
 
-    #[test]
-    fn an_mfa_flag_wins_over_the_stored_selection() {
-        let stored: Option<AwsHost> = settings("authentik-aws").aws_hosts();
-
-        assert!(matches!(
-            get_mfa_option(Some("webauthn".to_string()), &stored),
-            Some(MfaSelection::WebAuthn)
-        ));
-        assert!(matches!(
-            get_mfa_option(None, &stored),
-            Some(MfaSelection::Totp)
-        ));
-        assert!(get_mfa_option::<AwsHost>(None, &None).is_none());
+        let rancher =
+            rancher_credentials(&["-c", "x", "--output", "exec-credential", "--ttl", "5m"])
+                .unwrap();
+        assert_eq!(rancher.output, Some(RancherOutput::ExecCredential));
     }
 }

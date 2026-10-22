@@ -1,0 +1,20 @@
+{
+  "authProvider": "genericoidc",
+  "baseType": "token",
+  "clusterId": "c-m-j2xw7jk8",
+  "created": "2026-10-22T15:21:26Z",
+  "createdTS": 1792682486000,
+  "creatorId": null,
+  "current": false,
+  "description": "c9s",
+  "enabled": true,
+  "expired": false,
+  "expiresAt": "",
+  "id": "token-bpx5g",
+  "isDerived": true,
+  "name": "token-bpx5g",
+  "token": "token-bpx5g:secret",
+  "ttl": 3600000,
+  "type": "token",
+  "userId": "u-example"
+}
