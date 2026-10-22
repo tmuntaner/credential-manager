@@ -5,87 +5,97 @@ on:
     tags:
       - '*'
 
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   release-linux:
     name: Release for Linux
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
-      - run: sudo apt-get update -y && sudo apt-get install -y libudev-dev libdbus-1-dev
-
       - name: Checkout sources
-        uses: actions/checkout@v4
-
-      - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
+          persist-credentials: false
 
-      - run: cargo install --locked --features cli cargo-about && cargo about generate about.txt.hbs -o license.txt
+      - name: Install dependencies
+        uses: ./.github/actions/install-dependencies
+
+      - name: Generate licenses
+        run: cargo about generate about.txt.hbs -o license.txt
 
       - name: Build
         run: |
-          cargo build --all --release && strip target/release/c9s && mv target/release/c9s target/release/c9s_amd64
+          cargo build --all --release
+          strip target/release/c9s
+          mv target/release/c9s target/release/c9s_amd64
           cd target/release && sha256sum c9s_amd64 > c9s_amd64.SHA256SUM
 
       - name: Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
             target/release/c9s_amd64
             target/release/c9s_amd64.SHA256SUM
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-mac:
     name: Release for Mac
     runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v4
-
-      - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
-          target: x86_64-apple-darwin
+          persist-credentials: false
 
-      - run: cargo install --locked --features cli cargo-about && cargo about generate about.txt.hbs -o license.txt
+      - name: Install dependencies
+        uses: ./.github/actions/install-dependencies
+
+      - name: Generate licenses
+        run: cargo about generate about.txt.hbs -o license.txt
 
       - name: Build
         run: |
-          cargo build --all --release && strip target/release/c9s && mv target/release/c9s target/release/c9s_darwin
+          cargo build --all --release
+          strip target/release/c9s
+          mv target/release/c9s target/release/c9s_darwin
           cd target/release && shasum -a 256 c9s_darwin > c9s_darwin.SHA256SUM
 
       - name: Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
             target/release/c9s_darwin
             target/release/c9s_darwin.SHA256SUM
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-windows:
     name: Release for Windows
     runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v4
-
-      - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
+          persist-credentials: false
 
-      - run: cargo install --locked --features cli cargo-about && cargo about generate about.txt.hbs -o license.txt
+      - name: Install dependencies
+        uses: ./.github/actions/install-dependencies
+
+      - name: Generate licenses
+        run: cargo about generate about.txt.hbs -o license.txt
 
       - name: Build
+        shell: pwsh
         run: |
           cargo build --all --release
           cd target\release
@@ -93,10 +103,8 @@ jobs:
           "$sum c9s.exe" | Out-File .\c9s.exe.SHA256SUM
 
       - name: Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
             target/release/c9s.exe
             target/release/c9s.exe.SHA256SUM
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

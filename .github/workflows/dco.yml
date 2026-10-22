@@ -1,0 +1,44 @@
+name: DCO Check
+
+on:
+  pull_request:
+
+jobs:
+  check-dco:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Verify Signed-off-by Line
+        env:
+          GIT_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -e
+
+          git fetch origin "${GIT_REF}"
+          COMMITS=$(git rev-list "origin/${GIT_REF}..HEAD" --no-merges)
+
+          FAILED=0
+          for COMMIT in $COMMITS; do
+            COMMIT_MSG=$(git log -1 --format=%B "${COMMIT}")
+
+            if ! echo "$COMMIT_MSG" | grep -Fq "Signed-off-by:"; then
+              echo "Commit $COMMIT is missing a DCO Sign-off!"
+              FAILED=1
+            fi
+          done
+
+          if [ $FAILED -ne 0 ]; then
+            echo "--------------------------------------------------------"
+            echo "DCO check failed! Please sign-off your commits."
+            echo "You can fix this by running: git rebase --signoff origin/${GIT_REF}"
+            echo "--------------------------------------------------------"
+            exit 1
+          fi
+
+          echo "All commits successfully verified with DCO."

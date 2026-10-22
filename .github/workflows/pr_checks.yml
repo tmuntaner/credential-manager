@@ -1,157 +1,72 @@
 name: PR Checks
 
-on: [pull_request]
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  linux:
-    name: Checks for Linux
-    runs-on: ubuntu-latest
+  checks:
+    name: Checks for ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+          - name: Mac
+            os: macos-latest
+          - name: Windows
+            os: windows-latest
     steps:
-      - run: sudo apt-get update -y && sudo apt-get install -y libudev-dev libdbus-1-dev gnome-keyring dbus-x11
+      - name: Checkout sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        uses: ./.github/actions/install-dependencies
 
       # A session bus and an unlocked keyring for the keyring example.
-      - run: |
+      - name: Set up keyring
+        if: runner.os == 'Linux'
+        run: |
           mkdir -p /home/runner/.cache/
           mkdir -p /home/runner/.local/share/keyrings/
           chmod 700 -R /home/runner/.local/
-      - run: DBUS_SESSION_BUS_ADDRESS=`dbus-daemon --session --print-address --fork` && echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> $GITHUB_ENV
-      - run: echo 'the-super-secret' | gnome-keyring-daemon --unlock
-      - run: eval $(echo 'the-super-secret' | gnome-keyring-daemon --start -d --components secrets) && echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> $GITHUB_ENV
+          export DBUS_SESSION_BUS_ADDRESS=$(dbus-daemon --session --print-address --fork)
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          echo 'the-super-secret' | gnome-keyring-daemon --unlock
+          eval "$(echo 'the-super-secret' | gnome-keyring-daemon --start -d --components secrets)"
+          echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> "$GITHUB_ENV"
 
-      - name: Checkout sources
-        uses: actions/checkout@v4
-
-      - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-          components: rustfmt, clippy
-
-      - run: cargo install --locked --features cli cargo-about && cargo about generate about.txt.hbs -o license.txt
+      - name: Generate licenses
+        run: cargo about generate about.txt.hbs -o license.txt
 
       - name: Run build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --workspace --all-features
+        run: cargo build --workspace --all-features
 
-      - name: Run cargo test
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --workspace
+      - name: Run Rust tests
+        run: cargo test --workspace
 
       - name: Run keyring example
-        uses: actions-rs/cargo@v1
-        with:
-          command: run
-          args: -p keyring --example example
+        run: cargo run -p keyring --example example
 
       - name: Run cargo fmt
-        uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
+        run: cargo fmt --all -- --check
+
+      - name: Run cargo deny
+        run: cargo deny check licenses
 
       - name: Run cargo clippy
-        uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: --workspace --all-targets -- -D warnings
-
-  mac:
-    name: Checks for Mac
-    runs-on: macos-latest
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v4
-
-      - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-          target: x86_64-apple-darwin
-          components: rustfmt, clippy
-
-      - run: cargo install --locked --features cli cargo-about && cargo about generate about.txt.hbs -o license.txt
-
-      - name: Run build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --workspace --all-features
-
-      - name: Run cargo test
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --workspace
-
-      - name: Run keyring example
-        uses: actions-rs/cargo@v1
-        with:
-          command: run
-          args: -p keyring --example example
-
-      - name: Run cargo fmt
-        uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
-
-      - name: Run cargo clippy
-        uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: --workspace --all-targets -- -D warnings
-
-  windows:
-    name: Checks for Windows
-    runs-on: windows-latest
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v4
-
-      - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-          components: rustfmt, clippy
-
-      - run: cargo install --locked --features cli cargo-about && cargo about generate about.txt.hbs -o license.txt
-
-      - name: Run build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --workspace --all-features
-
-      - name: Run cargo test
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --workspace
-
-      - name: Run keyring example
-        uses: actions-rs/cargo@v1
-        with:
-          command: run
-          args: -p keyring --example example
-
-      - name: Run cargo fmt
-        uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
-
-      - name: Run cargo clippy
-        uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
