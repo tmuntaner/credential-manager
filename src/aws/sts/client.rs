@@ -1,15 +1,24 @@
 use crate::aws::Credential;
-use anyhow::{anyhow, Result};
 use aws_sdk_sts::config::Region;
 use aws_sdk_sts::operation::assume_role_with_saml::AssumeRoleWithSamlOutput;
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use futures::future;
+use thiserror::Error;
 use time::format_description::well_known::Rfc3339;
+
+#[derive(Debug, Error)]
+pub enum StsError {
+    #[error("{0}")]
+    Request(String),
+
+    #[error("Could not get credentials from STS")]
+    NoCredentials,
+}
 
 pub struct StsClient {}
 
 impl StsClient {
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Result<Self, StsError> {
         Ok(Self {})
     }
 
@@ -17,7 +26,7 @@ impl StsClient {
         &self,
         saml_response: String,
         saml_aws_credentials: Vec<SamlAWSRole>,
-    ) -> Result<Vec<Credential>> {
+    ) -> Result<Vec<Credential>, StsError> {
         let futures = future::join_all(saml_aws_credentials.into_iter().map(|role| {
             let config = aws_sdk_sts::Config::builder()
                 .region(Some(Region::new(String::from("eu-central-1"))))
@@ -33,7 +42,7 @@ impl StsClient {
 
             let role_arn = role.role_arn;
             async move {
-                let response = saml.await.map_err(|e| anyhow!(e.to_string()));
+                let response = saml.await.map_err(|e| StsError::Request(e.to_string()));
 
                 StsFuture {
                     role_arn,
@@ -47,9 +56,7 @@ impl StsClient {
 
         for future in futures {
             let response = future.request?;
-            let credentials = response
-                .credentials
-                .ok_or_else(|| anyhow!("Could not get credentials from STS"))?;
+            let credentials = response.credentials.ok_or(StsError::NoCredentials)?;
             let expiration_timestamp = credentials
                 .expiration
                 .to_time()
@@ -77,5 +84,5 @@ pub struct SamlAWSRole {
 
 struct StsFuture {
     role_arn: String,
-    request: Result<AssumeRoleWithSamlOutput>,
+    request: Result<AssumeRoleWithSamlOutput, StsError>,
 }

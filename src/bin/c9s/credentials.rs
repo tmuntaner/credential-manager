@@ -1,8 +1,9 @@
 use crate::utils;
 use anyhow::{anyhow, Result};
+use c9s::authentik::client::AuthentikClient;
+use c9s::authentik::mfa::MfaSelection;
 use c9s::aws::Credential;
-use c9s::okta::okta_client::{MfaSelection, OktaClient};
-use c9s::settings::{AppConfig, OktaMfa, SsoProvider};
+use c9s::settings::{AppConfig, MfaConfig, SsoProvider};
 use clap::Parser;
 use clap::ValueEnum;
 use serde_json::json;
@@ -41,8 +42,6 @@ struct AwsCredentials {
     region: Option<String>,
     #[clap(short, long)]
     mfa: Option<String>,
-    #[clap(long)]
-    mfa_provider: Option<String>,
     #[clap(long, value_enum)]
     output: Option<OutputOptions>,
     #[clap(long)]
@@ -80,10 +79,10 @@ impl AwsCredentials {
             settings.keyring_enabled(),
         )?;
 
-        let client = OktaClient::new(self.enable_desktop_notifications)?;
+        let client = AuthentikClient::new(self.enable_desktop_notifications)?;
 
         let aws_credentials = match aws_settings.provider {
-            SsoProvider::OktaAws => {
+            SsoProvider::AuthentikAws => {
                 client
                     .aws_credentials(
                         aws_settings.username,
@@ -91,11 +90,10 @@ impl AwsCredentials {
                         aws_settings.app_url,
                         self.role_arn.clone(),
                         aws_settings.mfa,
-                        aws_settings.mfa_provider,
                     )
                     .await?
             }
-            SsoProvider::OktaAwsSso => {
+            SsoProvider::AuthentikAwsSso => {
                 client
                     .aws_sso_credentials(
                         aws_settings.username,
@@ -106,7 +104,6 @@ impl AwsCredentials {
                             .ok_or_else(|| anyhow!("missing region"))?,
                         self.role_arn.clone(),
                         aws_settings.mfa,
-                        aws_settings.mfa_provider,
                     )
                     .await?
             }
@@ -130,21 +127,19 @@ impl AwsCredentials {
         let username;
         let mut region = None;
         let mfa;
-        let mfa_provider;
 
         let provider = self
             .sso_provider
             .unwrap_or_else(|| settings.aws_defaults().sso_provider());
 
         match provider {
-            SsoProvider::OktaAws => {
+            SsoProvider::AuthentikAws => {
                 let default_settings = match self.app_url.clone() {
                     Some(app_url) => settings.find_aws_host(app_url),
                     None => settings.aws_hosts(),
                 };
 
                 mfa = get_mfa_option(self.mfa.clone(), &default_settings);
-                mfa_provider = get_mfa_provider(self.mfa_provider.clone(), &default_settings);
                 app_url = match self.app_url.clone() {
                     None => default_settings
                         .clone()
@@ -160,14 +155,13 @@ impl AwsCredentials {
                     Some(url) => url,
                 };
             }
-            SsoProvider::OktaAwsSso => {
+            SsoProvider::AuthentikAwsSso => {
                 let default_settings = match self.app_url.clone() {
                     Some(app_url) => settings.find_aws_sso_host(app_url),
                     None => settings.aws_sso_hosts(),
                 };
 
                 mfa = get_mfa_option(self.mfa.clone(), &default_settings);
-                mfa_provider = get_mfa_provider(self.mfa_provider.clone(), &default_settings);
 
                 app_url = match self.app_url.clone() {
                     None => default_settings
@@ -202,7 +196,6 @@ impl AwsCredentials {
             username,
             region,
             mfa,
-            mfa_provider,
             provider,
         })
     }
@@ -213,11 +206,10 @@ struct AwsSettings {
     username: String,
     region: Option<String>,
     mfa: Option<MfaSelection>,
-    mfa_provider: Option<String>,
     provider: SsoProvider,
 }
 
-fn get_mfa_option<T: OktaMfa>(
+fn get_mfa_option<T: MfaConfig>(
     mfa: Option<String>,
     default_settings: &Option<T>,
 ) -> Option<MfaSelection> {
@@ -225,19 +217,6 @@ fn get_mfa_option<T: OktaMfa>(
         Some(mfa) => Some(MfaSelection::from_string(mfa)),
         None => match default_settings {
             Some(settings) => settings.mfa(),
-            None => None,
-        },
-    }
-}
-
-fn get_mfa_provider<T: OktaMfa>(
-    mfa_provider: Option<String>,
-    default_settings: &Option<T>,
-) -> Option<String> {
-    match mfa_provider {
-        Some(mfa) => Some(mfa),
-        None => match default_settings {
-            Some(default_settings) => default_settings.mfa_provider(),
             None => None,
         },
     }
@@ -297,4 +276,159 @@ fn print_credentials(aws_credentials: &[Credential], output: Option<OutputOption
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use c9s::settings::AwsHost;
+
+    const AWS_URL: &str = "https://id.example.com/application/saml/aws/sso/binding/init";
+    const SSO_URL: &str = "https://id.example.com/application/saml/sso/sso/binding/init";
+
+    fn settings(default_provider: &str) -> AppConfig {
+        toml::from_str(&format!(
+            r#"
+            [global_settings.aws_defaults]
+            sso_provider = "{default_provider}"
+
+            [[authentik_aws_hosts]]
+            app_url = "{AWS_URL}"
+            username = "aws-user@example.com"
+            mfa = "totp"
+
+            [[authentik_aws_sso_hosts]]
+            app_url = "{SSO_URL}"
+            username = "sso-user@example.com"
+            region = "eu-central-1"
+            mfa = "webauthn"
+            "#
+        ))
+        .unwrap()
+    }
+
+    fn aws_credentials(args: &[&str]) -> Result<AwsCredentials, clap::Error> {
+        let mut argv = vec!["creds", "aws"];
+        argv.extend(args);
+
+        let credentials = Credentials::try_parse_from(argv)?;
+        let CredentialsSubCommands::Aws(aws) = credentials.sub_command;
+
+        Ok(aws)
+    }
+
+    #[test]
+    fn parses_the_authentik_providers() {
+        for (name, provider) in [
+            ("authentik-aws", SsoProvider::AuthentikAws),
+            ("authentik-aws-sso", SsoProvider::AuthentikAwsSso),
+        ] {
+            let aws = aws_credentials(&["--sso-provider", name]).unwrap();
+            assert_eq!(aws.sso_provider, Some(provider));
+        }
+    }
+
+    #[test]
+    fn the_okta_provider_and_mfa_provider_flag_are_gone() {
+        assert!(aws_credentials(&["--sso-provider", "okta-aws"]).is_err());
+        assert!(aws_credentials(&["--mfa-provider", "google"]).is_err());
+    }
+
+    #[test]
+    fn uses_the_default_provider_and_its_first_host() {
+        let aws = aws_credentials(&[]).unwrap();
+
+        let found = aws.find_settings(&settings("authentik-aws")).unwrap();
+        assert_eq!(found.provider, SsoProvider::AuthentikAws);
+        assert_eq!(found.app_url, AWS_URL);
+        assert_eq!(found.username, "aws-user@example.com");
+        assert!(found.region.is_none());
+        assert!(matches!(found.mfa, Some(MfaSelection::Totp)));
+
+        let found = aws.find_settings(&settings("authentik-aws-sso")).unwrap();
+        assert_eq!(found.provider, SsoProvider::AuthentikAwsSso);
+        assert_eq!(found.app_url, SSO_URL);
+        assert_eq!(found.region.as_deref(), Some("eu-central-1"));
+        assert!(matches!(found.mfa, Some(MfaSelection::WebAuthn)));
+    }
+
+    #[test]
+    fn flags_override_the_stored_host() {
+        let aws = aws_credentials(&[
+            "--sso-provider",
+            "authentik-aws-sso",
+            "--app-url",
+            SSO_URL,
+            "--username",
+            "other@example.com",
+            "--region",
+            "us-east-1",
+            "--mfa",
+            "totp",
+        ])
+        .unwrap();
+
+        let found = aws.find_settings(&settings("authentik-aws")).unwrap();
+        assert_eq!(found.username, "other@example.com");
+        assert_eq!(found.region.as_deref(), Some("us-east-1"));
+        assert!(matches!(found.mfa, Some(MfaSelection::Totp)));
+    }
+
+    #[test]
+    fn settings_are_required_when_nothing_is_stored() {
+        let empty: AppConfig = toml::from_str("").unwrap();
+
+        let err = aws_credentials(&[])
+            .unwrap()
+            .find_settings(&empty)
+            .err()
+            .unwrap();
+        assert_eq!(err.to_string(), "please supply an app-url");
+
+        let err = aws_credentials(&["--sso-provider", "authentik-aws-sso", "--app-url", SSO_URL])
+            .unwrap()
+            .find_settings(&empty)
+            .err()
+            .unwrap();
+        assert_eq!(err.to_string(), "please supply a username");
+    }
+
+    #[test]
+    fn a_url_that_is_not_stored_needs_a_username() {
+        let aws = aws_credentials(&["--app-url", "https://other.example.com/init"]).unwrap();
+
+        let err = aws.find_settings(&settings("authentik-aws")).err().unwrap();
+        assert_eq!(err.to_string(), "please supply a username");
+    }
+
+    #[test]
+    fn an_sso_url_without_a_region_needs_one() {
+        let aws = aws_credentials(&[
+            "--sso-provider",
+            "authentik-aws-sso",
+            "--app-url",
+            "https://other.example.com/init",
+            "--username",
+            "u",
+        ])
+        .unwrap();
+
+        let err = aws.find_settings(&settings("authentik-aws")).err().unwrap();
+        assert_eq!(err.to_string(), "please supply a region");
+    }
+
+    #[test]
+    fn an_mfa_flag_wins_over_the_stored_selection() {
+        let stored: Option<AwsHost> = settings("authentik-aws").aws_hosts();
+
+        assert!(matches!(
+            get_mfa_option(Some("webauthn".to_string()), &stored),
+            Some(MfaSelection::WebAuthn)
+        ));
+        assert!(matches!(
+            get_mfa_option(None, &stored),
+            Some(MfaSelection::Totp)
+        ));
+        assert!(get_mfa_option::<AwsHost>(None, &None).is_none());
+    }
 }

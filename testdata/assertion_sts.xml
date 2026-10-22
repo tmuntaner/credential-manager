@@ -1,0 +1,32 @@
+<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_response" Version="2.0" IssueInstant="2026-01-01T00:00:00Z" Destination="https://signin.aws.amazon.com/saml">
+  <saml:Issuer>https://id.example.com</saml:Issuer>
+  <samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>
+  <saml:Assertion ID="_assertion" Version="2.0" IssueInstant="2026-01-01T00:00:00Z">
+    <saml:Issuer>https://id.example.com</saml:Issuer>
+    <saml:Subject>
+      <saml:NameID Format="urn:oasis:names:tc:SAML:2.0:nameid-format:persistent">synthetic-name-id</saml:NameID>
+      <saml:SubjectConfirmationData NotOnOrAfter="2026-01-01T00:05:00Z" Recipient="https://signin.aws.amazon.com/saml"/>
+    </saml:Subject>
+    <saml:Conditions NotBefore="2026-01-01T00:00:00Z" NotOnOrAfter="2026-01-01T00:05:00Z">
+      <saml:AudienceRestriction><saml:Audience>https://signin.aws.amazon.com/saml</saml:Audience></saml:AudienceRestriction>
+    </saml:Conditions>
+    <saml:AuthnStatement AuthnInstant="2026-01-01T00:00:00Z">
+      <saml:AuthnContext><saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:MobileTwoFactorContract</saml:AuthnContextClassRef></saml:AuthnContext>
+    </saml:AuthnStatement>
+    <saml:AttributeStatement>
+      <saml:Attribute Name="https://aws.amazon.com/SAML/Attributes/Role">
+        <saml:AttributeValue>arn:aws:iam::111111111111:role/ExampleAdmin,arn:aws:iam::111111111111:saml-provider/EXAMPLEID</saml:AttributeValue>
+        <saml:AttributeValue>arn:aws:iam::222222222222:role/ExampleReadOnly,arn:aws:iam::222222222222:saml-provider/EXAMPLEID</saml:AttributeValue>
+      </saml:Attribute>
+      <saml:Attribute Name="https://aws.amazon.com/SAML/Attributes/RoleSessionName">
+        <saml:AttributeValue>user@example.com</saml:AttributeValue>
+      </saml:Attribute>
+      <saml:Attribute Name="https://aws.amazon.com/SAML/Attributes/SessionDuration">
+        <saml:AttributeValue>43200</saml:AttributeValue>
+      </saml:Attribute>
+      <saml:Attribute Name="email">
+        <saml:AttributeValue>user@example.com</saml:AttributeValue>
+      </saml:Attribute>
+    </saml:AttributeStatement>
+  </saml:Assertion>
+</samlp:Response>

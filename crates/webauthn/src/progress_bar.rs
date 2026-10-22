@@ -1,4 +1,4 @@
-use crate::WebauthnNotifier;
+use crate::{WebauthnError, WebauthnNotifier};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
 
@@ -29,14 +29,14 @@ impl ProgressBarFallbackNotifier {
 }
 
 impl WebauthnNotifier for ProgressBarFallbackNotifier {
-    fn notify_start(&self) -> anyhow::Result<()> {
+    fn notify_start(&self) -> Result<(), WebauthnError> {
         self.progress_bar
             .set_message("Please insert and activate your U2F device...");
 
         Ok(())
     }
 
-    fn notify_end(&self) -> anyhow::Result<()> {
+    fn notify_end(&self) -> Result<(), WebauthnError> {
         self.progress_bar
             .finish_with_message("Processing sign request...");
 

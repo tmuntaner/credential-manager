@@ -1,4 +1,19 @@
 -------------------------------------------------------------------
+Tue Oct 20 13:24:31 UTC 2026 - Thomas Muntaner <tmuntaner@suse.com>
+
+- Version 0.1.0-alpha18
+- Replace Okta with authentik (breaking change):
+  * log in through authentik's flow executor API, with TOTP and WebAuthn
+    (USB security keys) as MFA methods
+  * the okta-aws and okta-aws-sso subcommands and provider names are now
+    authentik-aws and authentik-aws-sso; the app url is the SAML
+    application's .../sso/binding/init/ url
+  * remove the --mfa-provider flag and Okta Push
+  * okta_aws_hosts and okta_aws_sso_hosts settings are ignored, not migrated
+  * saved passwords are asked for again, the keyring entry is keyed on the
+    identity provider's domain
+
+-------------------------------------------------------------------
 Sat Sep  4 11:48:24 UTC 2021 - Thomas Muntaner <tmuntaner@suse.com>
 
 - Version 0.1.0

@@ -1,11 +1,30 @@
 use crate::aws::{Account, Credential, Role};
+use crate::http::api_client::ApiError;
 use crate::http::api_client::{AcceptType, ApiClient};
-use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use thiserror::Error;
 use time::format_description::well_known::Rfc3339;
 use url::Url;
+
+#[derive(Debug, Error)]
+pub enum SsoPortalError {
+    #[error(transparent)]
+    Api(#[from] ApiError),
+
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+
+    #[error(transparent)]
+    Url(#[from] url::ParseError),
+
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+
+    #[error(transparent)]
+    InvalidExpiration(#[from] time::error::ComponentRange),
+}
 
 // https://docs.aws.amazon.com/singlesignon/latest/PortalAPIReference/ssoportal-api.pdf
 pub struct SsoPortal {
@@ -14,7 +33,7 @@ pub struct SsoPortal {
 }
 
 impl SsoPortal {
-    pub fn new(portal_base_url: String) -> Result<SsoPortal> {
+    pub fn new(portal_base_url: String) -> Result<SsoPortal, SsoPortalError> {
         let client = ApiClient::new()?;
         Ok(SsoPortal {
             client,
@@ -26,14 +45,26 @@ impl SsoPortal {
 #[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait SsoPortalApi {
-    async fn generate_credentials(&self, token: String, role: &Role) -> Result<Credential>;
-    async fn list_accounts(&self, token: String) -> Result<Vec<Account>>;
-    async fn list_roles(&self, token: String, account_id: String) -> Result<Vec<Role>>;
+    async fn generate_credentials(
+        &self,
+        token: String,
+        role: &Role,
+    ) -> Result<Credential, SsoPortalError>;
+    async fn list_accounts(&self, token: String) -> Result<Vec<Account>, SsoPortalError>;
+    async fn list_roles(
+        &self,
+        token: String,
+        account_id: String,
+    ) -> Result<Vec<Role>, SsoPortalError>;
 }
 
 #[async_trait]
 impl SsoPortalApi for SsoPortal {
-    async fn generate_credentials(&self, token: String, role: &Role) -> Result<Credential> {
+    async fn generate_credentials(
+        &self,
+        token: String,
+        role: &Role,
+    ) -> Result<Credential, SsoPortalError> {
         let mut token_url = Url::parse(self.portal_base_url.as_str())?;
         token_url.set_path("/federation/credentials");
 
@@ -69,7 +100,7 @@ impl SsoPortalApi for SsoPortal {
         })
     }
 
-    async fn list_accounts(&self, token: String) -> Result<Vec<Account>> {
+    async fn list_accounts(&self, token: String) -> Result<Vec<Account>, SsoPortalError> {
         let mut next_token: Option<String> = None;
         let mut accounts: Vec<Account> = vec![];
 
@@ -110,7 +141,11 @@ impl SsoPortalApi for SsoPortal {
         Ok(accounts)
     }
 
-    async fn list_roles(&self, token: String, account_id: String) -> Result<Vec<Role>> {
+    async fn list_roles(
+        &self,
+        token: String,
+        account_id: String,
+    ) -> Result<Vec<Role>, SsoPortalError> {
         let mut next_token: Option<String> = None;
         let mut roles: Vec<Role> = vec![];
 

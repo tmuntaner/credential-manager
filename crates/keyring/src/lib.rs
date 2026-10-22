@@ -1,10 +1,6 @@
-/*
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
+mod errors;
 
-use anyhow::Result;
+pub use errors::KeyringError;
 
 #[cfg(target_os = "linux")]
 mod secret_service;
@@ -48,17 +44,21 @@ impl<'a> KeyringClient<'a> {
     /// * `username` - The username to store secrets under
     /// * `service` - A unique identifier within your application
     /// * `application` - The name of your application
-    pub fn new(username: &'a str, service: &'a str, application: &'a str) -> Result<Self> {
+    pub fn new(
+        username: &'a str,
+        service: &'a str,
+        application: &'a str,
+    ) -> Result<Self, KeyringError> {
         let client = Keyring::new(username, service, application)?;
 
         Ok(KeyringClient { client })
     }
 
-    pub fn set_password(&self, password: String) -> Result<()> {
+    pub fn set_password(&self, password: String) -> Result<(), KeyringError> {
         self.client.set_password(password)
     }
 
-    pub fn get_password(&self) -> Result<Option<String>> {
+    pub fn get_password(&self) -> Result<Option<String>, KeyringError> {
         self.client.get_password()
     }
 }

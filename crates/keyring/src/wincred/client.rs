@@ -4,7 +4,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-use anyhow::{anyhow, Result};
+use crate::errors::KeyringError;
 use std::ffi::c_void;
 use widestring::{U16CString, U16String};
 use windows::core::{PCWSTR, PWSTR};
@@ -20,11 +20,11 @@ pub struct WincredClient<'a> {
 }
 
 impl<'a> WincredClient<'a> {
-    pub fn new(username: &'a str, service: &'a str) -> Result<Self> {
+    pub fn new(username: &'a str, service: &'a str) -> Result<Self, KeyringError> {
         Ok(Self { username, service })
     }
 
-    pub fn set_password(&self, password: String) -> Result<()> {
+    pub fn set_password(&self, password: String) -> Result<(), KeyringError> {
         // <https://docs.microsoft.com/en-us/windows/win32/api/minwinbase/ns-minwinbase-filetime>
         // <https://microsoft.github.io/windows-docs-rs/doc/bindings/Windows/Win32/Foundation/struct.FILETIME.html>
         let last_written = Box::new(FILETIME::default());
@@ -69,11 +69,11 @@ impl<'a> WincredClient<'a> {
         if result.as_bool() {
             Ok(())
         } else {
-            Err(anyhow!("failed to save windows credential"))
+            Err(KeyringError::SaveCredential)
         }
     }
 
-    pub fn get_password(&self) -> Result<Option<String>> {
+    pub fn get_password(&self) -> Result<Option<String>, KeyringError> {
         let target = U16CString::from_str(self.service)?;
         let target_ptr = target.as_ptr();
 

@@ -1,0 +1,18 @@
+<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_response" Version="2.0" IssueInstant="2026-01-01T00:00:00Z" Destination="https://eu-central-1.signin.aws.amazon.com/platform/saml/acs/00000000-0000-0000-0000-000000000000">
+  <saml:Issuer>https://id.example.com</saml:Issuer>
+  <samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>
+  <saml:Assertion ID="_assertion" Version="2.0" IssueInstant="2026-01-01T00:00:00Z">
+    <saml:Issuer>https://id.example.com</saml:Issuer>
+    <saml:Subject>
+      <saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">user@example.com</saml:NameID>
+      <saml:SubjectConfirmationData NotOnOrAfter="2026-01-01T00:05:00Z" Recipient="https://eu-central-1.signin.aws.amazon.com/platform/saml/acs/00000000-0000-0000-0000-000000000000"/>
+    </saml:Subject>
+    <saml:Conditions NotBefore="2026-01-01T00:00:00Z" NotOnOrAfter="2026-01-01T00:05:00Z">
+      <saml:AudienceRestriction><saml:Audience>https://eu-central-1.signin.aws.amazon.com/platform/saml/00000000-0000-0000-0000-000000000000</saml:Audience></saml:AudienceRestriction>
+    </saml:Conditions>
+    <saml:AuthnStatement AuthnInstant="2026-01-01T00:00:00Z">
+      <saml:AuthnContext><saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:MobileTwoFactorContract</saml:AuthnContextClassRef></saml:AuthnContext>
+    </saml:AuthnStatement>
+    <saml:AttributeStatement/>
+  </saml:Assertion>
+</samlp:Response>

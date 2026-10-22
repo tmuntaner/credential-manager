@@ -1,4 +1,4 @@
-use crate::WebauthnNotifier;
+use crate::{WebauthnError, WebauthnNotifier};
 use notify_rust::Notification;
 
 pub struct DesktopNotificationsFallbackNotifier {}
@@ -10,7 +10,7 @@ impl DesktopNotificationsFallbackNotifier {
 }
 
 impl WebauthnNotifier for DesktopNotificationsFallbackNotifier {
-    fn notify_start(&self) -> anyhow::Result<()> {
+    fn notify_start(&self) -> Result<(), WebauthnError> {
         Notification::new()
             .summary("WebAuthn")
             .body("Please insert and activate your U2F device.")
@@ -19,7 +19,7 @@ impl WebauthnNotifier for DesktopNotificationsFallbackNotifier {
         Ok(())
     }
 
-    fn notify_end(&self) -> anyhow::Result<()> {
+    fn notify_end(&self) -> Result<(), WebauthnError> {
         Ok(())
     }
 }

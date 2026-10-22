@@ -6,7 +6,9 @@ accepted = [
     "BSD-2-Clause",
     "CC0-1.0",
     "ISC",
-    "Unicode-DFS-2016"
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
 ]
 
 workarounds = [
@@ -17,3 +19,9 @@ workarounds = [
 accepted = [
     "OpenSSL"
 ]
+
+[stringmetrics.clarify]
+license = "Apache-2.0"
+[[stringmetrics.clarify.files]]
+path = "LICENSE"
+checksum = "408bbc4d10bdf74d8c9b74b64ea4910603257e24133da18edc4d16198e3b4010"

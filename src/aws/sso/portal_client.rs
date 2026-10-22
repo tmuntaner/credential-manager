@@ -1,6 +1,5 @@
-use crate::aws::sso_portal_api::{SsoPortal, SsoPortalApi};
+use crate::aws::sso::portal_api::{SsoPortal, SsoPortalApi, SsoPortalError};
 use crate::aws::{Credential, Role};
-use anyhow::Result;
 use futures::future;
 
 pub struct SsoPortalClient {
@@ -8,7 +7,7 @@ pub struct SsoPortalClient {
 }
 
 impl SsoPortalClient {
-    pub fn new(portal_base_url: String) -> Result<Self> {
+    pub fn new(portal_base_url: String) -> Result<Self, SsoPortalError> {
         let api_client = SsoPortal::new(portal_base_url)?;
 
         Ok(SsoPortalClient {
@@ -20,7 +19,7 @@ impl SsoPortalClient {
         &self,
         token: String,
         roles: Vec<Role>,
-    ) -> Result<Vec<Credential>> {
+    ) -> Result<Vec<Credential>, SsoPortalError> {
         let mut credentials = vec![];
 
         let futures = future::join_all(roles.into_iter().map(|role| {
@@ -41,7 +40,7 @@ impl SsoPortalClient {
         Ok(credentials)
     }
 
-    pub async fn list_role_arns(&self, token: String) -> Result<Vec<Role>> {
+    pub async fn list_role_arns(&self, token: String) -> Result<Vec<Role>, SsoPortalError> {
         let accounts = self.api_client.list_accounts(token.clone()).await?;
         let mut roles = vec![];
 
@@ -67,11 +66,11 @@ impl SsoPortalClient {
 }
 
 struct RolesFuture {
-    roles: Result<Vec<Role>>,
+    roles: Result<Vec<Role>, SsoPortalError>,
 }
 
 struct CredentialsFuture {
-    credentials: Result<Credential>,
+    credentials: Result<Credential, SsoPortalError>,
 }
 
 #[cfg(test)]
@@ -84,7 +83,11 @@ mod tests {
 
     #[async_trait]
     impl SsoPortalApi for SsoPortalApiTest {
-        async fn generate_credentials(&self, _token: String, role: &Role) -> Result<Credential> {
+        async fn generate_credentials(
+            &self,
+            _token: String,
+            role: &Role,
+        ) -> Result<Credential, SsoPortalError> {
             let role_arn = Some(role.role_arn());
 
             Ok(Credential {
@@ -96,7 +99,7 @@ mod tests {
             })
         }
 
-        async fn list_accounts(&self, _token: String) -> Result<Vec<Account>> {
+        async fn list_accounts(&self, _token: String) -> Result<Vec<Account>, SsoPortalError> {
             Ok(vec![
                 Account {
                     account_id: String::from("AccountId1"),
@@ -111,7 +114,11 @@ mod tests {
             ])
         }
 
-        async fn list_roles(&self, _token: String, account_id: String) -> Result<Vec<Role>> {
+        async fn list_roles(
+            &self,
+            _token: String,
+            account_id: String,
+        ) -> Result<Vec<Role>, SsoPortalError> {
             Ok(vec![Role {
                 role_name: format!("Role for account {account_id}"),
                 account_id,

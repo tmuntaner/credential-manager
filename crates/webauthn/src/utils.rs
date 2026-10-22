@@ -1,24 +1,61 @@
-/*
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
-
-use crate::CollectedClientData;
-use anyhow::Result;
+use crate::WebauthnError;
+use serde::Serialize;
 use url::Url;
 
-pub fn client_data(origin: String, challenge_str: String) -> Result<String> {
-    let caller_origin = Url::parse(origin.as_str())?;
+/// The client data of an assertion for authentik, serialized like a browser does.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AssertionClientData<'a> {
+    #[serde(rename = "type")]
+    sign_type: &'a str,
+    challenge: &'a str,
+    origin: String,
+    cross_origin: bool,
+}
 
-    let collected_client_data = CollectedClientData {
-        sign_type: "webauthn.get".to_string(),
+/// The `clientDataJSON` of a WebAuthn assertion, as a browser builds it: no `tokenBinding`, and
+/// `crossOrigin: false`.
+pub fn assertion_client_data(origin: &str, challenge_str: &str) -> Result<String, WebauthnError> {
+    let caller_origin = Url::parse(origin)?;
+
+    let client_data = AssertionClientData {
+        sign_type: "webauthn.get",
         challenge: challenge_str,
         origin: caller_origin.origin().unicode_serialization(),
-        token_binding: None,
-        cross_origin: None,
+        cross_origin: false,
     };
-    let client_data = serde_json::to_string(&collected_client_data)?;
 
-    Ok(client_data)
+    Ok(serde_json::to_string(&client_data)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assertion_client_data_matches_what_a_browser_sends() {
+        let json = assertion_client_data("https://id.example.com", "abc_DEF-123").unwrap();
+
+        assert_eq!(
+            json,
+            r#"{"type":"webauthn.get","challenge":"abc_DEF-123","origin":"https://id.example.com","crossOrigin":false}"#
+        );
+        assert!(!json.contains("tokenBinding"));
+    }
+
+    #[test]
+    fn assertion_client_data_normalizes_the_origin() {
+        let json = assertion_client_data("https://id.example.com:443/some/path", "c").unwrap();
+
+        assert!(
+            json.contains(r#""origin":"https://id.example.com""#),
+            "{}",
+            json
+        );
+    }
+
+    #[test]
+    fn assertion_client_data_rejects_an_invalid_origin() {
+        assert!(assertion_client_data("not a url", "c").is_err());
+    }
 }

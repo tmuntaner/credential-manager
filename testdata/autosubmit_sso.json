@@ -1,0 +1,7 @@
+{
+  "flow_info": {"title": "Welcome to authentik!", "background": "/static/dist/assets/images/flow_background.jpg", "background_themed_urls": null, "cancel_url": "/flows/-/cancel/", "layout": "stacked"},
+  "component": "ak-stage-autosubmit",
+  "url": "https://eu-central-1.signin.aws.amazon.com/platform/saml/acs/00000000-0000-0000-0000-000000000000",
+  "attrs": {"SAMLResponse": "@assertion_sso.xml (base64 of the file, inserted by the test)"},
+  "title": "Redirecting to AWS IAM Identity Center..."
+}
