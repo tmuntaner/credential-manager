@@ -5,7 +5,8 @@ mod utils;
 use crate::config::Config;
 use crate::credentials::Credentials;
 use anyhow::Result;
-use c9s::settings::AppConfig;
+use c9s::domain::ports::config::ConfigStore;
+use c9s::outbound::config::config_store::ConfigFileAdapter;
 use clap::Parser;
 
 #[derive(Parser)]
@@ -40,10 +41,14 @@ impl Licenses {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opt: Opts = Opts::parse();
-    let mut settings = AppConfig::read_config()?;
+    let store = ConfigFileAdapter::in_user_config_dir()?;
+    let mut settings = store.load()?;
 
     match opt.sub_command {
-        SubCommand::Config(val) => val.run(&mut settings)?,
+        SubCommand::Config(val) => {
+            val.run(&mut settings)?;
+            store.save(&settings)?;
+        }
         SubCommand::Creds(val) => val.run(settings).await?,
         SubCommand::Licenses(val) => val.run()?,
     }

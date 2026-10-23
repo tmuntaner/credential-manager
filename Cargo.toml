@@ -8,39 +8,54 @@ license = "MPL-2.0"
 
 [workspace]
 resolver = "3"
-members = ["crates/webauthn", "crates/keyring"]
+members = ["crates/base", "crates/webauthn", "crates/keyring", "crates/rancher", "crates/authentik"]
 
 [workspace.dependencies]
+base = { path = "./crates/base" }
+rancher = { path = "./crates/rancher" }
+authentik = { path = "./crates/authentik" }
+
 thiserror = "2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 base64 = "0.23.1"
 url = "2.5.0"
 sha2 = "0.11"
-
-[dev-dependencies]
+time = { version = "0.3.34", features = ["formatting", "parsing", "serde-well-known"] }
+reqwest = { version = "0.13", features = ["json", "cookies", "form"] }
+tokio = { version = "1", features = ["full"] }
 httpmock = "0.8"
+mockall = "0.15"
+async-trait = "0.1.78"
+log = "0.4.21"
+toml = "1"
 
 [dependencies]
-reqwest = { version = "0.13", features = ["json", "cookies", "form"] }
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true }
 anyhow = "1.0"
 url = { workspace = true }
 base64 = { workspace = true }
 thiserror = { workspace = true }
 aws-sdk-sts = { version = "1.17.0", features = ["behavior-version-latest"] }
 aws-smithy-types-convert = { version = "0.61", features = ["convert-time"] }
-time = { version = "0.3.34", features = ["formatting", "parsing"] }
+time = { workspace = true }
 clap = { version = "4.5.3", features = ["derive"] }
-async-trait = "0.1.78"
-toml = "1"
+async-trait = { workspace = true }
+toml = { workspace = true }
 dirs = "7"
 rpassword = "7.3"
-log = "0.4.21"
+log = { workspace = true }
 regex = "1.10"
 futures = "0.3"
+base = { workspace = true }
+rancher = { workspace = true }
+authentik = { workspace = true }
 webauthn = { path = "./crates/webauthn", features = ["full"] }
 keyring = { path = "./crates/keyring"}
 quick-xml = "0.42"
+
+[dev-dependencies]
+httpmock = { workspace = true,  }
