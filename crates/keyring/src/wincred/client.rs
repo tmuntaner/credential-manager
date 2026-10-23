@@ -8,7 +8,7 @@ use crate::errors::KeyringError;
 use std::ffi::c_void;
 use widestring::{U16CString, U16String};
 use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::{Foundation::*, Security::Credentials::*, System::SystemInformation::*};
+use windows::Win32::{Security::Credentials::*, System::SystemInformation::*};
 
 // <https://docs.microsoft.com/en-us/windows/win32/api/wincred/ns-wincred-credentialw#members>
 const CRED_FLAG_NONE: u32 = 0;
@@ -27,13 +27,8 @@ impl<'a> WincredClient<'a> {
     pub fn set_password(&self, password: String) -> Result<(), KeyringError> {
         // <https://docs.microsoft.com/en-us/windows/win32/api/minwinbase/ns-minwinbase-filetime>
         // <https://microsoft.github.io/windows-docs-rs/doc/bindings/Windows/Win32/Foundation/struct.FILETIME.html>
-        let last_written = Box::new(FILETIME::default());
-        let last_written_ptr: *mut FILETIME = Box::into_raw(last_written); // we're now responsible for freeing this
-
         // <https://docs.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-getsystemtimeasfiletime>
-        // <https://microsoft.github.io/windows-docs-rs/doc/bindings/Windows/Win32/System/SystemInformation/fn.GetSystemTimeAsFileTime.html>
-        unsafe { GetSystemTimeAsFileTime(last_written_ptr) };
-        let last_written = unsafe { *last_written_ptr };
+        let last_written = unsafe { GetSystemTimeAsFileTime() };
 
         let target = U16CString::from_str(self.service)?;
         let target = PWSTR(target.as_ptr() as *mut u16);
@@ -60,13 +55,9 @@ impl<'a> WincredClient<'a> {
         };
 
         // <https://docs.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew>
-        // https://microsoft.github.io/windows-docs-rs/doc/bindings/Windows/Win32/Foundation/struct.BOOL.html
-        let result: BOOL = unsafe { CredWriteW(&cred, CRED_FLAG_NONE) };
+        let result = unsafe { CredWriteW(&cred, CRED_FLAG_NONE) };
 
-        // after calling Box::into_raw, we're responsible for cleaning up filetime.
-        unsafe { drop(Box::from_raw(last_written_ptr)) }
-
-        if result.as_bool() {
+        if result.is_ok() {
             Ok(())
         } else {
             Err(KeyringError::SaveCredential)
@@ -81,19 +72,18 @@ impl<'a> WincredClient<'a> {
         let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
         let credential_ptr: *mut *mut CREDENTIALW = &mut credential;
 
-        // https://microsoft.github.io/windows-docs-rs/doc/bindings/Windows/Win32/Foundation/struct.BOOL.html
-        let result: BOOL = unsafe {
+        let result = unsafe {
             // <https://docs.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credreadw>
             // <https://microsoft.github.io/windows-docs-rs/doc/bindings/Windows/Win32/Security/Credentials/fn.CredReadW.html>
             CredReadW(
                 PCWSTR(target_ptr as *mut u16),
-                CRED_TYPE_GENERIC,
-                CRED_FLAG_NONE,
+                CRED_TYPE(CRED_TYPE_GENERIC),
+                Some(CRED_FLAG_NONE),
                 credential_ptr,
             )
         };
 
-        let secret = if result.as_bool() {
+        let secret = if result.is_ok() {
             let secret = unsafe {
                 U16String::from_ptr(
                     (*credential).CredentialBlob as *const u16,

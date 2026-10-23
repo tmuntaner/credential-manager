@@ -16,7 +16,7 @@ thiserror = { workspace = true }
 widestring = "1.0"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows]
-version = "^0.43"
+version = "^0.62"
 features = [
     "Win32_Foundation",
     "Win32_Security_Credentials",
