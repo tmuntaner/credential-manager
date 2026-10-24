@@ -37,6 +37,44 @@ pub struct WebauthnAssertion {
     pub signature: Vec<u8>,
 }
 
+/// The result of enrolling a FIDO2 credential with the `hmac-secret` extension enabled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HmacEnrollment {
+    pub credential_id: Vec<u8>,
+}
+
+/// Enrolls a new credential with the FIDO2 `hmac-secret` extension enabled.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn enroll_hmac_secret(rp_id: &str) -> Result<HmacEnrollment, WebauthnError> {
+    mozilla::enroll_hmac_secret(rp_id)
+}
+
+/// Enrolls a new credential with the FIDO2 `hmac-secret` extension enabled.
+#[cfg(target_os = "windows")]
+pub fn enroll_hmac_secret(_rp_id: &str) -> Result<HmacEnrollment, WebauthnError> {
+    Err(WebauthnError::UnsupportedPlatform)
+}
+
+/// Derives a 32-byte secret from a credential using the FIDO2 `hmac-secret` extension and a 32-byte salt.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn derive_hmac_secret(
+    rp_id: &str,
+    credential_id: &[u8],
+    salt: &[u8; 32],
+) -> Result<[u8; 32], WebauthnError> {
+    mozilla::derive_hmac_secret(rp_id, credential_id, salt)
+}
+
+/// Derives a 32-byte secret from a credential using the FIDO2 `hmac-secret` extension and a 32-byte salt.
+#[cfg(target_os = "windows")]
+pub fn derive_hmac_secret(
+    _rp_id: &str,
+    _credential_id: &[u8],
+    _salt: &[u8; 32],
+) -> Result<[u8; 32], WebauthnError> {
+    Err(WebauthnError::UnsupportedPlatform)
+}
+
 #[derive(Default)]
 pub struct WebauthnClient {
     notifiers: Vec<Box<dyn WebauthnNotifier>>,

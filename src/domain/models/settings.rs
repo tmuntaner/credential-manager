@@ -27,6 +27,9 @@ pub enum SettingsError {
 
     #[error("cannot be base")]
     CannotBeBase,
+
+    #[error("base64 decode error: {0}")]
+    DecodeBase64(String),
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -38,10 +41,48 @@ pub struct AppConfig {
     rancher_hosts: Option<Vec<RancherHost>>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq, Eq)]
 pub struct GlobalSettings {
     use_keyring: Option<bool>,
     default_idp: Option<String>,
+    yubikey: Option<YubikeyConfig>,
+    wrap_cached_secrets: Option<bool>,
+}
+
+/// Configuration for hardware-backed secret wrapping using a YubiKey.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct YubikeyConfig {
+    pub credential_id: String,
+    pub rp_id: String,
+    pub salt: String,
+}
+
+impl YubikeyConfig {
+    pub fn new(credential_id: &[u8], rp_id: impl Into<String>, salt: &[u8; 32]) -> Self {
+        use base64::Engine;
+        Self {
+            credential_id: base64::engine::general_purpose::STANDARD.encode(credential_id),
+            rp_id: rp_id.into(),
+            salt: base64::engine::general_purpose::STANDARD.encode(salt),
+        }
+    }
+
+    pub fn decode_credential_id(&self) -> Result<Vec<u8>, SettingsError> {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(&self.credential_id)
+            .map_err(|e| SettingsError::DecodeBase64(e.to_string()))
+    }
+
+    pub fn decode_salt(&self) -> Result<[u8; 32], SettingsError> {
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&self.salt)
+            .map_err(|e| SettingsError::DecodeBase64(e.to_string()))?;
+        bytes
+            .try_into()
+            .map_err(|_| SettingsError::DecodeBase64("salt must be exactly 32 bytes".to_string()))
+    }
 }
 
 /// An identity provider that apps log in with, so that the instance, username and MFA are configured once.
@@ -103,6 +144,29 @@ impl AppConfig {
             .as_ref()
             .and_then(|global_settings| global_settings.use_keyring)
             .unwrap_or(true)
+    }
+
+    pub fn yubikey_config(&self) -> Option<&YubikeyConfig> {
+        self.global_settings
+            .as_ref()
+            .and_then(|g| g.yubikey.as_ref())
+    }
+
+    pub fn set_yubikey(&mut self, config: Option<YubikeyConfig>) {
+        let global_settings = self.global_settings.get_or_insert_with(Default::default);
+        global_settings.yubikey = config;
+    }
+
+    pub fn wrap_cached_secrets_enabled(&self) -> bool {
+        self.global_settings
+            .as_ref()
+            .and_then(|g| g.wrap_cached_secrets)
+            .unwrap_or(false)
+    }
+
+    pub fn set_wrap_cached_secrets(&mut self, enabled: bool) {
+        let global_settings = self.global_settings.get_or_insert_with(Default::default);
+        global_settings.wrap_cached_secrets = Some(enabled);
     }
 
     pub fn add_idp(&mut self, idp: Idp) {
@@ -761,5 +825,37 @@ mod tests {
 
         assert!(new("not a url").is_err());
         assert!(new("https://rancher.example.com").is_ok());
+    }
+
+    #[test]
+    fn settings_roundtrip_with_yubikey_and_wrap_cached() {
+        let mut settings = config("");
+        let yk = YubikeyConfig::new(&[1, 2, 3, 4], "localhost", &[0x55; 32]);
+        settings.set_yubikey(Some(yk.clone()));
+        settings.set_wrap_cached_secrets(true);
+
+        let toml_str = toml::to_string(&settings).unwrap();
+        let deserialized: AppConfig = toml::from_str(&toml_str).unwrap();
+
+        assert_eq!(deserialized.yubikey_config(), Some(&yk));
+        assert!(deserialized.wrap_cached_secrets_enabled());
+
+        let cred_id = yk.decode_credential_id().unwrap();
+        assert_eq!(cred_id, vec![1, 2, 3, 4]);
+        let salt = yk.decode_salt().unwrap();
+        assert_eq!(salt, [0x55; 32]);
+    }
+
+    #[test]
+    fn legacy_settings_without_yubikey_deserializes_correctly() {
+        let toml_str = r#"
+            [global_settings]
+            use_keyring = true
+            default_idp = "suse"
+        "#;
+        let settings: AppConfig = toml::from_str(toml_str).unwrap();
+        assert!(settings.keyring_enabled());
+        assert_eq!(settings.yubikey_config(), None);
+        assert!(!settings.wrap_cached_secrets_enabled());
     }
 }

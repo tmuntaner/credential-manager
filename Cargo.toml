@@ -57,5 +57,12 @@ webauthn = { path = "./crates/webauthn", features = ["full"] }
 keyring = { path = "./crates/keyring"}
 quick-xml = "0.42"
 
+zeroize = { version = "1", features = ["derive"] }
+aes-gcm = "0.11.1"
+hkdf = "0.13"
+sha2 = { workspace = true }
+getrandom = "0.4.3"
+
 [dev-dependencies]
 httpmock = { workspace = true,  }
+mockall = { workspace = true }

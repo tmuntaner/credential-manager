@@ -11,11 +11,13 @@ use c9s::domain::ports::rancher::{KubeconfigRenderer, RancherCredentialIssuer};
 
 use c9s::domain::models::idp::IdpType;
 use c9s::domain::ports::aws::AwsCredentialIssuer;
+use c9s::domain::ports::secret_store::SecretStore;
 use c9s::domain::services::aws_credential_issuer::AwsCredentialIssuerService;
 use c9s::domain::services::login_resolver::LoginResolverService;
 use c9s::domain::services::rancher_credential_issuer::RancherCredentialIssuerService;
 use c9s::outbound::authentik::{AuthentikOidcClient, AuthentikSamlClient};
 use c9s::outbound::aws::{SsoCredentials, StsCredentials};
+use c9s::outbound::keyring::KeyringSecretStore;
 use c9s::outbound::rancher::{RancherClient, RancherKubeconfig};
 use clap::Parser;
 use clap::ValueEnum;
@@ -116,9 +118,9 @@ impl Credentials {
 
 impl AwsCredentials {
     async fn run(&self, resolver: LoginResolverService, settings: AppConfig) -> Result<()> {
-        if let Some(credential) =
-            cached_credential(self.role_arn.clone(), settings.keyring_enabled())
-        {
+        let (idp_store, cache_store) = create_secret_stores(&settings)?;
+
+        if let Some(credential) = cached_credential(self.role_arn.clone(), cache_store.as_deref()) {
             print_credentials(&[credential], self.output)?;
 
             return Ok(());
@@ -130,7 +132,7 @@ impl AwsCredentials {
             login.password_url().to_string(),
             login.username.clone(),
             self.with_password,
-            settings.keyring_enabled(),
+            idp_store.as_deref(),
         )?;
 
         let aws_credentials = AwsCredentialIssuerService::new(
@@ -147,7 +149,7 @@ impl AwsCredentials {
                 let credential = aws_credentials
                     .first()
                     .ok_or_else(|| anyhow!("failed to get credential"))?;
-                utils::set_cached_credential(role_arn, credential, settings.keyring_enabled())?;
+                utils::set_cached_credential(role_arn, credential, cache_store.as_deref())?;
             }
         }
 
@@ -169,10 +171,10 @@ impl RancherCredentials {
     async fn run(&self, resolver: LoginResolverService, settings: AppConfig) -> Result<()> {
         let rancher = resolver.resolve_rancher(&self.overrides())?;
         let cache_key = format!("rancher:{}:{}", rancher.url, self.cluster);
-        let keyring_enabled = settings.keyring_enabled();
+        let (idp_store, cache_store) = create_secret_stores(&settings)?;
 
         let cached: Option<RancherCredential> =
-            utils::get_cached_credential(&cache_key, keyring_enabled).unwrap_or_default();
+            utils::get_cached_credential(&cache_key, cache_store.as_deref()).unwrap_or_default();
         if let Some(credential) = cached
             .filter(|credential| credential.is_valid_at(OffsetDateTime::now_utc(), CACHE_MARGIN))
         {
@@ -183,7 +185,7 @@ impl RancherCredentials {
             rancher.idp_url.clone(),
             rancher.username.clone(),
             self.with_password,
-            keyring_enabled,
+            idp_store.as_deref(),
         )?;
 
         let authorizer = match rancher.idp_type {
@@ -210,7 +212,7 @@ impl RancherCredentials {
         .await?;
 
         self.print(&credential)?;
-        utils::set_cached_credential(&cache_key, &credential, keyring_enabled)?;
+        utils::set_cached_credential(&cache_key, &credential, cache_store.as_deref())?;
 
         Ok(())
     }
@@ -234,9 +236,67 @@ impl RancherCredentials {
     }
 }
 
-fn cached_credential(role_arn: Option<String>, keyring_enabled: bool) -> Option<Credential> {
+type OptionalStore = Option<Box<dyn SecretStore>>;
+
+fn create_secret_stores(settings: &AppConfig) -> Result<(OptionalStore, OptionalStore)> {
+    // if the keyring is disabled, return early
+    if !settings.keyring_enabled() {
+        return Ok((None, None));
+    }
+
+    // get the yubikey from the config
+    if let Some(yk) = settings.yubikey_config() {
+        #[cfg(target_os = "windows")]
+        {
+            let _ = yk;
+            return Err(anyhow!("YubiKey wrapping is not supported on Windows"));
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            // find the yubikey and the salt
+            let credential_id = yk.decode_credential_id()?;
+            let salt = yk.decode_salt()?;
+
+            // build the wrapper
+            let wrapper =
+                c9s::outbound::yubikey::YubikeyWrapper::new(&yk.rp_id, credential_id, salt);
+
+            // build the wrapping secret store
+            let idp_store = c9s::domain::services::wrapping_secret_store::WrappingSecretStore::new(
+                KeyringSecretStore::new(),
+                wrapper.clone(),
+            );
+
+            // Get the cache store depending on if wrapped cached secrets are enabled.
+            // If enabled, it will wrap secrets other than idp credentials.
+            let cache_store: Box<dyn SecretStore> = if settings.wrap_cached_secrets_enabled() {
+                Box::new(
+                    c9s::domain::services::wrapping_secret_store::WrappingSecretStore::new(
+                        KeyringSecretStore::new(),
+                        wrapper,
+                    ),
+                )
+            } else {
+                Box::new(KeyringSecretStore::new())
+            };
+
+            return Ok((Some(Box::new(idp_store)), Some(cache_store)));
+        }
+    }
+
+    Ok((
+        Some(Box::new(KeyringSecretStore::new())),
+        Some(Box::new(KeyringSecretStore::new())),
+    ))
+}
+
+fn cached_credential(
+    role_arn: Option<String>,
+    store: Option<&dyn SecretStore>,
+) -> Option<Credential> {
     let credential: Option<Credential> =
-        utils::get_cached_credential(&role_arn?, keyring_enabled).unwrap_or_default();
+        utils::get_cached_credential(&role_arn?, store).unwrap_or_default();
 
     credential.filter(|credential| credential.is_valid_at(OffsetDateTime::now_utc()))
 }
@@ -373,5 +433,62 @@ mod tests {
             rancher_credentials(&["-c", "x", "--output", "exec-credential", "--ttl", "5m"])
                 .unwrap();
         assert_eq!(rancher.output, Some(RancherOutput::ExecCredential));
+    }
+
+    #[test]
+    fn secret_stores_disabled_when_keyring_disabled() {
+        let mut settings = AppConfig::default();
+        settings.set_use_keyring(false);
+
+        let (idp_store, cache_store) = create_secret_stores(&settings).unwrap();
+        assert!(idp_store.is_none());
+        assert!(cache_store.is_none());
+    }
+
+    #[test]
+    fn secret_stores_plain_keyring_when_not_enrolled() {
+        let settings = AppConfig::default();
+
+        let (idp_store, cache_store) = create_secret_stores(&settings).unwrap();
+        assert!(idp_store.is_some());
+        assert!(cache_store.is_some());
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn secret_stores_when_yubikey_enrolled() {
+        let mut settings = AppConfig::default();
+        let yk =
+            c9s::domain::models::settings::YubikeyConfig::new(&[1, 2, 3], "localhost", &[0x42; 32]);
+        settings.set_yubikey(Some(yk));
+
+        // Default: wrap_cached_secrets = false
+        let (idp_store, cache_store) = create_secret_stores(&settings).unwrap();
+        assert!(idp_store.is_some());
+        assert!(cache_store.is_some());
+
+        // Configured: wrap_cached_secrets = true
+        settings.set_wrap_cached_secrets(true);
+        let (idp_store, cache_store) = create_secret_stores(&settings).unwrap();
+        assert!(idp_store.is_some());
+        assert!(cache_store.is_some());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn secret_stores_when_yubikey_enrolled() {
+        let mut settings = AppConfig::default();
+        let yk =
+            c9s::domain::models::settings::YubikeyConfig::new(&[1, 2, 3], "localhost", &[0x42; 32]);
+        settings.set_yubikey(Some(yk));
+
+        let err = match create_secret_stores(&settings) {
+            Err(e) => e,
+            Ok(_) => panic!("expected create_secret_stores to fail on Windows"),
+        };
+        assert_eq!(
+            err.to_string(),
+            "YubiKey wrapping is not supported on Windows"
+        );
     }
 }

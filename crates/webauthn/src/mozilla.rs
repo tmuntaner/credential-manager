@@ -1,15 +1,17 @@
-use crate::{WebauthnAssertion, WebauthnError, WebauthnNotifier};
+use crate::{HmacEnrollment, WebauthnAssertion, WebauthnError, WebauthnNotifier};
 use authenticator::{
-    authenticatorservice::{AuthenticatorService, SignArgs},
+    authenticatorservice::{AuthenticatorService, RegisterArgs, SignArgs},
     ctap2::server::{
-        AuthenticationExtensionsClientInputs, PublicKeyCredentialDescriptor, Transport,
-        UserVerificationRequirement,
+        AuthenticationExtensionsClientInputs, HMACGetSecretInput, PublicKeyCredentialDescriptor,
+        PublicKeyCredentialParameters, PublicKeyCredentialUserEntity, RelyingParty,
+        ResidentKeyRequirement, Transport, UserVerificationRequirement,
     },
     statecallback::StateCallback,
     Pin, StatusPinUv, StatusUpdate,
 };
 use base64::{alphabet, engine, Engine};
 use sha2::{Digest, Sha256};
+use std::convert::TryFrom;
 use std::sync::mpsc::{channel, Receiver, RecvError};
 use std::thread;
 
@@ -94,8 +96,168 @@ pub fn sign_assertion(
     })
 }
 
+/// Enrolls a new credential with the FIDO2 `hmac-secret` extension enabled.
+pub fn enroll_hmac_secret(rp_id: &str) -> Result<HmacEnrollment, WebauthnError> {
+    let origin = format!("https://{rp_id}");
+
+    // build the clientDataJSON for enrollment and then hash it.
+    let client_data_json = crate::utils::registration_client_data(&origin, "c9s-enroll")?;
+    let client_data_hash: [u8; 32] = Sha256::digest(client_data_json.as_bytes()).into();
+
+    // build the authenticator service
+    let mut manager = AuthenticatorService::new()?;
+    manager.add_u2f_usb_hid_platform_transports();
+
+    // set up the threads
+    let (status_tx, status_rx) = channel::<StatusUpdate>();
+    let (register_tx, register_rx) = channel();
+
+    let callback = StateCallback::new(Box::new(move |rv| {
+        let _ = register_tx.send(rv);
+    }));
+
+    let status_thread = thread::spawn(move || handle_status_updates(status_rx));
+
+    let pub_cred_params = vec![
+        PublicKeyCredentialParameters::try_from(-7)?,   // ES256
+        PublicKeyCredentialParameters::try_from(-8)?,   // EdDSA
+        PublicKeyCredentialParameters::try_from(-257)?, // RS256
+    ];
+
+    // build the register arguments
+    let args = RegisterArgs {
+        client_data_hash,
+        relying_party: RelyingParty {
+            id: rp_id.to_string(),
+            name: Some("c9s".to_string()),
+        },
+        origin,
+        user: PublicKeyCredentialUserEntity {
+            id: b"c9s-user".to_vec(),
+            name: Some("c9s".to_string()),
+            display_name: None,
+        },
+        pub_cred_params,
+        exclude_list: vec![],
+        user_verification_req: UserVerificationRequirement::Discouraged,
+        resident_key_req: ResidentKeyRequirement::Discouraged,
+        extensions: AuthenticationExtensionsClientInputs {
+            hmac_create_secret: Some(true),
+            ..Default::default()
+        },
+        pin: None,
+        use_ctap1_fallback: false,
+    };
+
+    // start registration
+    manager
+        .register(TIMEOUT_MS, args, status_tx, callback)
+        .map_err(WebauthnError::StartRegistering)?;
+    let register_result = register_rx.recv();
+
+    // drop the authenticator service and join the status thread
+    drop(manager);
+    let _ = status_thread.join();
+
+    // handle the registration result
+    let result = register_result
+        .map_err(|_| WebauthnError::ReceiveRegisterResult)?
+        .map_err(WebauthnError::SecurityKey)?;
+
+    // if the hmac-secret extension is not supported, return an error
+    if result.extensions.hmac_create_secret != Some(true) {
+        return Err(WebauthnError::HmacSecretNotSupported);
+    }
+
+    // get the credential id
+    let credential_id = result
+        .att_obj
+        .auth_data
+        .credential_data
+        .ok_or(WebauthnError::UnknownCredential)?
+        .credential_id;
+
+    Ok(HmacEnrollment { credential_id })
+}
+
+/// Derives a 32-byte secret from a credential using the FIDO2 `hmac-secret` extension and a 32-byte salt.
+pub fn derive_hmac_secret(
+    rp_id: &str,
+    credential_id: &[u8],
+    salt: &[u8; 32],
+) -> Result<[u8; 32], WebauthnError> {
+    let origin = format!("https://{rp_id}");
+
+    // build the clientDataJSON for enrollment and then hash it.
+    let client_data_json = crate::utils::assertion_client_data(&origin, "c9s-derive")?;
+    let client_data_hash: [u8; 32] = Sha256::digest(client_data_json.as_bytes()).into();
+
+    // build the list of allowed credential ids
+    let allow_list = vec![PublicKeyCredentialDescriptor {
+        id: credential_id.to_vec(),
+        transports: vec![Transport::USB],
+    }];
+
+    // build the authentication service
+    let mut manager = AuthenticatorService::new()?;
+    manager.add_u2f_usb_hid_platform_transports();
+
+    // set up the threads
+    let (status_tx, status_rx) = channel::<StatusUpdate>();
+    let (sign_tx, sign_rx) = channel();
+
+    let callback = StateCallback::new(Box::new(move |rv| {
+        let _ = sign_tx.send(rv);
+    }));
+
+    let status_thread = thread::spawn(move || handle_status_updates(status_rx));
+
+    // create the signing request
+    let args = SignArgs {
+        client_data_hash,
+        origin,
+        relying_party_id: rp_id.to_string(),
+        allow_list,
+        user_verification_req: UserVerificationRequirement::Preferred,
+        user_presence_req: true,
+        extensions: AuthenticationExtensionsClientInputs {
+            hmac_get_secret: Some(HMACGetSecretInput {
+                salt1: *salt,
+                salt2: None,
+            }),
+            ..Default::default()
+        },
+        pin: None,
+        use_ctap1_fallback: false,
+    };
+
+    // send the signing request
+    manager
+        .sign(TIMEOUT_MS, args, status_tx, callback)
+        .map_err(WebauthnError::StartSigning)?;
+    let sign_result = sign_rx.recv();
+
+    // drop the manager and join the status thread
+    drop(manager);
+    let _ = status_thread.join();
+
+    // handle the result
+    let result = sign_result
+        .map_err(|_| WebauthnError::ReceiveSignResult)?
+        .map_err(WebauthnError::SecurityKey)?;
+
+    // get the hmac secret
+    let output = result
+        .extensions
+        .hmac_get_secret
+        .ok_or(WebauthnError::HmacSecretNotSupported)?;
+
+    Ok(output.output1)
+}
+
 /// Answers the key's status updates: asks for the PIN on the terminal, and reports blocked keys.
 fn handle_status_updates(status_rx: Receiver<StatusUpdate>) {
+    let mut touch_prompted = false;
     loop {
         match status_rx.recv() {
             Ok(StatusUpdate::PinUvError(StatusPinUv::PinRequired(sender))) => {
@@ -113,6 +275,12 @@ fn handle_status_updates(status_rx: Receiver<StatusUpdate>) {
             }
             Ok(StatusUpdate::PinUvError(StatusPinUv::PinBlocked)) => {
                 eprintln!("The security key PIN is blocked. The key has to be reset.");
+            }
+            Ok(StatusUpdate::PresenceRequired) => {
+                if !touch_prompted {
+                    eprintln!("Touch your security key...");
+                    touch_prompted = true;
+                }
             }
             Ok(StatusUpdate::SelectDeviceNotice) => {
                 eprintln!("Several security keys found, touch the one to use.");
@@ -202,6 +370,18 @@ mod tests {
             vec![],
         );
 
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn enroll_hmac_secret_rejects_an_invalid_origin() {
+        let err = enroll_hmac_secret("not a valid url :// invalid");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn derive_hmac_secret_rejects_an_invalid_origin() {
+        let err = derive_hmac_secret("not a valid url :// invalid", b"cred", &[0u8; 32]);
         assert!(err.is_err());
     }
 }

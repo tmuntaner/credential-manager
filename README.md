@@ -12,6 +12,59 @@
 The config file for `c9s` is located at `~/.config/c9s/settings.toml`,
 but you can use `c9s config` to manage your configuration.
 
+### Global Settings
+
+#### Keyring Storage
+
+`c9s` stores passwords and cached secrets in your OS keyring (Secret Service on Linux, Keychain on macOS, Credential Manager on Windows).
+It's enabled by default, but you can disable or re-enable it:
+
+```bash
+c9s config global use-keyring --enabled false
+```
+
+#### YubiKey Secret Wrapping (Hardware-Backed Envelope Encryption)
+
+`c9s` supports wrapping secrets stored in the OS keyring with AES-256-GCM.
+It uses an encryption key derived from a physical YubiKey touch via FIDO2 `hmac-secret` (Linux and macOS).
+This is not supported on Windows.
+
+- The derived key is cached in zeroized memory. It exists only in the process lifetime and requires a physical touch per invocation.
+- Once a YubiKey is enrolled, it will always wrap IdP credentials.
+- If you want to wrap other secrets, you can. It will just require one physical touch per invocation.
+
+**Enroll a YubiKey:**
+
+```bash
+c9s config global yubikey enroll [--rp-id localhost]
+```
+
+**Check Status:**
+
+```bash
+c9s config global yubikey status
+```
+
+**Configure Protection for Cached Session Secrets (non IdP secrets):**
+
+```bash
+c9s config global yubikey wrap-cached --enabled true
+```
+
+**Disable YubiKey Wrapping:**
+
+```bash
+c9s config global yubikey disable
+```
+
+#### Default Identity Provider
+
+Set the default identity provider for targets that do not explicitly specify `--idp`:
+
+```bash
+c9s config global default-idp --name work
+```
+
 ### Identity Providers
 
 To make it easier to manage multiple targets, you can set a shared identity provider.
