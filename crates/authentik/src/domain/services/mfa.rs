@@ -7,8 +7,7 @@ use crate::domain::ports::flow::{MfaError, SecondFactor};
 use crate::domain::services::login::MAX_MFA_ATTEMPTS;
 use std::cell::Cell;
 
-/// Answers the second factor with a TOTP code or a security key, asking the user which when both are offered
-/// and none was selected. One per login, as it counts the rejections.
+/// Answers an MFA challenge interactively with the user.
 pub(crate) struct InteractiveMfa<'a, A> {
     selection: Option<MfaMethod>,
     authenticator: &'a A,
@@ -27,15 +26,20 @@ impl<'a, A: Authenticator> InteractiveMfa<'a, A> {
     /// Picks the device to answer with, out of the ones authentik offers and this crate supports.
     fn choose<'c>(&self, challenge: &'c MfaChallenge) -> Result<Choice<'c>, MfaError> {
         let devices = &challenge.devices;
+
+        // find totp from the devices
         let totp = devices
             .iter()
             .position(|d| matches!(d, MfaDevice::Totp))
             .map(Choice::Totp);
+
+        // find webauthn from the devices
         let webauthn = devices.iter().find_map(|d| match d {
             MfaDevice::WebAuthn(options) => Some(Choice::WebAuthn(options)),
             _ => None,
         });
 
+        // the list of offered methods
         let offered = || {
             let mut classes: Vec<&str> = devices.iter().map(MfaDevice::class).collect();
             classes.dedup();
@@ -50,12 +54,14 @@ impl<'a, A: Authenticator> InteractiveMfa<'a, A> {
             None => {
                 let mut available: Vec<Choice> = totp.into_iter().chain(webauthn).collect();
                 match available.len() {
-                    0 => Err(MfaError::NoSupportedMethod(offered())),
-                    1 => Ok(available.remove(0)),
+                    0 => Err(MfaError::NoSupportedMethod(offered())), // there is no MFA option
+                    1 => Ok(available.remove(0)), // give the first option if only one is available
                     _ => {
+                        // give the user the choice of method
                         let methods: Vec<MfaMethod> =
                             available.iter().map(Choice::method).collect();
                         let method = self.authenticator.choose_method(&methods)?;
+
                         available
                             .into_iter()
                             .find(|choice| choice.method() == method)
@@ -70,6 +76,7 @@ impl<'a, A: Authenticator> InteractiveMfa<'a, A> {
         if options.user_verification_required {
             return Err(MfaError::PinRequired);
         }
+
         if let Some(rp_id) = &options.rp_id {
             if rp_id != idp_host {
                 return Err(MfaError::WrongRelyingParty {
@@ -78,14 +85,19 @@ impl<'a, A: Authenticator> InteractiveMfa<'a, A> {
                 });
             }
         }
+
+        // get the challenge string
         let challenge = options
             .challenge
             .clone()
             .ok_or(MfaError::NoWebauthnChallenge)?;
+
+        // get which credentials are allowed to sign it
         if options.credential_ids.is_empty() {
             return Err(MfaError::NoAllowedCredentials);
         }
 
+        // sign the challenge
         let assertion = self.authenticator.sign(&WebauthnRequest {
             challenge,
             rp_id: idp_host.to_string(),

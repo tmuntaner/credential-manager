@@ -1,5 +1,3 @@
-//! Conversions between the validate stage of authentik and the second factor of the domain.
-
 use crate::domain::models::mfa::{
     MfaChallenge, MfaDevice, MfaResponse, WebauthnAssertion, WebauthnOptions,
 };
@@ -8,13 +6,14 @@ use crate::outbound::flow::session::ExecutorError;
 use base64::{alphabet, engine, Engine};
 use serde_json::{json, Value};
 
-/// The devices of a validate stage, in the order authentik lists them.
+/// Gather a list of devices from the validate stage.
 pub fn challenge(validate: &ValidateChallenge) -> MfaChallenge {
     MfaChallenge {
         devices: validate.device_challenges.iter().map(device).collect(),
     }
 }
 
+/// Parse a device from the device challenge.
 fn device(device: &DeviceChallenge) -> MfaDevice {
     match device.device_class.as_str() {
         "totp" => MfaDevice::Totp,
@@ -37,7 +36,7 @@ fn device(device: &DeviceChallenge) -> MfaDevice {
     }
 }
 
-/// The body to POST to the validate stage for `response`.
+/// Generate the POST body for the validate stage.
 pub fn body(validate: &ValidateChallenge, response: MfaResponse) -> Result<Value, ExecutorError> {
     match response {
         MfaResponse::Totp { device, code } => {
@@ -56,8 +55,8 @@ pub fn body(validate: &ValidateChallenge, response: MfaResponse) -> Result<Value
     }
 }
 
-/// The validate-stage body for an assertion, as a browser sends it: base64url without padding and no
-/// `selected_challenge`.
+/// Generate the webauthn body for the assertion.
+/// It should be base64url without padding.
 fn webauthn_body(assertion: &WebauthnAssertion) -> Value {
     let base64url =
         engine::GeneralPurpose::new(&alphabet::URL_SAFE, engine::general_purpose::NO_PAD);
@@ -293,7 +292,7 @@ mod tests {
         let mfa = FakeMfa::answering(MfaResponse::WebAuthn(signed()));
         let assertion = FlowSession::new(&mfa)
             .unwrap()
-            .login(&url(&server, INIT), "user", "secret")
+            .login_saml(&url(&server, INIT), "user", "secret")
             .await
             .unwrap();
 

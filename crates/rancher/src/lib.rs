@@ -1,10 +1,10 @@
-//! Credentials for clusters behind a Rancher that uses an OIDC provider for logins.
+//! Credentials for downstream rancher clusters.
 //!
 //! Entry points:
-//! - [`RancherCredentialService`] issues a credential through [`IssueCredential`]; build it with an
-//!   adapter of the [`RancherApi`] port, such as [`RancherApiClient`].
-//! - [`kubeconfig`] and [`exec_credential`] render a credential for kubectl.
-//! - Implement [`OidcAuthorizer`] to supply the login at the identity provider.
+//! - [`RancherCredentialService`] generates a credential through [`IssueCredential`].
+//! - Implement [`OidcAuthorizer`] to log in with oidc.
+//!   Create an adapter of the [`RancherApi`] port, e.g., as [`RancherApiClient`].
+//! - [`kubeconfig`] and [`exec_credential`] render credentials for kubectl.
 
 mod domain;
 mod outbound;

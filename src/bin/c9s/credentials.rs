@@ -14,7 +14,7 @@ use c9s::domain::ports::aws::AwsCredentialIssuer;
 use c9s::domain::services::aws_credential_issuer::AwsCredentialIssuerService;
 use c9s::domain::services::login_resolver::LoginResolverService;
 use c9s::domain::services::rancher_credential_issuer::RancherCredentialIssuerService;
-use c9s::outbound::authentik::{AuthentikClient, AuthentikOidc};
+use c9s::outbound::authentik::{AuthentikOidcClient, AuthentikSamlClient};
 use c9s::outbound::aws::{SsoCredentials, StsCredentials};
 use c9s::outbound::rancher::{RancherClient, RancherKubeconfig};
 use clap::Parser;
@@ -134,7 +134,7 @@ impl AwsCredentials {
         )?;
 
         let aws_credentials = AwsCredentialIssuerService::new(
-            Box::new(AuthentikClient::new(self.enable_desktop_notifications)),
+            Box::new(AuthentikSamlClient::new(self.enable_desktop_notifications)),
             Box::new(StsCredentials::new()),
             Box::new(SsoCredentials::new()?),
         )
@@ -187,7 +187,7 @@ impl RancherCredentials {
         )?;
 
         let authorizer = match rancher.idp_type {
-            IdpType::Authentik => Box::new(AuthentikOidc::new(
+            IdpType::Authentik => Box::new(AuthentikOidcClient::new(
                 rancher.idp_url,
                 rancher.client_id,
                 self.enable_desktop_notifications,

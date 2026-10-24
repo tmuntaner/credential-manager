@@ -1,5 +1,3 @@
-//! Conversions between the models of this application, of the `webauthn` crate, and of the `authentik` crate.
-
 use crate::domain::models::oidc::OidcError;
 use crate::domain::models::saml::{SamlAssertion, SamlLoginError};
 use crate::domain::models::user_credentials::UserCredentials;
@@ -28,7 +26,6 @@ impl From<authentik::SamlAssertion> for SamlAssertion {
     }
 }
 
-/// The signature of the `webauthn` crate as the `authentik` crate takes it.
 pub fn assertion(a: webauthn::WebauthnAssertion) -> authentik::WebauthnAssertion {
     authentik::WebauthnAssertion {
         credential_id: a.credential_id,

@@ -7,7 +7,7 @@ use crate::domain::models::secret::Password;
 pub struct UserCredentials {
     pub username: String,
     pub password: Password,
-    /// The MFA method Authentik asks for.
+    /// The MFA method for the login.
     pub mfa: Option<MfaMethod>,
 }
 

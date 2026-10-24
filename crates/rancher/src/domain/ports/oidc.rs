@@ -4,13 +4,13 @@ use async_trait::async_trait;
 use std::error::Error;
 use thiserror::Error;
 
-/// Logs a user in at an OpenID Connect identity provider and provides an OAuth authorization code.
+/// Logs a user in with OIDC.
 ///
-/// Implemented by the application that uses this crate.
+/// Implemented by the caller application.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait(?Send)]
 pub trait OidcAuthorizer {
-    /// `redirect_uri` is where the identity provider sends the user back to after the login.
+    /// `redirect_uri` is where the idp redirects after a login.
     async fn authorize(
         &self,
         login: UserCredentials,
@@ -18,7 +18,7 @@ pub trait OidcAuthorizer {
     ) -> Result<AuthCode, OidcError>;
 }
 
-/// Why the identity provider did not hand out an authorization code.
+/// An OIDC error.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum OidcError {

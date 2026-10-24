@@ -5,12 +5,12 @@ use time::OffsetDateTime;
 pub struct RancherCredential {
     pub token: String,
     pub token_id: String,
-    /// Rancher does not report it, so it is the creation time plus the requested ttl.
+    /// Rancher does not report expiry, so we use the creation time plus the requested ttl.
     pub expiry: OffsetDateTime,
     pub cluster_name: String,
     pub cluster_id: String,
-    /// The Kubernetes API of the cluster, proxied by Rancher.
+    /// The Kubernetes API of the cluster.
     pub server_url: String,
-    /// PEM, the certificate authority of Rancher.
+    /// PEM, Rancher's CA.
     pub ca: String,
 }

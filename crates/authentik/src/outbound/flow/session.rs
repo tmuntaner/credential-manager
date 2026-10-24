@@ -8,12 +8,13 @@ use serde_json::{json, Value};
 use thiserror::Error;
 use url::{form_urlencoded, Url};
 
-/// Flows chained after one another (authentication, then authorization, ...) before giving up.
+/// The maximum amount of Flows before giving up.
 const MAX_FLOWS: usize = 5;
-/// Stages of a single flow before giving up.
+
+/// The maximum amount of stages of a single flow has before giving up.
 const MAX_STAGES: usize = 20;
 
-/// What went wrong in this adapter. The failures the domain knows are a [`FlowError`] in `Domain`.
+/// The FlowExecutor error.
 #[derive(Debug, Error)]
 pub enum ExecutorError {
     #[error(transparent)]
@@ -83,7 +84,6 @@ impl From<MfaError> for ExecutorError {
     }
 }
 
-/// The failures the domain knows are handed back as they are; the rest are details of this adapter.
 impl From<ExecutorError> for FlowError {
     fn from(e: ExecutorError) -> Self {
         match e {
@@ -93,29 +93,29 @@ impl From<ExecutorError> for FlowError {
     }
 }
 
-/// How a chain of flows ended.
+/// How the flow chain ended.
 enum Finished {
     Assertion(SamlAssertion),
-    /// The redirect to the OIDC client, which must not be requested.
+    /// The flow redirected to the OIDC client.
     Redirect(Url),
 }
 
-/// What requesting the start of a flow led to.
+/// How the flow chain started.
 enum FlowStart {
-    /// A flow, to be run at this executor url.
+    /// A new flow url
     Flow(Url),
-    /// The OIDC redirect back to the client, which must not be requested.
+    /// The flow redirected back to the client (OIDC).
     Finished(Url),
 }
 
+/// The outcome of a flow.
 enum FlowOutcome {
     Assertion(SamlAssertion),
-    /// The flow finished; continue by requesting this URL (may be relative).
+    /// The flow finished with a new flow url to start a new one.
     Redirect(String),
 }
 
-/// Drives authentik's flow executor API headlessly. One session owns one cookie jar, which carries the
-/// authentik session through every chained flow.
+/// Runs the flow executor API headlessly, with a cookie jar to keep state.
 pub struct FlowSession<'a> {
     client: ApiClient,
     mfa: &'a dyn SecondFactor,
@@ -129,9 +129,8 @@ impl<'a> FlowSession<'a> {
         })
     }
 
-    /// Runs flows from `entry_url` (the SAML app `.../sso/binding/init/`) until the autosubmit challenge, and
-    /// returns the assertion.
-    pub async fn login(
+    /// Starts the SAML login flow.
+    pub async fn login_saml(
         &self,
         entry_url: &Url,
         username: &str,
@@ -143,8 +142,7 @@ impl<'a> FlowSession<'a> {
         }
     }
 
-    /// Runs flows from the OAuth `authorize_url` until authentik redirects to `redirect_uri`, and returns that
-    /// redirect (carrying the `code` and `state`) without requesting it: the code can only be used once.
+    /// Starts the OIDC login flow.
     pub async fn login_oidc(
         &self,
         authorize_url: &Url,
@@ -161,7 +159,7 @@ impl<'a> FlowSession<'a> {
         }
     }
 
-    /// Runs the chained flows that start at `start` until an assertion, or until a redirect to `redirect_uri`.
+    /// Runs the chained flows until an assertion or redirect.
     async fn run_flows(
         &self,
         start: &Url,
@@ -176,15 +174,20 @@ impl<'a> FlowSession<'a> {
         let origin = Url::parse(&start.origin().ascii_serialization())?;
         let mut next = start.clone();
 
+        // run a chain of flows until max
         for _ in 0..MAX_FLOWS {
+            // If it's a redirect back to the client (application), the flow is complete.
             if is_client(&next, redirect_uri) {
                 return Ok(Finished::Redirect(next));
             }
 
+            // start the flow and get the executor URL
             let exec_url = match self.start_flow(&next, redirect_uri).await? {
                 FlowStart::Flow(exec_url) => exec_url,
                 FlowStart::Finished(redirect) => return Ok(Finished::Redirect(redirect)),
             };
+
+            // run the stages of the flow
             match self
                 .run_stages(&exec_url, &idp_host, username, password)
                 .await?
@@ -197,13 +200,13 @@ impl<'a> FlowSession<'a> {
         Err(ExecutorError::TooManyFlows(next))
     }
 
-    /// Requests `url` and turns the redirect into a flow into the executor URL of that flow. A redirect to the
-    /// OIDC client at `redirect_uri` ends the login instead.
+    /// Starts the flow and returns the executor URL.
     async fn start_flow(
         &self,
         url: &Url,
         redirect_uri: Option<&str>,
     ) -> Result<FlowStart, ExecutorError> {
+        // get the response from the URL
         let response = self.client.get_raw(url.as_str(), AcceptType::Html).await?;
         if !response.status.is_redirection() {
             return Err(ExecutorError::NotARedirect {
@@ -212,25 +215,36 @@ impl<'a> FlowSession<'a> {
             });
         }
 
+        // Get the location from the response (next redirect).
         let location = response
             .location
             .ok_or_else(|| ExecutorError::NoLocation(url.clone()))?;
+
+        // generate the target URL
         let target = url.join(&location)?;
+
+        // if the target is the OIDC client, we're done
         if is_client(&target, redirect_uri) {
             return Ok(FlowStart::Finished(target));
         }
+
+        // get the flow slug from the target URL
         let slug =
             flow_slug(target.path()).ok_or_else(|| ExecutorError::NotAFlow(target.clone()))?;
 
+        // build the query string
         let query: String =
             form_urlencoded::byte_serialize(target.query().unwrap_or_default().as_bytes())
                 .collect();
+
+        // generate the executor URL
         let mut exec_url = url.join(&format!("/api/v3/flows/executor/{slug}/"))?;
         exec_url.set_query(Some(&format!("query={query}")));
 
         Ok(FlowStart::Flow(exec_url))
     }
 
+    /// Runs the stages of the flow
     async fn run_stages(
         &self,
         exec_url: &Url,
@@ -238,11 +252,15 @@ impl<'a> FlowSession<'a> {
         username: &str,
         password: &str,
     ) -> Result<FlowOutcome, ExecutorError> {
+        // get the challenge from the executor
         let mut current = self.get_challenge(exec_url).await?;
 
+        // run through the stages of the flow.
+        // if successful, return the outcome within the loop.
         for _ in 0..MAX_STAGES {
             let rejection = challenge::rejection_of(&current);
 
+            // generate the challenge body based on the challenge type
             let body = match Challenge::parse(&current)? {
                 Challenge::Identification => {
                     if let Some(reason) = rejection {
@@ -281,32 +299,36 @@ impl<'a> FlowSession<'a> {
                 }
             };
 
+            // post the challenge to get the next
             current = self.post_challenge(exec_url, &body).await?;
         }
 
         Err(ExecutorError::TooManyStages(current))
     }
 
+    /// Gets the challenge from the executor URL.
     async fn get_challenge(&self, exec_url: &Url) -> Result<Value, ExecutorError> {
         let response = self
             .client
             .get_raw(exec_url.as_str(), AcceptType::Json)
             .await?;
+
         self.challenge_from(response, exec_url).await
     }
 
+    /// Sends the challenge response to the executor URL.
     async fn post_challenge(&self, exec_url: &Url, body: &Value) -> Result<Value, ExecutorError> {
         let response = self.client.post_json_raw(exec_url.as_str(), body).await?;
         self.challenge_from(response, exec_url).await
     }
 
-    /// Turns a response of the executor into a challenge. A successful stage answers `302` back to the
-    /// executor; that is followed once.
+    /// Parses the challenge from the response.
     async fn challenge_from(
         &self,
         response: RawResponse,
         base: &Url,
     ) -> Result<Value, ExecutorError> {
+        // get the response and follow redirects
         let response = if response.status.is_redirection() {
             let location = response
                 .location
@@ -317,6 +339,7 @@ impl<'a> FlowSession<'a> {
             response
         };
 
+        // if it's not a success, return an error
         if response.status.as_u16() >= 400 {
             return Err(ExecutorError::ErrorStatus {
                 status: response.status,
@@ -324,6 +347,7 @@ impl<'a> FlowSession<'a> {
             });
         }
 
+        // ensure the response is json
         let is_json = response
             .content_type
             .as_deref()
@@ -334,6 +358,8 @@ impl<'a> FlowSession<'a> {
                 content_type: response.content_type.unwrap_or_else(|| "none".to_string()),
             });
         }
+
+        // it should be a status OK
         if response.status != reqwest::StatusCode::OK {
             return Err(ExecutorError::UnexpectedStatus(response.status));
         }
@@ -342,17 +368,18 @@ impl<'a> FlowSession<'a> {
     }
 }
 
-/// Whether `url` is the redirect back to the OIDC client at `redirect_uri`.
+/// Check whether the `url` is the client's URL for OIDC.
 fn is_client(url: &Url, redirect_uri: Option<&str>) -> bool {
     redirect_uri.is_some_and(|uri| url.as_str().starts_with(uri))
 }
 
-/// The flow slug of an `/if/flow/<slug>/` path.
+/// Parses the flow slug from the path.
 fn flow_slug(path: &str) -> Option<&str> {
     let (_, rest) = path.split_once("/if/flow/")?;
     rest.split('/').next().filter(|slug| !slug.is_empty())
 }
 
+/// Parses the assertion from the autosubmit challenge.
 fn assertion(mut autosubmit: AutosubmitChallenge) -> Result<SamlAssertion, ExecutorError> {
     let saml_response = autosubmit
         .attrs
@@ -408,7 +435,7 @@ mod tests {
         });
 
         let assertion = session()
-            .login(&url(&server, INIT), "user", "secret")
+            .login_saml(&url(&server, INIT), "user", "secret")
             .await
             .unwrap();
 
@@ -486,7 +513,7 @@ mod tests {
         mock_authentication(&server, PASSWORD_REJECTED);
 
         let err = session()
-            .login(&url(&server, INIT), "user", "secret")
+            .login_saml(&url(&server, INIT), "user", "secret")
             .await
             .unwrap_err();
 
@@ -503,7 +530,7 @@ mod tests {
         mock_authentication(&server, r#"{"component": "ak-stage-consent"}"#);
 
         let err = session()
-            .login(&url(&server, INIT), "user", "secret")
+            .login_saml(&url(&server, INIT), "user", "secret")
             .await
             .unwrap_err();
 
@@ -518,7 +545,7 @@ mod tests {
         mock_authentication(&server, VALIDATE);
 
         let err = session()
-            .login(&url(&server, INIT), "user", "secret")
+            .login_saml(&url(&server, INIT), "user", "secret")
             .await
             .unwrap_err();
 
@@ -561,7 +588,7 @@ mod tests {
         });
         let assertion = FlowSession::new(&mfa)
             .unwrap()
-            .login(&url(&server, INIT), "user", "secret")
+            .login_saml(&url(&server, INIT), "user", "secret")
             .await
             .unwrap();
 
@@ -584,7 +611,7 @@ mod tests {
         mock_authentication(&server, &rejected);
 
         let err = session()
-            .login(&url(&server, INIT), "user", "secret")
+            .login_saml(&url(&server, INIT), "user", "secret")
             .await
             .unwrap_err();
 
@@ -606,7 +633,7 @@ mod tests {
         });
 
         let err = session()
-            .login(&url(&server, INIT), "user", "secret")
+            .login_saml(&url(&server, INIT), "user", "secret")
             .await
             .unwrap_err();
 
@@ -623,7 +650,7 @@ mod tests {
         });
 
         let err = session()
-            .login(&url(&server, INIT), "user", "secret")
+            .login_saml(&url(&server, INIT), "user", "secret")
             .await
             .unwrap_err();
 
@@ -639,7 +666,7 @@ mod tests {
         });
 
         let err = session()
-            .login(&url(&server, INIT), "user", "secret")
+            .login_saml(&url(&server, INIT), "user", "secret")
             .await
             .unwrap_err();
 
@@ -661,7 +688,7 @@ mod tests {
         });
 
         let err = session()
-            .login(&url(&server, INIT), "user", "secret")
+            .login_saml(&url(&server, INIT), "user", "secret")
             .await
             .unwrap_err();
 
@@ -683,7 +710,7 @@ mod tests {
         });
 
         let err = session()
-            .login(&url(&server, INIT), "user", "secret")
+            .login_saml(&url(&server, INIT), "user", "secret")
             .await
             .unwrap_err();
 
@@ -712,7 +739,7 @@ mod tests {
 
     async fn login_error(server: &MockServer) -> String {
         session()
-            .login(&url(server, INIT), "user", "secret")
+            .login_saml(&url(server, INIT), "user", "secret")
             .await
             .unwrap_err()
             .to_string()
@@ -829,7 +856,7 @@ mod tests {
     #[tokio::test]
     async fn requires_a_host_in_the_entry_url() {
         let err = session()
-            .login(&Url::parse("data:text/plain/").unwrap(), "u", "p")
+            .login_saml(&Url::parse("data:text/plain/").unwrap(), "u", "p")
             .await
             .unwrap_err();
 
@@ -864,7 +891,7 @@ mod tests {
         });
 
         let assertion = session()
-            .login(&url(&server, INIT), "user", "secret")
+            .login_saml(&url(&server, INIT), "user", "secret")
             .await
             .unwrap();
 
