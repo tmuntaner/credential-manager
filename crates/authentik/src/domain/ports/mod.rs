@@ -1,4 +1,4 @@
-// Driven ports: used by the domain, implemented by adapters or by the host application.
+// Driven ports: to be used by the domain. The caller should implement with adapters.
 pub mod authenticator;
 pub mod flow;
 pub mod state;

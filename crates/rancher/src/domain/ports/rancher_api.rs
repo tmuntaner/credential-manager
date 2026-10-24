@@ -4,38 +4,38 @@ use std::error::Error;
 use std::time::Duration;
 use thiserror::Error;
 
-/// Why a call to Rancher failed.
+/// A Rancher API error.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RancherApiError {
-    /// Rancher rejected the session or the code (401).
+    /// Rancher considered the request unauthorized (401).
     #[error("rancher rejected the token (401)")]
     Unauthorized,
 
-    /// No cluster with that display name.
+    /// A cluster by a name couldn't be found.
     #[error("cluster {0} not found")]
     ClusterNotFound(String),
 
-    /// Rancher could not be reached or answered with something unusable.
+    /// Rancher had an unexpected error.
     #[error(transparent)]
     Failed(Box<dyn Error + Send + Sync>),
 }
 
-/// A cluster that Rancher manages.
+/// A downstream rancher cluster.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cluster {
     pub id: String,
     pub server_url: String,
 }
 
-/// A rancher API token.
+/// A rancher api token.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApiToken {
     pub id: String,
     pub token: String,
 }
 
-/// Driven port: the calls the domain makes to Rancher.
+/// Driven port: the calls the caller makes to Rancher.
 ///
 /// Implemented by [`RancherApiClient`](crate::RancherApiClient) over HTTP.
 #[cfg_attr(test, mockall::automock)]

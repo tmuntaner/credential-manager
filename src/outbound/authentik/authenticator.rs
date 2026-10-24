@@ -24,8 +24,7 @@ impl From<TerminalError> for AuthenticatorError {
     }
 }
 
-/// Asks for the second factor on stderr and reads the answer from stdin. Signs with a USB security key,
-/// showing a progress bar and optionally a desktop notification while it waits for the touch.
+/// Works with the user to interactively handle MFA.
 pub struct TerminalAuthenticator {
     enable_desktop_notifications: bool,
 }

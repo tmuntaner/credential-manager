@@ -1,12 +1,12 @@
 use crate::domain::models::mfa::MfaMethod;
 
-/// What a user logs in with at the identity provider.
+/// The user's idp credentials.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct UserCredentials {
     pub username: String,
     pub password: String,
-    /// The method to use when the identity provider asks for a second factor.
+    /// The selected MFA method.
     pub mfa: Option<MfaMethod>,
 }
 

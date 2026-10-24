@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use std::time::Duration;
 use time::OffsetDateTime;
 
-/// Creates tokens for clusters behind a Rancher that uses an OIDC provider for logins.
+/// Creates tokens for Rancher downstream clusters with OIDC.
 pub struct RancherCredentialService<A> {
     api: A,
 }
@@ -46,8 +46,9 @@ impl<A: RancherApi> RancherCredentialService<A> {
 
 #[async_trait(?Send)]
 impl<A: RancherApi> IssueCredential for RancherCredentialService<A> {
-    /// Logs in through `authorizer`, creates a token for `cluster_name` that lives for `ttl`, and logs out of
-    /// the session again: the token is independent of the session it was created from.
+    /// Logs in through `authorizer`, generates a token for `cluster_name` that lives for `ttl`,
+    /// and logs out of the session again.
+    /// The token is independent of the login session and will outlive it.
     async fn generate(
         &self,
         authorizer: &dyn OidcAuthorizer,

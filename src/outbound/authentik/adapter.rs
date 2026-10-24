@@ -6,10 +6,9 @@ use crate::outbound::authentik::authenticator::TerminalAuthenticator;
 use async_trait::async_trait;
 use authentik::{AuthentikService, HttpFlowExecutor, RandomState};
 
-/// The `authentik` crate, asking on the terminal and signing with a USB security key.
+/// The `authentik` service.
 type Service = AuthentikService<HttpFlowExecutor, RandomState, TerminalAuthenticator>;
 
-/// With `enable_desktop_notifications`, a desktop notification asks to touch the security key.
 fn service(enable_desktop_notifications: bool) -> Service {
     AuthentikService::new(
         HttpFlowExecutor::new(),
@@ -18,12 +17,12 @@ fn service(enable_desktop_notifications: bool) -> Service {
     )
 }
 
-/// Logs users in to the SAML applications of authentik with the `authentik` crate.
-pub struct AuthentikClient {
+/// Builds an Authentik SAML client.
+pub struct AuthentikSamlClient {
     service: Service,
 }
 
-impl AuthentikClient {
+impl AuthentikSamlClient {
     pub fn new(enable_desktop_notifications: bool) -> Self {
         Self {
             service: service(enable_desktop_notifications),
@@ -32,7 +31,7 @@ impl AuthentikClient {
 }
 
 #[async_trait(?Send)]
-impl SamlIdentityProvider for AuthentikClient {
+impl SamlIdentityProvider for AuthentikSamlClient {
     async fn login(
         &self,
         app_url: &str,
@@ -48,13 +47,13 @@ impl SamlIdentityProvider for AuthentikClient {
 }
 
 /// An OIDC application in authentik.
-pub struct AuthentikOidc {
+pub struct AuthentikOidcClient {
     service: Service,
     issuer: String,
     client_id: String,
 }
 
-impl AuthentikOidc {
+impl AuthentikOidcClient {
     /// `issuer` is the authentik instance, of which only the origin is used.
     pub fn new(issuer: String, client_id: String, enable_desktop_notifications: bool) -> Self {
         Self {
@@ -66,7 +65,7 @@ impl AuthentikOidc {
 }
 
 #[async_trait(?Send)]
-impl OidcAuthorizer for AuthentikOidc {
+impl OidcAuthorizer for AuthentikOidcClient {
     async fn authorize(
         &self,
         login: UserCredentials,

@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use std::time::Duration;
 use thiserror::Error;
 
-/// Why a request to Rancher failed; the domain only sees these as a `RancherApiError`.
+/// A rancher request failure.
 #[derive(Debug, Error)]
 enum RequestError {
     #[error(transparent)]
@@ -69,7 +69,7 @@ struct CaCert {
     value: String,
 }
 
-/// Talks to the API of a Rancher that uses an OIDC provider for logins.
+/// Rancher API client, using an OIDC provider to login.
 pub struct RancherApiClient {
     url: String,
     api: ApiClient,
@@ -79,12 +79,14 @@ impl RancherApiClient {
     pub fn new(rancher_url: &str) -> Result<RancherApiClient, RancherApiError> {
         Ok(RancherApiClient {
             url: rancher_url.trim_end_matches('/').to_string(),
-            // No cookie store: the CSRF cookie is sent by hand on each POST, and the session travels as a bearer token.
+            // No cookie store: we must set the CSRF cookie for each POST request.
+            // The session travels with a bearer token.
             api: ApiClient::new_cookieless().map_err(RequestError::from)?,
         })
     }
 
-    async fn send<T: DeserializeOwned>(
+    /// Sends a request to the Rancher server.
+    pub async fn send<T: DeserializeOwned>(
         &self,
         method: Method,
         path: &str,
@@ -96,27 +98,16 @@ impl RancherApiClient {
             .request(method, path, query, bearer_token, body)
             .await?;
 
-        // Some Rancher responses repeat a key; going through `Value` keeps the last one instead of failing on it.
+        // serialize the response with serde JSON to sanitize the body and then deserialize
+        // it into the requested type
         serde_json::from_str::<Value>(&response.body)
             .and_then(serde_json::from_value)
             .map_err(|e| RequestError::InvalidJson(e).into())
     }
 
-    async fn csrf_token(&self) -> Result<String, RancherApiError> {
-        let response = self
-            .request(Method::GET, "/v3-public", &[], None, None)
-            .await?;
-
-        response
-            .set_cookies
-            .iter()
-            .find_map(|cookie| cookie.strip_prefix("CSRF=")?.split(';').next())
-            .map(str::to_string)
-            .ok_or_else(|| RequestError::MissingCsrfCookie.into())
-    }
-
-    /// Rancher rejects a POST without the CSRF cookie it hands out on any earlier response, echoed in a header.
-    async fn post(
+    /// Sends a POST request to the Rancher server.
+    /// Note: all POST requests must include CSRF.
+    pub async fn post(
         &self,
         path: &str,
         query: &[(&str, &str)],
@@ -137,6 +128,21 @@ impl RancherApiClient {
         .await
     }
 
+    /// Get the CSRF token from the Rancher server.
+    async fn csrf_token(&self) -> Result<String, RancherApiError> {
+        let response = self
+            .request(Method::GET, "/v3-public", &[], None, None)
+            .await?;
+
+        response
+            .set_cookies
+            .iter()
+            .find_map(|cookie| cookie.strip_prefix("CSRF=")?.split(';').next())
+            .map(str::to_string)
+            .ok_or_else(|| RequestError::MissingCsrfCookie.into())
+    }
+
+    /// A request without headers.
     async fn request(
         &self,
         method: Method,
@@ -149,6 +155,7 @@ impl RancherApiClient {
             .await
     }
 
+    /// A request with headers.
     async fn request_with_headers(
         &self,
         method: Method,

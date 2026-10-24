@@ -20,7 +20,7 @@ impl fmt::Debug for AuthCode {
     }
 }
 
-/// The token of a login session at Rancher. It is not the token that is handed out to the user.
+/// The token of a login session at Rancher. Not given to the user.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SessionToken(String);
 

@@ -5,7 +5,7 @@ use crate::outbound::flow::session::FlowSession;
 use async_trait::async_trait;
 use url::Url;
 
-/// Runs the flows through the flow executor API of authentik, as its web interface does.
+/// Runs the Authentik auth flow.
 #[derive(Debug, Default)]
 pub struct HttpFlowExecutor;
 
@@ -24,7 +24,7 @@ impl FlowExecutor for HttpFlowExecutor {
         mfa: &dyn SecondFactor,
     ) -> Result<SamlAssertion, FlowError> {
         Ok(FlowSession::new(mfa)?
-            .login(entry_url, &login.username, login.password.as_str())
+            .login_saml(entry_url, &login.username, login.password.as_str())
             .await?)
     }
 

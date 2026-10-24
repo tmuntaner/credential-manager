@@ -3,13 +3,13 @@ use crate::domain::models::secret::TotpCode;
 /// The MFA method to authenticate with.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MfaMethod {
-    /// A security key.
+    /// A security key, e.g., a Yubikey.
     WebAuthn,
     /// A code from an authenticator app.
     Totp,
 }
 
-/// The MFA challenge from Authentik..
+/// The MFA challenge from Authentik.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MfaChallenge {
     /// The MFA devices from Authentik.
@@ -38,6 +38,15 @@ impl MfaDevice {
     }
 }
 
+/// The challenge response.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MfaResponse {
+    /// The TOTP code for the device at `device` in [`MfaChallenge::devices`].
+    Totp { device: usize, code: TotpCode },
+    /// The webauthn signature.
+    WebAuthn(WebauthnAssertion),
+}
+
 /// The Webauthn challenge options.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct WebauthnOptions {
@@ -49,15 +58,6 @@ pub struct WebauthnOptions {
     pub credential_ids: Vec<String>,
     /// Whether we must verify the user.
     pub user_verification_required: bool,
-}
-
-/// The challenge response.
-#[derive(Debug, Clone, PartialEq)]
-pub enum MfaResponse {
-    /// The TOTP code for the device at `device` in [`MfaChallenge::devices`].
-    Totp { device: usize, code: TotpCode },
-    /// The webauthn signature.
-    WebAuthn(WebauthnAssertion),
 }
 
 /// The Webauthn challenge request we must sign.

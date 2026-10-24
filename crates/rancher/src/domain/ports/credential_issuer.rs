@@ -7,10 +7,10 @@ use async_trait::async_trait;
 use std::time::Duration;
 use thiserror::Error;
 
-/// Driving port: what callers use to get a token for a cluster behind Rancher.
+/// Driving port: callers use this to get a Rancher token.
 #[async_trait(?Send)]
 pub trait IssueCredential {
-    /// Logs in through `authorizer` and creates a token for `cluster_name` that lives for `ttl`.
+    /// Logs in through `authorizer` and generates a token for `cluster_name`.
     async fn generate(
         &self,
         authorizer: &dyn OidcAuthorizer,
@@ -20,19 +20,19 @@ pub trait IssueCredential {
     ) -> Result<RancherCredential, RancherError>;
 }
 
-/// Why no credential was issued.
+/// A rancher error.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RancherError {
-    /// The identity provider did not hand out an authorization code.
+    /// The idp login failed.
     #[error("could not log in at the identity provider: {0}")]
     Authorize(#[from] OidcError),
 
-    /// Rancher refused a request or could not be reached.
+    /// The rancher api returned an error.
     #[error(transparent)]
     Api(#[from] RancherApiError),
 
-    /// The expiry of a token that lives that long cannot be represented.
+    /// The TTL was too long.
     #[error("the ttl of the token is too long")]
     TtlTooLong,
 }

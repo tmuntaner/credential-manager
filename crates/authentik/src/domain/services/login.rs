@@ -9,7 +9,7 @@ use std::error::Error;
 use thiserror::Error;
 use url::Url;
 
-/// How many times authentik may reject the second factor before giving up.
+/// How many times Authentik may reject the MFA challenges before giving up.
 pub(crate) const MAX_MFA_ATTEMPTS: usize = 3;
 
 /// Authentik login errors.
@@ -65,7 +65,10 @@ impl<F: FlowExecutor, S: StateSource, A: Authenticator> AuthentikService<F, S, A
     ) -> Result<SamlAssertion, AuthentikError> {
         let mfa = InteractiveMfa::new(login.mfa, &self.authenticator);
 
-        Ok(self.flows.saml(&entry_url(app_url)?, &login, &mfa).await?)
+        Ok(self
+            .flows
+            .saml(&ensure_trailing_slash(app_url)?, &login, &mfa)
+            .await?)
     }
 
     /// Logs into Authentik with an OIDC applicaiton.
@@ -89,7 +92,8 @@ impl<F: FlowExecutor, S: StateSource, A: Authenticator> AuthentikService<F, S, A
     }
 }
 
-/// The OAuth authorization request for `client_id`, on the authentik behind `issuer`.
+/// Parses the issuer to generate the authorization URL for the issuer.
+/// Used by OIDC.
 fn authorize_url(
     issuer: &str,
     client_id: &str,
@@ -111,6 +115,7 @@ fn authorize_url(
 
 /// Reads the code of the redirect back to the client, after checking it answers our request.
 fn code_from_redirect(redirect: &Url, state: &str) -> Result<AuthCode, AuthentikError> {
+    // a helper function to read a query param from a URL.
     let param = |name: &str| {
         redirect
             .query_pairs()
@@ -118,25 +123,28 @@ fn code_from_redirect(redirect: &Url, state: &str) -> Result<AuthCode, Authentik
             .map(|(_, value)| value.into_owned())
     };
 
+    // see if there are any errors.
     if let Some(error) = param("error") {
         let description = param("error_description").unwrap_or_default();
         return Err(AuthentikError::OidcRefused(
             format!("{error} {description}").trim().to_string(),
         ));
     }
+
+    // if the state doesn't match, return an error.
     if param("state").as_deref() != Some(state) {
         return Err(AuthentikError::OidcStateMismatch);
     }
 
+    // return the code and map it to an AuthCode (newtype).
     param("code")
         .filter(|code| !code.is_empty())
         .map(AuthCode::new)
         .ok_or_else(|| AuthentikError::OidcNoCode(redirect.path().to_string()))
 }
 
-/// The SAML app url as the flow needs it. authentik answers `404` for `.../init` without the trailing
-/// slash, and the settings store the url without it.
-fn entry_url(app_url: &str) -> Result<Url, AuthentikError> {
+/// For some requests, we need to be sure to have a trailing slash.
+fn ensure_trailing_slash(app_url: &str) -> Result<Url, AuthentikError> {
     if app_url.ends_with('/') {
         Ok(Url::parse(app_url)?)
     } else {
@@ -343,11 +351,13 @@ mod tests {
     #[test]
     fn entry_url_adds_the_trailing_slash_once() {
         assert_eq!(
-            entry_url(STORED_URL).unwrap().as_str(),
+            ensure_trailing_slash(STORED_URL).unwrap().as_str(),
             format!("{STORED_URL}/")
         );
         assert_eq!(
-            entry_url(&format!("{STORED_URL}/")).unwrap().as_str(),
+            ensure_trailing_slash(&format!("{STORED_URL}/"))
+                .unwrap()
+                .as_str(),
             format!("{STORED_URL}/")
         );
     }
