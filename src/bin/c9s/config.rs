@@ -111,6 +111,46 @@ struct ConfigGlobal {
 enum ConfigGlobalSubCommand {
     UseKeyring(ConfigGlobalUseKeyRing),
     DefaultIdp(ConfigGlobalDefaultIdp),
+    Yubikey(ConfigGlobalYubikey),
+}
+
+#[derive(Parser)]
+/// Configure YubiKey secret wrapping for credentials stored in the keyring.
+struct ConfigGlobalYubikey {
+    #[clap(subcommand)]
+    sub_command: ConfigGlobalYubikeySubCommand,
+}
+
+#[derive(Parser)]
+enum ConfigGlobalYubikeySubCommand {
+    /// Enroll a YubiKey for hardware-backed secret wrapping
+    Enroll(ConfigGlobalYubikeyEnroll),
+    /// Disable YubiKey secret wrapping
+    Disable(ConfigGlobalYubikeyDisable),
+    /// Show current YubiKey enrollment and wrapping status
+    Status(ConfigGlobalYubikeyStatus),
+    /// Configure whether generated session secrets (AWS & Rancher tokens) are wrapped
+    WrapCached(ConfigGlobalYubikeyWrapCached),
+}
+
+#[derive(Parser)]
+struct ConfigGlobalYubikeyEnroll {
+    /// Relying party ID for WebAuthn/FIDO2 enrollment (defaults to "localhost")
+    #[clap(long, default_value = "localhost")]
+    rp_id: String,
+}
+
+#[derive(Parser)]
+struct ConfigGlobalYubikeyDisable {}
+
+#[derive(Parser)]
+struct ConfigGlobalYubikeyStatus {}
+
+#[derive(Parser)]
+struct ConfigGlobalYubikeyWrapCached {
+    /// Accepted values: "true" or "false"
+    #[clap(long, action = clap::ArgAction::Set, value_parser = true_or_false)]
+    enabled: bool,
 }
 
 #[derive(Parser)]
@@ -124,7 +164,7 @@ struct ConfigGlobalDefaultIdp {
 /// Whether c9s should use a keyring service.
 struct ConfigGlobalUseKeyRing {
     /// Accepted values: "true" or "false"
-    #[clap(long, value_parser = true_or_false)]
+    #[clap(long, action = clap::ArgAction::Set, value_parser = true_or_false)]
     enabled: bool,
 }
 
@@ -140,6 +180,7 @@ impl Config {
             ConfigSubCommand::Global(val) => match &val.sub_command {
                 ConfigGlobalSubCommand::UseKeyring(val) => val.run(settings),
                 ConfigGlobalSubCommand::DefaultIdp(val) => val.run(settings),
+                ConfigGlobalSubCommand::Yubikey(val) => val.run(settings),
             },
         }
     }
@@ -241,6 +282,77 @@ impl ConfigGlobalUseKeyRing {
     fn run(&self, settings: &mut AppConfig) -> Result<()> {
         settings.set_use_keyring(self.enabled);
 
+        Ok(())
+    }
+}
+
+impl ConfigGlobalYubikey {
+    fn run(&self, settings: &mut AppConfig) -> Result<()> {
+        match &self.sub_command {
+            ConfigGlobalYubikeySubCommand::Enroll(val) => val.run(settings),
+            ConfigGlobalYubikeySubCommand::Disable(val) => val.run(settings),
+            ConfigGlobalYubikeySubCommand::Status(val) => val.run(settings),
+            ConfigGlobalYubikeySubCommand::WrapCached(val) => val.run(settings),
+        }
+    }
+}
+
+impl ConfigGlobalYubikeyEnroll {
+    fn run(&self, settings: &mut AppConfig) -> Result<()> {
+        #[cfg(target_os = "windows")]
+        {
+            let _ = settings;
+            Err(anyhow!("YubiKey wrapping is not supported on Windows"))
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let config = c9s::outbound::yubikey::enroll(&self.rp_id)?;
+            settings.set_yubikey(Some(config));
+            println!("YubiKey successfully enrolled for secret wrapping.");
+            Ok(())
+        }
+    }
+}
+
+impl ConfigGlobalYubikeyDisable {
+    fn run(&self, settings: &mut AppConfig) -> Result<()> {
+        settings.set_yubikey(None);
+        println!("YubiKey secret wrapping disabled.");
+        Ok(())
+    }
+}
+
+impl ConfigGlobalYubikeyStatus {
+    fn run(&self, settings: &AppConfig) -> Result<()> {
+        match settings.yubikey_config() {
+            Some(yk) => {
+                println!("YubiKey status: Enrolled");
+                println!("Relying Party: {}", yk.rp_id);
+                println!(
+                    "Wrap cached secrets (AWS/Rancher): {}",
+                    if settings.wrap_cached_secrets_enabled() {
+                        "enabled"
+                    } else {
+                        "disabled (stored in plain keyring)"
+                    }
+                );
+            }
+            None => {
+                println!("YubiKey status: Not enrolled (disabled)");
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ConfigGlobalYubikeyWrapCached {
+    fn run(&self, settings: &mut AppConfig) -> Result<()> {
+        settings.set_wrap_cached_secrets(self.enabled);
+        println!(
+            "Protection for cached secrets (AWS/Rancher) is now {}.",
+            if self.enabled { "enabled" } else { "disabled" }
+        );
         Ok(())
     }
 }
@@ -395,5 +507,62 @@ mod tests {
     fn an_unknown_mfa_is_rejected_while_parsing() {
         assert!(parse(&["rancher", "--url", "u", "--client-id", "c", "-m", "sms"]).is_err());
         assert!(parse(&["rancher", "--url", "u", "--client-id", "c", "-m", "TOTP"]).is_ok());
+    }
+
+    #[test]
+    fn parses_the_yubikey_enroll_subcommand() {
+        let config = parse(&["global", "yubikey", "enroll", "--rp-id", "c9s.dev"]).unwrap();
+        let ConfigSubCommand::Global(global) = config.sub_command else {
+            panic!("expected global");
+        };
+        let ConfigGlobalSubCommand::Yubikey(yk) = global.sub_command else {
+            panic!("expected yubikey");
+        };
+        let ConfigGlobalYubikeySubCommand::Enroll(enroll) = yk.sub_command else {
+            panic!("expected enroll");
+        };
+        assert_eq!(enroll.rp_id, "c9s.dev");
+    }
+
+    #[test]
+    fn parses_the_yubikey_disable_and_status_subcommands() {
+        let config = parse(&["global", "yubikey", "disable"]).unwrap();
+        let ConfigSubCommand::Global(global) = config.sub_command else {
+            panic!("expected global");
+        };
+        let ConfigGlobalSubCommand::Yubikey(yk) = global.sub_command else {
+            panic!("expected yubikey");
+        };
+        assert!(matches!(
+            yk.sub_command,
+            ConfigGlobalYubikeySubCommand::Disable(_)
+        ));
+
+        let config = parse(&["global", "yubikey", "status"]).unwrap();
+        let ConfigSubCommand::Global(global) = config.sub_command else {
+            panic!("expected global");
+        };
+        let ConfigGlobalSubCommand::Yubikey(yk) = global.sub_command else {
+            panic!("expected yubikey");
+        };
+        assert!(matches!(
+            yk.sub_command,
+            ConfigGlobalYubikeySubCommand::Status(_)
+        ));
+    }
+
+    #[test]
+    fn parses_the_yubikey_wrap_cached_subcommand() {
+        let config = parse(&["global", "yubikey", "wrap-cached", "--enabled", "true"]).unwrap();
+        let ConfigSubCommand::Global(global) = config.sub_command else {
+            panic!("expected global");
+        };
+        let ConfigGlobalSubCommand::Yubikey(yk) = global.sub_command else {
+            panic!("expected yubikey");
+        };
+        let ConfigGlobalYubikeySubCommand::WrapCached(wrap) = yk.sub_command else {
+            panic!("expected wrap-cached");
+        };
+        assert!(wrap.enabled);
     }
 }

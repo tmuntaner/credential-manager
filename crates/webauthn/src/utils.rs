@@ -28,6 +28,23 @@ pub fn assertion_client_data(origin: &str, challenge_str: &str) -> Result<String
     Ok(serde_json::to_string(&client_data)?)
 }
 
+/// The `clientDataJSON` of a WebAuthn registration.
+pub fn registration_client_data(
+    origin: &str,
+    challenge_str: &str,
+) -> Result<String, WebauthnError> {
+    let caller_origin = Url::parse(origin)?;
+
+    let client_data = AssertionClientData {
+        sign_type: "webauthn.create",
+        challenge: challenge_str,
+        origin: caller_origin.origin().unicode_serialization(),
+        cross_origin: false,
+    };
+
+    Ok(serde_json::to_string(&client_data)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

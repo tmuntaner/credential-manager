@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use keyring::KeyringClient;
+use c9s::domain::ports::secret_store::{Secret, SecretKey, SecretStore};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::io::{self, BufRead, Write};
@@ -10,26 +10,26 @@ pub fn get_password(
     app_url: String,
     username: String,
     with_password: bool,
-    keyring_enabled: bool,
+    store: Option<&dyn SecretStore>,
 ) -> Result<String> {
     let app_domain = Url::parse(app_url.as_str())?;
     let app_domain = app_domain
         .domain()
         .ok_or_else(|| anyhow!("could not find app domain"))?;
     let service = format!("c9s -- {app_domain}");
+    let key = SecretKey::new(&username, &service, "c9s");
 
-    let keyring = KeyringClient::new(username.as_str(), service.as_str(), "c9s")?;
-    let password = if keyring_enabled {
-        keyring.get_password()?
+    let password = if let Some(store) = store {
+        store.get(&key)?.map(|s| s.into_inner())
     } else {
         None
     };
 
     let password = match with_password {
-        true => prompt_user_for_password(&keyring, keyring_enabled)?,
+        true => prompt_user_for_password(store, &key)?,
         false => match password {
             Some(password) => password,
-            None => prompt_user_for_password(&keyring, keyring_enabled)?,
+            None => prompt_user_for_password(store, &key)?,
         },
     };
 
@@ -38,12 +38,12 @@ pub fn get_password(
 
 pub fn get_cached_credential<T: DeserializeOwned>(
     key: &str,
-    keyring_enabled: bool,
+    store: Option<&dyn SecretStore>,
 ) -> Result<Option<T>> {
-    let cached_credential = if keyring_enabled {
+    let cached_credential = if let Some(store) = store {
         let service = format!("c9s credential -- {key}");
-        let keyring = KeyringClient::new(key, &service, "c9s")?;
-        keyring.get_password()?
+        let secret_key = SecretKey::new(key, &service, "c9s");
+        store.get(&secret_key)?.map(|s| s.into_inner())
     } else {
         None
     };
@@ -60,22 +60,22 @@ pub fn get_cached_credential<T: DeserializeOwned>(
 pub fn set_cached_credential<T: Serialize>(
     key: &str,
     credential: &T,
-    keyring_enabled: bool,
+    store: Option<&dyn SecretStore>,
 ) -> Result<()> {
-    if keyring_enabled {
+    if let Some(store) = store {
         let service = format!("c9s credential -- {key}");
-        let keyring = KeyringClient::new(key, &service, "c9s")?;
+        let secret_key = SecretKey::new(key, &service, "c9s");
         let json = serde_json::to_string(credential)?;
-        keyring.set_password(json)?;
+        store.set(&secret_key, Secret::new(json))?;
     }
 
     Ok(())
 }
 
-fn prompt_user_for_password(keyring: &KeyringClient, keyring_enabled: bool) -> Result<String> {
+fn prompt_user_for_password(store: Option<&dyn SecretStore>, key: &SecretKey) -> Result<String> {
     let password = rpassword::prompt_password("Password: ")?;
 
-    if keyring_enabled {
+    if let Some(store) = store {
         eprint!("Save password? (y/n) ");
         let _ = io::stdout().flush();
         let mut buffer = String::new();
@@ -85,7 +85,7 @@ fn prompt_user_for_password(keyring: &KeyringClient, keyring_enabled: bool) -> R
         buffer.truncate(len);
 
         if buffer == "y" {
-            keyring.set_password(password.clone())?;
+            store.set(key, Secret::new(password.clone()))?;
         }
     }
 

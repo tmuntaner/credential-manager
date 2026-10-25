@@ -37,7 +37,17 @@ pub enum WebauthnError {
     #[error("the security key did not say which credential signed")]
     UnknownCredential,
 
-    #[cfg(target_os = "windows")]
-    #[error("WebAuthn assertions are not supported on Windows yet")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[error("could not start registration: {0:?}")]
+    StartRegistering(authenticator::errors::AuthenticatorError),
+
+    #[error("Problem receiving registration result, unable to continue")]
+    ReceiveRegisterResult,
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[error("the security key does not support the hmac-secret extension")]
+    HmacSecretNotSupported,
+
+    #[error("WebAuthn operations are not supported on Windows yet")]
     UnsupportedPlatform,
 }
