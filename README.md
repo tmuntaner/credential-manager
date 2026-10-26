@@ -25,6 +25,8 @@ c9s config global use-keyring --enabled false
 
 #### YubiKey Secret Wrapping (Hardware-Backed Envelope Encryption)
 
+For more information, please see our documentation on [credential encryption](docs/credential_encryption.md).
+
 `c9s` supports wrapping secrets stored in the OS keyring with AES-256-GCM.
 It uses an encryption key derived from a physical YubiKey touch via FIDO2 `hmac-secret` (Linux and macOS).
 This is not supported on Windows.
