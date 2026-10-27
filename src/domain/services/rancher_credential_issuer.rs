@@ -40,6 +40,7 @@ impl RancherCredentialIssuer for RancherCredentialIssuerService {
 mod tests {
     use super::*;
     use crate::domain::models::oidc::OidcError;
+    use crate::domain::models::secret::SafeSecret;
     use time::OffsetDateTime;
 
     struct FixedCode;
@@ -86,7 +87,7 @@ mod tests {
             RancherCredentialIssuerService::new(Box::new(FixedCode), Box::new(FakeRancher));
         let login = UserCredentials {
             username: "user".to_string(),
-            password: "secret".to_string(),
+            password: SafeSecret::new("secret"),
             mfa: None,
         };
 

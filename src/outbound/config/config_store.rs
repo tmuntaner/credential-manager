@@ -1,5 +1,6 @@
-use crate::domain::models::settings::{AppConfig, SettingsError};
-use crate::domain::ports::config::ConfigStore;
+use crate::domain::models::settings::AppConfig;
+use crate::domain::ports::config::{ConfigError, ConfigStore};
+use crate::outbound::config::file::FileConfig;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
@@ -11,9 +12,9 @@ pub struct ConfigFileAdapter {
 
 impl ConfigFileAdapter {
     /// The settings file in the config directory of the user, `~/.config/c9s/settings.toml` on Linux.
-    pub fn in_user_config_dir() -> Result<Self, SettingsError> {
+    pub fn in_user_config_dir() -> Result<Self, ConfigError> {
         let path = dirs::config_dir()
-            .ok_or(SettingsError::NoConfigDir)?
+            .ok_or_else(|| ConfigError::Failed("could not determine config directory".into()))?
             .join("c9s")
             .join("settings.toml");
 
@@ -25,21 +26,28 @@ impl ConfigFileAdapter {
     }
 }
 
+fn failed(e: impl std::error::Error + Send + Sync + 'static) -> ConfigError {
+    ConfigError::Failed(Box::new(e))
+}
+
 impl ConfigStore for ConfigFileAdapter {
     /// A missing file is the same as an empty one; nothing is created.
-    fn load(&self) -> Result<AppConfig, SettingsError> {
+    fn load(&self) -> Result<AppConfig, ConfigError> {
         match fs::read_to_string(&self.path) {
-            Ok(contents) => Ok(toml::from_str(&contents)?),
+            Ok(contents) => toml::from_str::<FileConfig>(&contents)
+                .map_err(failed)?
+                .try_into(),
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(AppConfig::default()),
-            Err(e) => Err(e.into()),
+            Err(e) => Err(failed(e)),
         }
     }
 
-    fn save(&self, config: &AppConfig) -> Result<(), SettingsError> {
+    fn save(&self, config: &AppConfig) -> Result<(), ConfigError> {
         if let Some(dir) = self.path.parent() {
-            fs::create_dir_all(dir)?;
+            fs::create_dir_all(dir).map_err(failed)?;
         }
-        fs::write(&self.path, toml::to_string(config)?)?;
+        let contents = toml::to_string(&FileConfig::from(config)).map_err(failed)?;
+        fs::write(&self.path, contents).map_err(failed)?;
 
         Ok(())
     }

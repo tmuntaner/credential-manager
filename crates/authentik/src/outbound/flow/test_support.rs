@@ -2,6 +2,7 @@
 
 use crate::domain::models::mfa::{MfaChallenge, MfaResponse};
 use crate::domain::ports::flow::{MfaError, SecondFactor};
+use async_trait::async_trait;
 use httpmock::Method::{GET, POST};
 use httpmock::MockServer;
 use serde_json::json;
@@ -25,8 +26,13 @@ impl FakeMfa {
     }
 }
 
+#[async_trait(?Send)]
 impl SecondFactor for FakeMfa {
-    fn respond(&self, challenge: &MfaChallenge, idp_host: &str) -> Result<MfaResponse, MfaError> {
+    async fn respond(
+        &self,
+        challenge: &MfaChallenge,
+        idp_host: &str,
+    ) -> Result<MfaResponse, MfaError> {
         self.asked
             .borrow_mut()
             .push((challenge.clone(), idp_host.to_string()));
@@ -35,7 +41,7 @@ impl SecondFactor for FakeMfa {
             .ok_or_else(|| MfaError::NoSupportedMethod("none in this test".to_string()))
     }
 
-    fn rejected(&self, reason: &str) -> Result<(), MfaError> {
+    async fn rejected(&self, reason: &str) -> Result<(), MfaError> {
         Err(MfaError::TooManyRejections {
             attempts: 1,
             reason: reason.to_string(),

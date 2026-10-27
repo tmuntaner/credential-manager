@@ -1,8 +1,8 @@
 //! What the login resolver is asked, and what it answers.
 
 use crate::domain::models::idp::IdpType;
+use crate::domain::models::mfa::MfaSelection;
 use crate::domain::models::settings::{AwsAppType, SettingsError};
-use base::models::mfa::MfaSelection;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

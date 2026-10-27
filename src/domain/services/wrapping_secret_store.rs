@@ -1,5 +1,7 @@
-use crate::domain::ports::secret_store::{Secret, SecretKey, SecretStore, SecretStoreError};
+use crate::domain::models::secret::SafeSecret;
+use crate::domain::ports::secret_store::{SecretKey, SecretStore, SecretStoreError};
 use crate::domain::ports::secret_wrapper::{SecretWrapper, WrapError};
+use async_trait::async_trait;
 
 /// Policy for handling unwrapped (legacy plaintext) secrets in the store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -40,19 +42,23 @@ impl<S: SecretStore, W: SecretWrapper> WrappingSecretStore<S, W> {
     }
 }
 
+#[async_trait(?Send)]
 impl<S: SecretStore, W: SecretWrapper> SecretStore for WrappingSecretStore<S, W> {
-    fn get(&self, key: &SecretKey) -> Result<Option<Secret>, SecretStoreError> {
-        let raw = self.store.get(key)?;
+    async fn get(&self, key: &SecretKey) -> Result<Option<SafeSecret>, SecretStoreError> {
+        let raw = self.store.get(key).await?;
         let raw = match raw {
             Some(raw) => raw,
             None => return Ok(None),
         };
 
         let aad = key.aad();
-        match self.wrapper.unwrap(&aad, &raw) {
+        match self.wrapper.unwrap(&aad, &raw).await {
             Ok(plaintext) => Ok(Some(plaintext)),
             Err(WrapError::NotWrapped) => match self.policy {
-                WrappingPolicy::Lenient => Ok(Some(raw)),
+                WrappingPolicy::Lenient => {
+                    log::warn!("a stored secret is not wrapped; it is accepted as it is");
+                    Ok(Some(raw))
+                }
                 WrappingPolicy::Strict => Ok(None),
             },
             Err(WrapError::Corrupt) => Ok(None),
@@ -62,10 +68,10 @@ impl<S: SecretStore, W: SecretWrapper> SecretStore for WrappingSecretStore<S, W>
         }
     }
 
-    fn set(&self, key: &SecretKey, value: Secret) -> Result<(), SecretStoreError> {
+    async fn set(&self, key: &SecretKey, value: SafeSecret) -> Result<(), SecretStoreError> {
         let aad = key.aad();
-        let wrapped = self.wrapper.wrap(&aad, &value)?;
-        self.store.set(key, wrapped)?;
+        let wrapped = self.wrapper.wrap(&aad, &value).await?;
+        self.store.set(key, wrapped).await?;
         Ok(())
     }
 }
@@ -76,8 +82,8 @@ mod tests {
     use crate::domain::ports::secret_store::MockSecretStore;
     use crate::domain::ports::secret_wrapper::MockSecretWrapper;
 
-    #[test]
-    fn set_wraps_with_aad_and_stores_in_inner_store() {
+    #[tokio::test]
+    async fn set_wraps_with_aad_and_stores_in_inner_store() {
         let mut mock_store = MockSecretStore::new();
         let mut mock_wrapper = MockSecretWrapper::new();
 
@@ -89,7 +95,7 @@ mod tests {
             .expect_wrap()
             .withf(move |aad, pt| aad == expected_aad && pt.expose_secret() == "my-password")
             .times(1)
-            .returning(|_, _| Ok(Secret::new("c9s-yk1:enc-ciphertext")));
+            .returning(|_, _| Ok(SafeSecret::new("c9s-yk1:enc-ciphertext")));
 
         mock_store
             .expect_set()
@@ -99,12 +105,13 @@ mod tests {
 
         let wrapping_store = WrappingSecretStore::new(mock_store, mock_wrapper);
         wrapping_store
-            .set(&key, Secret::new("my-password"))
+            .set(&key, SafeSecret::new("my-password"))
+            .await
             .unwrap();
     }
 
-    #[test]
-    fn get_unwraps_and_returns_plaintext() {
+    #[tokio::test]
+    async fn get_unwraps_and_returns_plaintext() {
         let mut mock_store = MockSecretStore::new();
         let mut mock_wrapper = MockSecretWrapper::new();
 
@@ -116,7 +123,7 @@ mod tests {
             .expect_get()
             .withf(move |k| k == &key_clone)
             .times(1)
-            .returning(|_| Ok(Some(Secret::new("c9s-yk1:enc-ciphertext"))));
+            .returning(|_| Ok(Some(SafeSecret::new("c9s-yk1:enc-ciphertext"))));
 
         mock_wrapper
             .expect_unwrap()
@@ -124,16 +131,16 @@ mod tests {
                 aad == expected_aad && ct.expose_secret() == "c9s-yk1:enc-ciphertext"
             })
             .times(1)
-            .returning(|_, _| Ok(Secret::new("my-password")));
+            .returning(|_, _| Ok(SafeSecret::new("my-password")));
 
         let wrapping_store = WrappingSecretStore::new(mock_store, mock_wrapper);
-        let result = wrapping_store.get(&key).unwrap();
+        let result = wrapping_store.get(&key).await.unwrap();
 
         assert_eq!(result.unwrap().expose_secret(), "my-password");
     }
 
-    #[test]
-    fn get_lenient_policy_returns_plaintext_on_not_wrapped() {
+    #[tokio::test]
+    async fn get_lenient_policy_returns_plaintext_on_not_wrapped() {
         let mut mock_store = MockSecretStore::new();
         let mut mock_wrapper = MockSecretWrapper::new();
 
@@ -142,7 +149,7 @@ mod tests {
         mock_store
             .expect_get()
             .times(1)
-            .returning(|_| Ok(Some(Secret::new("plain-password"))));
+            .returning(|_| Ok(Some(SafeSecret::new("plain-password"))));
 
         mock_wrapper
             .expect_unwrap()
@@ -151,13 +158,13 @@ mod tests {
 
         let wrapping_store =
             WrappingSecretStore::with_policy(mock_store, mock_wrapper, WrappingPolicy::Lenient);
-        let result = wrapping_store.get(&key).unwrap();
+        let result = wrapping_store.get(&key).await.unwrap();
 
         assert_eq!(result.unwrap().expose_secret(), "plain-password");
     }
 
-    #[test]
-    fn get_strict_policy_returns_none_on_not_wrapped() {
+    #[tokio::test]
+    async fn get_strict_policy_returns_none_on_not_wrapped() {
         let mut mock_store = MockSecretStore::new();
         let mut mock_wrapper = MockSecretWrapper::new();
 
@@ -166,7 +173,7 @@ mod tests {
         mock_store
             .expect_get()
             .times(1)
-            .returning(|_| Ok(Some(Secret::new("plain-password"))));
+            .returning(|_| Ok(Some(SafeSecret::new("plain-password"))));
 
         mock_wrapper
             .expect_unwrap()
@@ -175,13 +182,13 @@ mod tests {
 
         let wrapping_store =
             WrappingSecretStore::with_policy(mock_store, mock_wrapper, WrappingPolicy::Strict);
-        let result = wrapping_store.get(&key).unwrap();
+        let result = wrapping_store.get(&key).await.unwrap();
 
         assert!(result.is_none());
     }
 
-    #[test]
-    fn get_returns_none_on_corrupt_payload() {
+    #[tokio::test]
+    async fn get_returns_none_on_corrupt_payload() {
         let mut mock_store = MockSecretStore::new();
         let mut mock_wrapper = MockSecretWrapper::new();
 
@@ -190,7 +197,7 @@ mod tests {
         mock_store
             .expect_get()
             .times(1)
-            .returning(|_| Ok(Some(Secret::new("c9s-yk1:corrupted"))));
+            .returning(|_| Ok(Some(SafeSecret::new("c9s-yk1:corrupted"))));
 
         mock_wrapper
             .expect_unwrap()
@@ -198,13 +205,13 @@ mod tests {
             .returning(|_, _| Err(WrapError::Corrupt));
 
         let wrapping_store = WrappingSecretStore::new(mock_store, mock_wrapper);
-        let result = wrapping_store.get(&key).unwrap();
+        let result = wrapping_store.get(&key).await.unwrap();
 
         assert!(result.is_none());
     }
 
-    #[test]
-    fn get_propagates_device_not_present_error() {
+    #[tokio::test]
+    async fn get_propagates_device_not_present_error() {
         let mut mock_store = MockSecretStore::new();
         let mut mock_wrapper = MockSecretWrapper::new();
 
@@ -213,7 +220,7 @@ mod tests {
         mock_store
             .expect_get()
             .times(1)
-            .returning(|_| Ok(Some(Secret::new("c9s-yk1:enc"))));
+            .returning(|_| Ok(Some(SafeSecret::new("c9s-yk1:enc"))));
 
         mock_wrapper
             .expect_unwrap()
@@ -221,13 +228,13 @@ mod tests {
             .returning(|_, _| Err(WrapError::DeviceNotPresent));
 
         let wrapping_store = WrappingSecretStore::new(mock_store, mock_wrapper);
-        let err = wrapping_store.get(&key).unwrap_err();
+        let err = wrapping_store.get(&key).await.unwrap_err();
 
         assert!(err.to_string().contains("YubiKey device is not present"));
     }
 
-    #[test]
-    fn get_propagates_cancelled_error() {
+    #[tokio::test]
+    async fn get_propagates_cancelled_error() {
         let mut mock_store = MockSecretStore::new();
         let mut mock_wrapper = MockSecretWrapper::new();
 
@@ -236,7 +243,7 @@ mod tests {
         mock_store
             .expect_get()
             .times(1)
-            .returning(|_| Ok(Some(Secret::new("c9s-yk1:enc"))));
+            .returning(|_| Ok(Some(SafeSecret::new("c9s-yk1:enc"))));
 
         mock_wrapper
             .expect_unwrap()
@@ -244,7 +251,7 @@ mod tests {
             .returning(|_, _| Err(WrapError::Cancelled));
 
         let wrapping_store = WrappingSecretStore::new(mock_store, mock_wrapper);
-        let err = wrapping_store.get(&key).unwrap_err();
+        let err = wrapping_store.get(&key).await.unwrap_err();
 
         assert!(err.to_string().contains("cancelled or timed out"));
     }

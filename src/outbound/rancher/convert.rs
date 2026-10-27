@@ -1,10 +1,11 @@
 //! Conversions between the models of this application and those of the `rancher` crate.
 
+use crate::domain::models::mfa::MfaSelection;
 use crate::domain::models::oidc::OidcError;
 use crate::domain::models::rancher_credentials::RancherCredential;
+use crate::domain::models::secret::SafeSecret;
 use crate::domain::models::user_credentials::UserCredentials;
 use crate::domain::ports::rancher::RancherError;
-use base::models::mfa::MfaSelection;
 
 impl From<rancher::RancherCredential> for RancherCredential {
     fn from(c: rancher::RancherCredential) -> Self {
@@ -38,7 +39,7 @@ impl From<UserCredentials> for rancher::UserCredentials {
     fn from(c: UserCredentials) -> Self {
         rancher::UserCredentials::new(
             c.username,
-            c.password,
+            c.password.into_inner(),
             c.mfa.map(|mfa| match mfa {
                 MfaSelection::WebAuthn => rancher::MfaMethod::WebAuthn,
                 MfaSelection::Totp => rancher::MfaMethod::Totp,
@@ -51,7 +52,7 @@ impl From<rancher::UserCredentials> for UserCredentials {
     fn from(c: rancher::UserCredentials) -> Self {
         UserCredentials {
             username: c.username,
-            password: c.password,
+            password: SafeSecret::new(c.password),
             mfa: c.mfa.map(|mfa| match mfa {
                 rancher::MfaMethod::WebAuthn => MfaSelection::WebAuthn,
                 rancher::MfaMethod::Totp => MfaSelection::Totp,

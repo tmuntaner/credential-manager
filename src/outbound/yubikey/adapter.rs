@@ -1,5 +1,11 @@
+use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 
+use crate::domain::models::secret::SafeSecret;
+use crate::domain::ports::notifier::Notifier;
+use crate::domain::ports::secret_wrapper::{SecretWrapper, WrapError};
+use crate::domain::ports::user_interaction::UserInteraction;
+use crate::outbound::webauthn::ui::UserInteractionKeyUi;
 use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
     Aes256Gcm, Nonce,
@@ -7,10 +13,8 @@ use aes_gcm::{
 use base64::Engine;
 use hkdf::Hkdf;
 use sha2::Sha256;
+use webauthn::SecurityKeyUi;
 use zeroize::Zeroize;
-
-use crate::domain::ports::secret_store::Secret;
-use crate::domain::ports::secret_wrapper::{SecretWrapper, WrapError};
 
 const ENVELOPE_PREFIX: &str = "c9s-yk1:";
 const NONCE_LEN: usize = 12;
@@ -18,8 +22,9 @@ const TAG_LEN: usize = 16;
 const HKDF_INFO: &[u8] = b"c9s-secret-wrap-v1";
 
 /// Trait for deriving the 32-byte secret using FIDO2 `hmac-secret`.
+#[async_trait(?Send)]
 pub trait HmacSecretDeriver: Send + Sync {
-    fn derive(
+    async fn derive(
         &self,
         rp_id: &str,
         credential_id: &[u8],
@@ -28,25 +33,47 @@ pub trait HmacSecretDeriver: Send + Sync {
 }
 
 /// Default deriver that talks to the hardware key via `webauthn`.
-#[derive(Default, Debug, Clone)]
-pub struct FidoHmacSecretDeriver;
+#[derive(Clone)]
+pub struct FidoHmacSecretDeriver {
+    ui: Arc<dyn SecurityKeyUi>,
+}
 
+impl FidoHmacSecretDeriver {
+    /// Asks the user for the security key PIN through `interaction` and tells them to touch the key
+    /// through `notifier`.
+    pub fn new<U: UserInteraction + 'static, N: Notifier + 'static>(
+        interaction: Arc<U>,
+        notifier: Arc<N>,
+    ) -> Self {
+        Self {
+            ui: Arc::new(UserInteractionKeyUi::new(interaction, notifier)),
+        }
+    }
+}
+
+#[async_trait(?Send)]
 impl HmacSecretDeriver for FidoHmacSecretDeriver {
-    fn derive(
+    async fn derive(
         &self,
         rp_id: &str,
         credential_id: &[u8],
         salt: &[u8; 32],
     ) -> Result<[u8; 32], WrapError> {
-        webauthn::derive_hmac_secret(rp_id, credential_id, salt).map_err(WrapError::from)
+        webauthn::derive_hmac_secret(rp_id, credential_id, salt, self.ui.clone())
+            .await
+            .map_err(WrapError::from)
     }
 }
 
 /// Enrolls a new YubiKey credential with FIDO2 `hmac-secret` and generates a random 32-byte salt.
-pub fn enroll(rp_id: &str) -> Result<crate::domain::models::settings::YubikeyConfig, WrapError> {
+pub async fn enroll<U: UserInteraction + 'static, N: Notifier + 'static>(
+    rp_id: &str,
+    interaction: Arc<U>,
+    notifier: Arc<N>,
+) -> Result<crate::domain::models::settings::YubikeyConfig, WrapError> {
     #[cfg(target_os = "windows")]
     {
-        let _ = rp_id;
+        let _ = (rp_id, interaction, notifier);
         Err(WrapError::Failed(Box::new(std::io::Error::other(
             "YubiKey wrapping is not supported on Windows",
         ))))
@@ -54,7 +81,11 @@ pub fn enroll(rp_id: &str) -> Result<crate::domain::models::settings::YubikeyCon
 
     #[cfg(not(target_os = "windows"))]
     {
-        let enrollment = webauthn::enroll_hmac_secret(rp_id)?;
+        let enrollment = webauthn::enroll_hmac_secret(
+            rp_id,
+            Arc::new(UserInteractionKeyUi::new(interaction, notifier)),
+        )
+        .await?;
         let mut salt = [0u8; 32];
         getrandom::fill(&mut salt).map_err(|e| WrapError::Failed(Box::new(e)))?;
         Ok(crate::domain::models::settings::YubikeyConfig::new(
@@ -76,8 +107,19 @@ pub struct YubikeyWrapper<D = FidoHmacSecretDeriver> {
 }
 
 impl YubikeyWrapper<FidoHmacSecretDeriver> {
-    pub fn new(rp_id: impl Into<String>, credential_id: Vec<u8>, salt: [u8; 32]) -> Self {
-        Self::with_deriver(rp_id, credential_id, salt, FidoHmacSecretDeriver)
+    pub fn new<U: UserInteraction + 'static, N: Notifier + 'static>(
+        rp_id: impl Into<String>,
+        credential_id: Vec<u8>,
+        salt: [u8; 32],
+        interaction: Arc<U>,
+        notifier: Arc<N>,
+    ) -> Self {
+        Self::with_deriver(
+            rp_id,
+            credential_id,
+            salt,
+            FidoHmacSecretDeriver::new(interaction, notifier),
+        )
     }
 }
 
@@ -97,22 +139,17 @@ impl<D: HmacSecretDeriver> YubikeyWrapper<D> {
         }
     }
 
-    fn get_or_derive_key(&self) -> Result<[u8; 32], WrapError> {
-        // get the cached key if it exists
-        let mut guard = self
-            .cached_key
-            .lock()
-            .map_err(|e| WrapError::Failed(Box::new(std::io::Error::other(e.to_string()))))?;
-
+    async fn get_or_derive_key(&self) -> Result<[u8; 32], WrapError> {
         // if the cached key exists, return it
-        if let Some(key) = *guard {
+        if let Some(key) = self.cached_key()? {
             return Ok(key);
         }
 
         // derive the key
         let hmac_secret = self
             .deriver
-            .derive(&self.rp_id, &self.credential_id, &self.salt)?;
+            .derive(&self.rp_id, &self.credential_id, &self.salt)
+            .await?;
 
         let hkdf = Hkdf::<Sha256>::new(None, &hmac_secret);
         let mut aes_key = [0u8; 32];
@@ -120,8 +157,19 @@ impl<D: HmacSecretDeriver> YubikeyWrapper<D> {
             .map_err(|e| WrapError::Failed(Box::new(e)))?;
 
         // set the cached key and return it
-        *guard = Some(aes_key);
+        *self.lock_cached_key()? = Some(aes_key);
         Ok(aes_key)
+    }
+
+    fn cached_key(&self) -> Result<Option<[u8; 32]>, WrapError> {
+        Ok(*self.lock_cached_key()?)
+    }
+
+    /// The lock is never held across an await.
+    fn lock_cached_key(&self) -> Result<std::sync::MutexGuard<'_, Option<[u8; 32]>>, WrapError> {
+        self.cached_key
+            .lock()
+            .map_err(|e| WrapError::Failed(Box::new(std::io::Error::other(e.to_string()))))
     }
 }
 
@@ -137,10 +185,11 @@ impl<D> Drop for YubikeyWrapper<D> {
     }
 }
 
+#[async_trait(?Send)]
 impl<D: HmacSecretDeriver> SecretWrapper for YubikeyWrapper<D> {
-    fn wrap(&self, aad: &[u8], plaintext: &Secret) -> Result<Secret, WrapError> {
+    async fn wrap(&self, aad: &[u8], plaintext: &SafeSecret) -> Result<SafeSecret, WrapError> {
         // get the key
-        let key = self.get_or_derive_key()?;
+        let key = self.get_or_derive_key().await?;
         let cipher = Aes256Gcm::new_from_slice(&key)
             .map_err(|e| WrapError::Failed(Box::new(std::io::Error::other(format!("{e:?}")))))?;
 
@@ -150,7 +199,7 @@ impl<D: HmacSecretDeriver> SecretWrapper for YubikeyWrapper<D> {
 
         // create the payload
         let payload = Payload {
-            msg: plaintext.as_str().as_bytes(),
+            msg: plaintext.expose_secret().as_bytes(),
             aad,
         };
 
@@ -167,12 +216,12 @@ impl<D: HmacSecretDeriver> SecretWrapper for YubikeyWrapper<D> {
         // base64 encode the combined data
         let encoded = base64::engine::general_purpose::STANDARD.encode(&combined);
 
-        Ok(Secret::new(format!("{ENVELOPE_PREFIX}{encoded}")))
+        Ok(SafeSecret::new(format!("{ENVELOPE_PREFIX}{encoded}")))
     }
 
-    fn unwrap(&self, aad: &[u8], ciphertext: &Secret) -> Result<Secret, WrapError> {
+    async fn unwrap(&self, aad: &[u8], ciphertext: &SafeSecret) -> Result<SafeSecret, WrapError> {
         // get the raw text
-        let raw = ciphertext.as_str();
+        let raw = ciphertext.expose_secret();
 
         // see if the text starts with the envelope prefix
         // if it doesn't, it wasn't wrapped, so return it as an error
@@ -196,7 +245,7 @@ impl<D: HmacSecretDeriver> SecretWrapper for YubikeyWrapper<D> {
         let (nonce_bytes, ct_and_tag) = decoded.split_at(NONCE_LEN);
 
         // get the key
-        let key = self.get_or_derive_key()?;
+        let key = self.get_or_derive_key().await?;
         let cipher = Aes256Gcm::new_from_slice(&key)
             .map_err(|e| WrapError::Failed(Box::new(std::io::Error::other(format!("{e:?}")))))?;
 
@@ -217,7 +266,7 @@ impl<D: HmacSecretDeriver> SecretWrapper for YubikeyWrapper<D> {
         // convert from bytes to a string
         let plaintext = String::from_utf8(decrypted_bytes).map_err(|_| WrapError::Corrupt)?;
 
-        Ok(Secret::new(plaintext))
+        Ok(SafeSecret::new(plaintext))
     }
 }
 
@@ -240,8 +289,9 @@ mod tests {
         }
     }
 
+    #[async_trait(?Send)]
     impl HmacSecretDeriver for FakeDeriver {
-        fn derive(
+        async fn derive(
             &self,
             _rp_id: &str,
             _credential_id: &[u8],
@@ -252,48 +302,48 @@ mod tests {
         }
     }
 
-    #[test]
-    fn envelope_roundtrip_succeeds() {
+    #[tokio::test]
+    async fn envelope_roundtrip_succeeds() {
         let deriver = FakeDeriver::new([0x42; 32]);
         let wrapper =
             YubikeyWrapper::with_deriver("example.com", vec![1, 2, 3], [0u8; 32], deriver);
 
         let aad = b"c9s-aad:v1:user:service:app";
-        let plaintext = Secret::new("my-super-secret-password-1234");
+        let plaintext = SafeSecret::new("my-super-secret-password-1234");
 
-        let wrapped = wrapper.wrap(aad, &plaintext).unwrap();
+        let wrapped = wrapper.wrap(aad, &plaintext).await.unwrap();
         assert!(wrapped.expose_secret().starts_with("c9s-yk1:"));
 
-        let unwrapped = wrapper.unwrap(aad, &wrapped).unwrap();
+        let unwrapped = wrapper.unwrap(aad, &wrapped).await.unwrap();
         assert_eq!(unwrapped.expose_secret(), "my-super-secret-password-1234");
     }
 
-    #[test]
-    fn wrong_aad_fails_with_corrupt() {
+    #[tokio::test]
+    async fn wrong_aad_fails_with_corrupt() {
         let deriver = FakeDeriver::new([0x42; 32]);
         let wrapper =
             YubikeyWrapper::with_deriver("example.com", vec![1, 2, 3], [0u8; 32], deriver);
 
         let aad = b"correct-aad";
         let wrong_aad = b"wrong-aad";
-        let plaintext = Secret::new("password");
+        let plaintext = SafeSecret::new("password");
 
-        let wrapped = wrapper.wrap(aad, &plaintext).unwrap();
-        let err = wrapper.unwrap(wrong_aad, &wrapped).unwrap_err();
+        let wrapped = wrapper.wrap(aad, &plaintext).await.unwrap();
+        let err = wrapper.unwrap(wrong_aad, &wrapped).await.unwrap_err();
 
         assert!(matches!(err, WrapError::Corrupt));
     }
 
-    #[test]
-    fn tampered_ciphertext_fails_with_corrupt() {
+    #[tokio::test]
+    async fn tampered_ciphertext_fails_with_corrupt() {
         let deriver = FakeDeriver::new([0x42; 32]);
         let wrapper =
             YubikeyWrapper::with_deriver("example.com", vec![1, 2, 3], [0u8; 32], deriver);
 
         let aad = b"aad";
-        let plaintext = Secret::new("password");
+        let plaintext = SafeSecret::new("password");
 
-        let wrapped = wrapper.wrap(aad, &plaintext).unwrap();
+        let wrapped = wrapper.wrap(aad, &plaintext).await.unwrap();
         let raw = wrapped.expose_secret();
         let encoded = &raw[ENVELOPE_PREFIX.len()..];
         let mut decoded = base64::engine::general_purpose::STANDARD
@@ -305,22 +355,22 @@ mod tests {
         decoded[len - 1] ^= 0x01;
 
         let tampered_encoded = base64::engine::general_purpose::STANDARD.encode(&decoded);
-        let tampered_secret = Secret::new(format!("{ENVELOPE_PREFIX}{tampered_encoded}"));
+        let tampered_secret = SafeSecret::new(format!("{ENVELOPE_PREFIX}{tampered_encoded}"));
 
-        let err = wrapper.unwrap(aad, &tampered_secret).unwrap_err();
+        let err = wrapper.unwrap(aad, &tampered_secret).await.unwrap_err();
         assert!(matches!(err, WrapError::Corrupt));
     }
 
-    #[test]
-    fn tampered_nonce_fails_with_corrupt() {
+    #[tokio::test]
+    async fn tampered_nonce_fails_with_corrupt() {
         let deriver = FakeDeriver::new([0x42; 32]);
         let wrapper =
             YubikeyWrapper::with_deriver("example.com", vec![1, 2, 3], [0u8; 32], deriver);
 
         let aad = b"aad";
-        let plaintext = Secret::new("password");
+        let plaintext = SafeSecret::new("password");
 
-        let wrapped = wrapper.wrap(aad, &plaintext).unwrap();
+        let wrapped = wrapper.wrap(aad, &plaintext).await.unwrap();
         let raw = wrapped.expose_secret();
         let encoded = &raw[ENVELOPE_PREFIX.len()..];
         let mut decoded = base64::engine::general_purpose::STANDARD
@@ -331,40 +381,40 @@ mod tests {
         decoded[0] ^= 0x01;
 
         let tampered_encoded = base64::engine::general_purpose::STANDARD.encode(&decoded);
-        let tampered_secret = Secret::new(format!("{ENVELOPE_PREFIX}{tampered_encoded}"));
+        let tampered_secret = SafeSecret::new(format!("{ENVELOPE_PREFIX}{tampered_encoded}"));
 
-        let err = wrapper.unwrap(aad, &tampered_secret).unwrap_err();
+        let err = wrapper.unwrap(aad, &tampered_secret).await.unwrap_err();
         assert!(matches!(err, WrapError::Corrupt));
     }
 
-    #[test]
-    fn not_wrapped_prefix_fails_with_not_wrapped() {
+    #[tokio::test]
+    async fn not_wrapped_prefix_fails_with_not_wrapped() {
         let deriver = FakeDeriver::new([0x42; 32]);
         let wrapper =
             YubikeyWrapper::with_deriver("example.com", vec![1, 2, 3], [0u8; 32], deriver);
 
         let aad = b"aad";
-        let plain = Secret::new("plaintext-password");
+        let plain = SafeSecret::new("plaintext-password");
 
-        let err = wrapper.unwrap(aad, &plain).unwrap_err();
+        let err = wrapper.unwrap(aad, &plain).await.unwrap_err();
         assert!(matches!(err, WrapError::NotWrapped));
     }
 
-    #[test]
-    fn corrupted_base64_fails_with_corrupt() {
+    #[tokio::test]
+    async fn corrupted_base64_fails_with_corrupt() {
         let deriver = FakeDeriver::new([0x42; 32]);
         let wrapper =
             YubikeyWrapper::with_deriver("example.com", vec![1, 2, 3], [0u8; 32], deriver);
 
         let aad = b"aad";
-        let corrupt = Secret::new(format!("{ENVELOPE_PREFIX}not-valid-base64!!"));
+        let corrupt = SafeSecret::new(format!("{ENVELOPE_PREFIX}not-valid-base64!!"));
 
-        let err = wrapper.unwrap(aad, &corrupt).unwrap_err();
+        let err = wrapper.unwrap(aad, &corrupt).await.unwrap_err();
         assert!(matches!(err, WrapError::Corrupt));
     }
 
-    #[test]
-    fn truncated_payload_fails_with_corrupt() {
+    #[tokio::test]
+    async fn truncated_payload_fails_with_corrupt() {
         let deriver = FakeDeriver::new([0x42; 32]);
         let wrapper =
             YubikeyWrapper::with_deriver("example.com", vec![1, 2, 3], [0u8; 32], deriver);
@@ -373,41 +423,41 @@ mod tests {
         // Less than 28 bytes
         let short_data = [0u8; 10];
         let encoded = base64::engine::general_purpose::STANDARD.encode(short_data);
-        let corrupt = Secret::new(format!("{ENVELOPE_PREFIX}{encoded}"));
+        let corrupt = SafeSecret::new(format!("{ENVELOPE_PREFIX}{encoded}"));
 
-        let err = wrapper.unwrap(aad, &corrupt).unwrap_err();
+        let err = wrapper.unwrap(aad, &corrupt).await.unwrap_err();
         assert!(matches!(err, WrapError::Corrupt));
     }
 
-    #[test]
-    fn nonce_uniqueness_for_same_plaintext() {
+    #[tokio::test]
+    async fn nonce_uniqueness_for_same_plaintext() {
         let deriver = FakeDeriver::new([0x42; 32]);
         let wrapper =
             YubikeyWrapper::with_deriver("example.com", vec![1, 2, 3], [0u8; 32], deriver);
 
         let aad = b"aad";
-        let plaintext = Secret::new("same-password");
+        let plaintext = SafeSecret::new("same-password");
 
-        let wrap1 = wrapper.wrap(aad, &plaintext).unwrap();
-        let wrap2 = wrapper.wrap(aad, &plaintext).unwrap();
+        let wrap1 = wrapper.wrap(aad, &plaintext).await.unwrap();
+        let wrap2 = wrapper.wrap(aad, &plaintext).await.unwrap();
 
         assert_ne!(wrap1.expose_secret(), wrap2.expose_secret());
     }
 
-    #[test]
-    fn in_process_key_caching_calls_deriver_only_once() {
+    #[tokio::test]
+    async fn in_process_key_caching_calls_deriver_only_once() {
         let deriver = FakeDeriver::new([0x42; 32]);
         let wrapper =
             YubikeyWrapper::with_deriver("example.com", vec![1, 2, 3], [0u8; 32], deriver);
 
         let aad = b"aad";
-        let pt1 = Secret::new("pass1");
-        let pt2 = Secret::new("pass2");
+        let pt1 = SafeSecret::new("pass1");
+        let pt2 = SafeSecret::new("pass2");
 
-        let ct1 = wrapper.wrap(aad, &pt1).unwrap();
-        let ct2 = wrapper.wrap(aad, &pt2).unwrap();
-        let _ = wrapper.unwrap(aad, &ct1).unwrap();
-        let _ = wrapper.unwrap(aad, &ct2).unwrap();
+        let ct1 = wrapper.wrap(aad, &pt1).await.unwrap();
+        let ct2 = wrapper.wrap(aad, &pt2).await.unwrap();
+        let _ = wrapper.unwrap(aad, &ct1).await.unwrap();
+        let _ = wrapper.unwrap(aad, &ct2).await.unwrap();
 
         assert_eq!(wrapper.deriver.calls.load(Ordering::SeqCst), 1);
     }

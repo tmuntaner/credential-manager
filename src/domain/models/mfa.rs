@@ -1,16 +1,14 @@
-use serde::{Deserialize, Serialize};
-use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
 
+/// The text is not an MFA method.
 #[derive(Debug, Error)]
 #[error("invalid MFA selection")]
 pub struct MfaSelectionError;
 
 /// The MFA method to log in with. It is parsed once, so a value of this type is always a known method.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MfaSelection {
     WebAuthn,
     Totp,
@@ -35,20 +33,6 @@ impl fmt::Display for MfaSelection {
             MfaSelection::WebAuthn => write!(f, "webauthn"),
             MfaSelection::Totp => write!(f, "totp"),
         }
-    }
-}
-
-impl TryFrom<String> for MfaSelection {
-    type Error = MfaSelectionError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        value.parse()
-    }
-}
-
-impl From<MfaSelection> for String {
-    fn from(selection: MfaSelection) -> Self {
-        selection.to_string()
     }
 }
 
@@ -81,23 +65,5 @@ mod tests {
                 selection
             );
         }
-    }
-
-    #[test]
-    fn serializes_as_a_lowercase_string() {
-        #[derive(Serialize, Deserialize)]
-        struct Holder {
-            mfa: MfaSelection,
-        }
-
-        let toml = toml::to_string(&Holder {
-            mfa: MfaSelection::WebAuthn,
-        })
-        .unwrap();
-        assert_eq!(toml.trim(), r#"mfa = "webauthn""#);
-
-        let holder: Holder = toml::from_str(r#"mfa = "TOTP""#).unwrap();
-        assert_eq!(holder.mfa, MfaSelection::Totp);
-        assert!(toml::from_str::<Holder>(r#"mfa = "sms""#).is_err());
     }
 }

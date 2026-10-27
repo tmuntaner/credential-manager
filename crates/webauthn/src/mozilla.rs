@@ -1,4 +1,7 @@
-use crate::{HmacEnrollment, WebauthnAssertion, WebauthnError, WebauthnNotifier};
+use crate::{
+    HmacEnrollment, KeyEvent, PinRequest, SecurityKeyUi, WebauthnAssertion, WebauthnError,
+    WebauthnNotifier,
+};
 use authenticator::{
     authenticatorservice::{AuthenticatorService, RegisterArgs, SignArgs},
     ctap2::server::{
@@ -12,20 +15,23 @@ use authenticator::{
 use base64::{alphabet, engine, Engine};
 use sha2::{Digest, Sha256};
 use std::convert::TryFrom;
-use std::sync::mpsc::{channel, Receiver, RecvError};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
 use std::thread;
+use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 
 /// Long enough to type a PIN and touch the key. The server's challenge allows 60 seconds.
 const TIMEOUT_MS: u64 = 60_000;
 
 /// Signs a WebAuthn challenge with a security key over CTAP2, falling back to CTAP1 for U2F-only keys.
-/// A PIN is asked for on the terminal when the key wants one.
-pub fn sign_assertion(
+/// `ui` is asked for the PIN when the key wants one.
+pub async fn sign_assertion(
     challenge_str: String,
     rp_id: String,
     origin: String,
     credential_ids: Vec<String>,
-    notifiers: Vec<Box<dyn WebauthnNotifier>>,
+    notifiers: Vec<Arc<dyn WebauthnNotifier>>,
+    ui: Arc<dyn SecurityKeyUi>,
 ) -> Result<WebauthnAssertion, WebauthnError> {
     let client_data_json = crate::utils::assertion_client_data(&origin, &challenge_str)?;
     let client_data_hash: [u8; 32] = Sha256::digest(client_data_json.as_bytes()).into();
@@ -38,8 +44,8 @@ pub fn sign_assertion(
     let mut manager = AuthenticatorService::new()?;
     manager.add_u2f_usb_hid_platform_transports();
 
-    let (status_tx, status_rx) = channel::<StatusUpdate>();
-    let (sign_tx, sign_rx) = channel();
+    let (status_tx, status_rx) = status_channel();
+    let (sign_tx, sign_rx) = oneshot::channel();
 
     for notifier in &notifiers {
         notifier.notify_start()?;
@@ -48,8 +54,6 @@ pub fn sign_assertion(
     let callback = StateCallback::new(Box::new(move |rv| {
         let _ = sign_tx.send(rv);
     }));
-
-    let status_thread = thread::spawn(move || handle_status_updates(status_rx));
 
     let args = SignArgs {
         client_data_hash,
@@ -67,11 +71,8 @@ pub fn sign_assertion(
         .sign(TIMEOUT_MS, args, status_tx, callback)
         .map_err(WebauthnError::StartSigning)?;
 
-    let sign_result = sign_rx.recv();
-
-    // The manager holds the status sender; dropping it ends the status thread.
+    let sign_result = answer_status_updates(status_rx, sign_rx, ui.as_ref()).await;
     drop(manager);
-    let _ = status_thread.join();
 
     for notifier in &notifiers {
         notifier.notify_end()?;
@@ -97,7 +98,10 @@ pub fn sign_assertion(
 }
 
 /// Enrolls a new credential with the FIDO2 `hmac-secret` extension enabled.
-pub fn enroll_hmac_secret(rp_id: &str) -> Result<HmacEnrollment, WebauthnError> {
+pub async fn enroll_hmac_secret(
+    rp_id: &str,
+    ui: Arc<dyn SecurityKeyUi>,
+) -> Result<HmacEnrollment, WebauthnError> {
     let origin = format!("https://{rp_id}");
 
     // build the clientDataJSON for enrollment and then hash it.
@@ -108,15 +112,13 @@ pub fn enroll_hmac_secret(rp_id: &str) -> Result<HmacEnrollment, WebauthnError> 
     let mut manager = AuthenticatorService::new()?;
     manager.add_u2f_usb_hid_platform_transports();
 
-    // set up the threads
-    let (status_tx, status_rx) = channel::<StatusUpdate>();
-    let (register_tx, register_rx) = channel();
+    // set up the channels
+    let (status_tx, status_rx) = status_channel();
+    let (register_tx, register_rx) = oneshot::channel();
 
     let callback = StateCallback::new(Box::new(move |rv| {
         let _ = register_tx.send(rv);
     }));
-
-    let status_thread = thread::spawn(move || handle_status_updates(status_rx));
 
     let pub_cred_params = vec![
         PublicKeyCredentialParameters::try_from(-7)?,   // ES256
@@ -153,11 +155,9 @@ pub fn enroll_hmac_secret(rp_id: &str) -> Result<HmacEnrollment, WebauthnError> 
     manager
         .register(TIMEOUT_MS, args, status_tx, callback)
         .map_err(WebauthnError::StartRegistering)?;
-    let register_result = register_rx.recv();
 
-    // drop the authenticator service and join the status thread
+    let register_result = answer_status_updates(status_rx, register_rx, ui.as_ref()).await;
     drop(manager);
-    let _ = status_thread.join();
 
     // handle the registration result
     let result = register_result
@@ -181,10 +181,11 @@ pub fn enroll_hmac_secret(rp_id: &str) -> Result<HmacEnrollment, WebauthnError> 
 }
 
 /// Derives a 32-byte secret from a credential using the FIDO2 `hmac-secret` extension and a 32-byte salt.
-pub fn derive_hmac_secret(
+pub async fn derive_hmac_secret(
     rp_id: &str,
     credential_id: &[u8],
     salt: &[u8; 32],
+    ui: Arc<dyn SecurityKeyUi>,
 ) -> Result<[u8; 32], WebauthnError> {
     let origin = format!("https://{rp_id}");
 
@@ -202,15 +203,13 @@ pub fn derive_hmac_secret(
     let mut manager = AuthenticatorService::new()?;
     manager.add_u2f_usb_hid_platform_transports();
 
-    // set up the threads
-    let (status_tx, status_rx) = channel::<StatusUpdate>();
-    let (sign_tx, sign_rx) = channel();
+    // set up the channels
+    let (status_tx, status_rx) = status_channel();
+    let (sign_tx, sign_rx) = oneshot::channel();
 
     let callback = StateCallback::new(Box::new(move |rv| {
         let _ = sign_tx.send(rv);
     }));
-
-    let status_thread = thread::spawn(move || handle_status_updates(status_rx));
 
     // create the signing request
     let args = SignArgs {
@@ -235,11 +234,9 @@ pub fn derive_hmac_secret(
     manager
         .sign(TIMEOUT_MS, args, status_tx, callback)
         .map_err(WebauthnError::StartSigning)?;
-    let sign_result = sign_rx.recv();
 
-    // drop the manager and join the status thread
+    let sign_result = answer_status_updates(status_rx, sign_rx, ui.as_ref()).await;
     drop(manager);
-    let _ = status_thread.join();
 
     // handle the result
     let result = sign_result
@@ -255,45 +252,74 @@ pub fn derive_hmac_secret(
     Ok(output.output1)
 }
 
-/// Answers the key's status updates: asks for the PIN on the terminal, and reports blocked keys.
-fn handle_status_updates(status_rx: Receiver<StatusUpdate>) {
-    let mut touch_prompted = false;
-    loop {
-        match status_rx.recv() {
-            Ok(StatusUpdate::PinUvError(StatusPinUv::PinRequired(sender))) => {
-                send_pin(&sender, "Security key PIN: ");
-            }
-            Ok(StatusUpdate::PinUvError(StatusPinUv::InvalidPin(sender, attempts))) => {
-                match attempts {
-                    Some(attempts) => eprintln!("Wrong PIN, {attempts} attempts left."),
-                    None => eprintln!("Wrong PIN."),
-                }
-                send_pin(&sender, "Security key PIN: ");
-            }
-            Ok(StatusUpdate::PinUvError(StatusPinUv::PinAuthBlocked)) => {
-                eprintln!("The security key is blocked after too many wrong PINs. Unplug it and plug it in again.");
-            }
-            Ok(StatusUpdate::PinUvError(StatusPinUv::PinBlocked)) => {
-                eprintln!("The security key PIN is blocked. The key has to be reset.");
-            }
-            Ok(StatusUpdate::PresenceRequired) => {
-                if !touch_prompted {
-                    eprintln!("Touch your security key...");
-                    touch_prompted = true;
-                }
-            }
-            Ok(StatusUpdate::SelectDeviceNotice) => {
-                eprintln!("Several security keys found, touch the one to use.");
-            }
-            Ok(_) => {}
-            Err(RecvError) => return,
+/// The channel the authenticator reports its status on.
+///
+/// The authenticator wants a blocking sender, so a thread moves the updates onto a channel that can
+/// be awaited. It ends when the authenticator drops its sender.
+fn status_channel() -> (
+    Sender<StatusUpdate>,
+    tokio_mpsc::UnboundedReceiver<StatusUpdate>,
+) {
+    let (status_tx, status_rx) = channel::<StatusUpdate>();
+    let (forward_tx, forward_rx) = tokio_mpsc::unbounded_channel();
+
+    thread::spawn(move || forward(status_rx, forward_tx));
+
+    (status_tx, forward_rx)
+}
+
+fn forward(from: Receiver<StatusUpdate>, to: tokio_mpsc::UnboundedSender<StatusUpdate>) {
+    while let Ok(update) = from.recv() {
+        if to.send(update).is_err() {
+            break;
         }
     }
 }
 
-fn send_pin(sender: &std::sync::mpsc::Sender<Pin>, prompt: &str) {
-    if let Ok(pin) = rpassword::prompt_password(prompt) {
-        let _ = sender.send(Pin::new(&pin));
+/// Answers the key's status updates until the key has a result.
+async fn answer_status_updates<T>(
+    mut status_rx: tokio_mpsc::UnboundedReceiver<StatusUpdate>,
+    mut result_rx: oneshot::Receiver<T>,
+    ui: &dyn SecurityKeyUi,
+) -> Result<T, oneshot::error::RecvError> {
+    let mut touch_prompted = false;
+    loop {
+        tokio::select! {
+            Some(update) = status_rx.recv() => on_status(update, ui, &mut touch_prompted).await,
+            result = &mut result_rx => return result,
+        }
+    }
+}
+
+async fn on_status(update: StatusUpdate, ui: &dyn SecurityKeyUi, touch_prompted: &mut bool) {
+    match update {
+        StatusUpdate::PinUvError(StatusPinUv::PinRequired(sender)) => {
+            send_pin(&sender, ui, &PinRequest::new(false, None)).await;
+        }
+        StatusUpdate::PinUvError(StatusPinUv::InvalidPin(sender, attempts)) => {
+            send_pin(&sender, ui, &PinRequest::new(true, attempts)).await;
+        }
+        StatusUpdate::PinUvError(StatusPinUv::PinAuthBlocked) => {
+            ui.notify(KeyEvent::PinAuthBlocked).await;
+        }
+        StatusUpdate::PinUvError(StatusPinUv::PinBlocked) => {
+            ui.notify(KeyEvent::PinBlocked).await;
+        }
+        StatusUpdate::PresenceRequired => {
+            if !*touch_prompted {
+                ui.notify(KeyEvent::TouchRequired).await;
+                *touch_prompted = true;
+            }
+        }
+        StatusUpdate::SelectDeviceNotice => ui.notify(KeyEvent::SelectDevice).await,
+        _ => {}
+    }
+}
+
+/// Asks the user through the UI for the security key's PIN.
+async fn send_pin(sender: &Sender<Pin>, ui: &dyn SecurityKeyUi, request: &PinRequest) {
+    if let Ok(pin) = ui.request_pin(request).await {
+        let _ = sender.send(Pin::new(pin.as_str()));
     }
 }
 
@@ -323,6 +349,145 @@ fn allow_list(credential_ids: &[String]) -> Vec<PublicKeyCredentialDescriptor> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{PinError, SecurityKeyPin};
+    use async_trait::async_trait;
+    use std::sync::Mutex;
+
+    /// Never asked in the tests that use it.
+    struct NoUi;
+
+    #[async_trait(?Send)]
+    impl SecurityKeyUi for NoUi {
+        async fn request_pin(&self, _request: &PinRequest) -> Result<SecurityKeyPin, PinError> {
+            unreachable!("no PIN is asked for")
+        }
+
+        async fn notify(&self, _event: KeyEvent) {}
+    }
+
+    /// Answers with a PIN, or cancels, and records what it was asked.
+    struct RecordingUi {
+        pin: Option<&'static str>,
+        requests: Mutex<Vec<PinRequest>>,
+        events: Mutex<Vec<KeyEvent>>,
+    }
+
+    impl RecordingUi {
+        fn new(pin: Option<&'static str>) -> Self {
+            Self {
+                pin,
+                requests: Mutex::new(vec![]),
+                events: Mutex::new(vec![]),
+            }
+        }
+    }
+
+    #[async_trait(?Send)]
+    impl SecurityKeyUi for RecordingUi {
+        async fn request_pin(&self, request: &PinRequest) -> Result<SecurityKeyPin, PinError> {
+            self.requests.lock().unwrap().push(request.clone());
+
+            self.pin.map(SecurityKeyPin::new).ok_or(PinError::Cancelled)
+        }
+
+        async fn notify(&self, event: KeyEvent) {
+            self.events.lock().unwrap().push(event);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pin_request_is_answered_with_the_pin() {
+        let ui = RecordingUi::new(Some("1234"));
+        let (sender, receiver) = channel();
+
+        on_status(
+            StatusUpdate::PinUvError(StatusPinUv::PinRequired(sender)),
+            &ui,
+            &mut false,
+        )
+        .await;
+
+        assert!(receiver.try_recv().is_ok());
+        assert_eq!(
+            *ui.requests.lock().unwrap(),
+            vec![PinRequest::new(false, None)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_wrong_pin_asks_again_with_the_attempts_left() {
+        let ui = RecordingUi::new(Some("1234"));
+        let (sender, receiver) = channel();
+
+        on_status(
+            StatusUpdate::PinUvError(StatusPinUv::InvalidPin(sender, Some(2))),
+            &ui,
+            &mut false,
+        )
+        .await;
+
+        assert!(receiver.try_recv().is_ok());
+        assert_eq!(
+            *ui.requests.lock().unwrap(),
+            vec![PinRequest::new(true, Some(2))]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_pin_request_sends_nothing() {
+        let ui = RecordingUi::new(None);
+        let (sender, receiver) = channel();
+
+        on_status(
+            StatusUpdate::PinUvError(StatusPinUv::PinRequired(sender)),
+            &ui,
+            &mut false,
+        )
+        .await;
+
+        // The sender is gone without having sent a PIN.
+        assert!(receiver.recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn blocked_keys_and_device_selection_are_passed_on() {
+        let ui = RecordingUi::new(None);
+        let mut touched = false;
+
+        on_status(
+            StatusUpdate::PinUvError(StatusPinUv::PinAuthBlocked),
+            &ui,
+            &mut touched,
+        )
+        .await;
+        on_status(
+            StatusUpdate::PinUvError(StatusPinUv::PinBlocked),
+            &ui,
+            &mut touched,
+        )
+        .await;
+        on_status(StatusUpdate::SelectDeviceNotice, &ui, &mut touched).await;
+
+        assert_eq!(
+            *ui.events.lock().unwrap(),
+            vec![
+                KeyEvent::PinAuthBlocked,
+                KeyEvent::PinBlocked,
+                KeyEvent::SelectDevice
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_touch_is_asked_for_once() {
+        let ui = RecordingUi::new(None);
+        let mut touched = false;
+
+        on_status(StatusUpdate::PresenceRequired, &ui, &mut touched).await;
+        on_status(StatusUpdate::PresenceRequired, &ui, &mut touched).await;
+
+        assert_eq!(*ui.events.lock().unwrap(), vec![KeyEvent::TouchRequired]);
+    }
 
     #[test]
     fn allow_list_decodes_base64url_without_padding() {
@@ -341,8 +506,8 @@ mod tests {
         assert_eq!(handles.len(), 1);
     }
 
-    #[test]
-    fn sign_assertion_needs_usable_credential_ids() {
+    #[tokio::test]
+    async fn sign_assertion_needs_usable_credential_ids() {
         // Fails before any device is touched.
         let err = sign_assertion(
             "challenge".to_string(),
@@ -350,7 +515,9 @@ mod tests {
             "https://id.example.com".to_string(),
             vec!["***".to_string()],
             vec![],
+            Arc::new(NoUi),
         )
+        .await
         .err()
         .unwrap();
 
@@ -360,28 +527,36 @@ mod tests {
         );
     }
 
-    #[test]
-    fn sign_assertion_rejects_an_invalid_origin() {
+    #[tokio::test]
+    async fn sign_assertion_rejects_an_invalid_origin() {
         let err = sign_assertion(
             "challenge".to_string(),
             "id.example.com".to_string(),
             "not a url".to_string(),
             vec!["AQID".to_string()],
             vec![],
-        );
+            Arc::new(NoUi),
+        )
+        .await;
 
         assert!(err.is_err());
     }
 
-    #[test]
-    fn enroll_hmac_secret_rejects_an_invalid_origin() {
-        let err = enroll_hmac_secret("not a valid url :// invalid");
+    #[tokio::test]
+    async fn enroll_hmac_secret_rejects_an_invalid_origin() {
+        let err = enroll_hmac_secret("not a valid url :// invalid", Arc::new(NoUi)).await;
         assert!(err.is_err());
     }
 
-    #[test]
-    fn derive_hmac_secret_rejects_an_invalid_origin() {
-        let err = derive_hmac_secret("not a valid url :// invalid", b"cred", &[0u8; 32]);
+    #[tokio::test]
+    async fn derive_hmac_secret_rejects_an_invalid_origin() {
+        let err = derive_hmac_secret(
+            "not a valid url :// invalid",
+            b"cred",
+            &[0u8; 32],
+            Arc::new(NoUi),
+        )
+        .await;
         assert!(err.is_err());
     }
 }

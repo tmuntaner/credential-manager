@@ -276,9 +276,12 @@ impl<'a> FlowSession<'a> {
                 }
                 Challenge::Validate(validate) => {
                     if let Some(reason) = rejection {
-                        self.mfa.rejected(&reason)?;
+                        self.mfa.rejected(&reason).await?;
                     }
-                    let response = self.mfa.respond(&mfa::challenge(&validate), idp_host)?;
+                    let response = self
+                        .mfa
+                        .respond(&mfa::challenge(&validate), idp_host)
+                        .await?;
                     mfa::body(&validate, response)?
                 }
                 Challenge::Autosubmit(autosubmit) => {

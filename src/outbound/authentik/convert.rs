@@ -1,13 +1,14 @@
+use crate::domain::models::mfa::MfaSelection;
 use crate::domain::models::oidc::OidcError;
 use crate::domain::models::saml::{SamlAssertion, SamlLoginError};
 use crate::domain::models::user_credentials::UserCredentials;
-use base::models::mfa::MfaSelection;
+use crate::domain::ports::webauthn::WebauthnAssertion;
 
 impl From<UserCredentials> for authentik::UserCredentials {
     fn from(c: UserCredentials) -> Self {
         authentik::UserCredentials::new(
             c.username,
-            authentik::Password::new(c.password),
+            authentik::Password::new(c.password.into_inner()),
             c.mfa.map(|mfa| match mfa {
                 MfaSelection::WebAuthn => authentik::MfaMethod::WebAuthn,
                 MfaSelection::Totp => authentik::MfaMethod::Totp,
@@ -26,12 +27,14 @@ impl From<authentik::SamlAssertion> for SamlAssertion {
     }
 }
 
-pub fn assertion(a: webauthn::WebauthnAssertion) -> authentik::WebauthnAssertion {
-    authentik::WebauthnAssertion {
-        credential_id: a.credential_id,
-        client_data_json: a.client_data_json,
-        authenticator_data: a.authenticator_data,
-        signature: a.signature,
+impl From<WebauthnAssertion> for authentik::WebauthnAssertion {
+    fn from(value: WebauthnAssertion) -> Self {
+        Self {
+            credential_id: value.credential_id,
+            client_data_json: value.client_data_json,
+            authenticator_data: value.authenticator_data,
+            signature: value.signature,
+        }
     }
 }
 
@@ -50,12 +53,13 @@ impl From<authentik::AuthentikError> for OidcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::models::secret::SafeSecret;
 
     #[test]
     fn keeps_the_mfa_selection() {
         let login = UserCredentials {
             username: "user".to_string(),
-            password: "secret".to_string(),
+            password: SafeSecret::new("secret"),
             mfa: Some(MfaSelection::Totp),
         };
 
@@ -64,21 +68,6 @@ mod tests {
         assert_eq!(login.username, "user");
         assert_eq!(login.password.as_str(), "secret");
         assert_eq!(login.mfa, Some(authentik::MfaMethod::Totp));
-    }
-
-    #[test]
-    fn keeps_every_part_of_the_signature() {
-        let signed = assertion(webauthn::WebauthnAssertion {
-            credential_id: vec![1],
-            client_data_json: vec![2],
-            authenticator_data: vec![3],
-            signature: vec![4],
-        });
-
-        assert_eq!(signed.credential_id, vec![1]);
-        assert_eq!(signed.client_data_json, vec![2]);
-        assert_eq!(signed.authenticator_data, vec![3]);
-        assert_eq!(signed.signature, vec![4]);
     }
 
     #[test]
