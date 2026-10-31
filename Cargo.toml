@@ -29,6 +29,7 @@ mockall = "0.15"
 async-trait = "0.1.78"
 log = "0.4.21"
 toml = "1"
+zeroize = { version = "1", features = ["derive"] }
 
 [dependencies]
 reqwest = { workspace = true }
@@ -42,7 +43,7 @@ thiserror = { workspace = true }
 aws-sdk-sts = { version = "1.17.0", features = ["behavior-version-latest"] }
 aws-smithy-types-convert = { version = "0.61", features = ["convert-time"] }
 time = { workspace = true }
-clap = { version = "4.5.3", features = ["derive"] }
+clap = { version = "4.5.3", features = ["derive", "env"] }
 async-trait = { workspace = true }
 toml = { workspace = true }
 dirs = "7"
@@ -56,8 +57,9 @@ authentik = { workspace = true }
 webauthn = { path = "./crates/webauthn", features = ["full"] }
 keyring = { path = "./crates/keyring"}
 quick-xml = "0.42"
+notify-rust = "4"
 
-zeroize = { version = "1", features = ["derive"] }
+zeroize = { workspace = true }
 aes-gcm = "0.11.1"
 hkdf = "0.13"
 sha2 = { workspace = true }
@@ -66,3 +68,4 @@ getrandom = "0.4.3"
 [dev-dependencies]
 httpmock = { workspace = true,  }
 mockall = { workspace = true }
+tempfile = "3"

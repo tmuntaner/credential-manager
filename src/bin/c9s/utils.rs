@@ -1,17 +1,41 @@
 use anyhow::{anyhow, Result};
-use c9s::domain::ports::secret_store::{Secret, SecretKey, SecretStore};
+use c9s::domain::models::prompt_mode::PromptMode;
+use c9s::domain::models::secret::SafeSecret;
+use c9s::domain::models::settings::AppConfig;
+use c9s::domain::models::user_interaction::{ConfirmPrompt, SecretPrompt};
+use c9s::domain::ports::notifier::Notifier;
+use c9s::domain::ports::secret_store::{SecretKey, SecretStore};
+use c9s::domain::ports::user_interaction::UserInteraction;
+use c9s::outbound::prompt::select::{build, build_notifier, notifiers, prompts, PromptEnvironment};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use std::io::{self, BufRead, Write};
+use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
 
-pub fn get_password(
+/// Selects the best interaction and notifier for the user based on the environment.
+pub fn interaction(
+    settings: &AppConfig,
+    prompt_flag: Option<PromptMode>,
+) -> (
+    Arc<impl UserInteraction + 'static>,
+    Arc<impl Notifier + 'static>,
+) {
+    let mode = prompt_flag.or(settings.prompt_mode()).unwrap_or_default();
+    let env = PromptEnvironment::from_process(settings.pinentry_program());
+    (
+        Arc::new(build(&prompts(mode, &env))),
+        Arc::new(build_notifier(&notifiers(mode, &env))),
+    )
+}
+
+pub async fn get_password(
     app_url: String,
     username: String,
     with_password: bool,
     store: Option<&dyn SecretStore>,
-) -> Result<String> {
+    prompt: &dyn UserInteraction,
+) -> Result<SafeSecret> {
     let app_domain = Url::parse(app_url.as_str())?;
     let app_domain = app_domain
         .domain()
@@ -20,30 +44,30 @@ pub fn get_password(
     let key = SecretKey::new(&username, &service, "c9s");
 
     let password = if let Some(store) = store {
-        store.get(&key)?.map(|s| s.into_inner())
+        store.get(&key).await?
     } else {
         None
     };
 
     let password = match with_password {
-        true => prompt_user_for_password(store, &key)?,
+        true => prompt_user_for_password(store, &key, &username, app_domain, prompt).await?,
         false => match password {
             Some(password) => password,
-            None => prompt_user_for_password(store, &key)?,
+            None => prompt_user_for_password(store, &key, &username, app_domain, prompt).await?,
         },
     };
 
     Ok(password)
 }
 
-pub fn get_cached_credential<T: DeserializeOwned>(
+pub async fn get_cached_credential<T: DeserializeOwned>(
     key: &str,
     store: Option<&dyn SecretStore>,
 ) -> Result<Option<T>> {
     let cached_credential = if let Some(store) = store {
         let service = format!("c9s credential -- {key}");
         let secret_key = SecretKey::new(key, &service, "c9s");
-        store.get(&secret_key)?.map(|s| s.into_inner())
+        store.get(&secret_key).await?.map(|s| s.into_inner())
     } else {
         None
     };
@@ -57,7 +81,7 @@ pub fn get_cached_credential<T: DeserializeOwned>(
     Ok(None)
 }
 
-pub fn set_cached_credential<T: Serialize>(
+pub async fn set_cached_credential<T: Serialize>(
     key: &str,
     credential: &T,
     store: Option<&dyn SecretStore>,
@@ -66,26 +90,33 @@ pub fn set_cached_credential<T: Serialize>(
         let service = format!("c9s credential -- {key}");
         let secret_key = SecretKey::new(key, &service, "c9s");
         let json = serde_json::to_string(credential)?;
-        store.set(&secret_key, Secret::new(json))?;
+        store.set(&secret_key, SafeSecret::new(json)).await?;
     }
 
     Ok(())
 }
 
-fn prompt_user_for_password(store: Option<&dyn SecretStore>, key: &SecretKey) -> Result<String> {
-    let password = rpassword::prompt_password("Password: ")?;
+async fn prompt_user_for_password(
+    store: Option<&dyn SecretStore>,
+    key: &SecretKey,
+    username: &str,
+    domain: &str,
+    prompt: &dyn UserInteraction,
+) -> Result<SafeSecret> {
+    let password_prompt = SecretPrompt::new("c9s: password required", "Password")
+        .with_description(format!("Enter the password of {username} for {domain}."));
+    let password = prompt.ask_secret(password_prompt).await?;
 
     if let Some(store) = store {
-        eprint!("Save password? (y/n) ");
-        let _ = io::stdout().flush();
-        let mut buffer = String::new();
-        io::stdin().lock().read_line(&mut buffer)?;
-        // remove \n on unix or \r\n on windows
-        let len = buffer.trim_end_matches(&['\r', '\n'][..]).len();
-        buffer.truncate(len);
+        let confirm_prompt = ConfirmPrompt::new(
+            "c9s: save password",
+            format!("Save the password of {username} for {domain} in your keyring, so you are not asked again?"),
+        )
+        .with_labels("Save", "Don't save");
+        let should_save = prompt.confirm(confirm_prompt).await?;
 
-        if buffer == "y" {
-            store.set(key, Secret::new(password.clone()))?;
+        if should_save {
+            store.set(key, password.clone()).await?;
         }
     }
 

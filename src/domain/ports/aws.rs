@@ -1,6 +1,7 @@
 use crate::domain::models::aws::{AwsError, Credential};
 use crate::domain::models::login::AwsLogin;
 use crate::domain::models::saml::SamlAssertion;
+use crate::domain::models::secret::SafeSecret;
 use async_trait::async_trait;
 
 /// Trades the SAML assertion of the IAM role application for the credentials of its roles.
@@ -21,7 +22,7 @@ pub trait AwsCredentialIssuer {
     async fn issue(
         &self,
         login: &AwsLogin,
-        password: &str,
+        password: SafeSecret,
         role_arn: Option<&str>,
     ) -> Result<Vec<Credential>, AwsError>;
 }

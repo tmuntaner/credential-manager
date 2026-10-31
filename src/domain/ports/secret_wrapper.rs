@@ -1,7 +1,7 @@
+use crate::domain::models::secret::SafeSecret;
+use async_trait::async_trait;
 use std::error::Error;
 use thiserror::Error;
-
-use crate::domain::ports::secret_store::Secret;
 
 /// Error wrapping or unwrapping a secret.
 #[derive(Debug, Error)]
@@ -34,10 +34,11 @@ impl WrapError {
 
 /// Driven port for wrapping (encrypting) and unwrapping (decrypting) secrets.
 #[cfg_attr(test, mockall::automock)]
+#[async_trait(?Send)]
 pub trait SecretWrapper: Send + Sync {
     /// Wraps `plaintext` using authenticated encryption bound to `aad`.
-    fn wrap(&self, aad: &[u8], plaintext: &Secret) -> Result<Secret, WrapError>;
+    async fn wrap(&self, aad: &[u8], plaintext: &SafeSecret) -> Result<SafeSecret, WrapError>;
 
     /// Unwraps `ciphertext` verifying the authenticity against `aad`.
-    fn unwrap(&self, aad: &[u8], ciphertext: &Secret) -> Result<Secret, WrapError>;
+    async fn unwrap(&self, aad: &[u8], ciphertext: &SafeSecret) -> Result<SafeSecret, WrapError>;
 }

@@ -1,10 +1,13 @@
+use crate::args::IdpTypeArg;
 use crate::utils::true_or_false;
 use anyhow::anyhow;
 use anyhow::Result;
-use base::models::mfa::MfaSelection;
-use c9s::domain::models::idp::IdpType;
+use c9s::domain::models::mfa::MfaSelection;
 use c9s::domain::models::settings::{AppConfig, AwsHost, AwsSsoHost, Idp, RancherHost};
+use c9s::domain::ports::notifier::Notifier;
+use c9s::domain::ports::user_interaction::UserInteraction;
 use clap::Parser;
+use std::sync::Arc;
 
 #[derive(Parser)]
 pub struct Config {
@@ -26,7 +29,7 @@ struct ConfigIdp {
     #[clap(required = true, long)]
     name: String,
     #[clap(long, value_enum, default_value_t)]
-    r#type: IdpType,
+    r#type: IdpTypeArg,
     /// The url of the instance, e.g. https://id.example.com
     #[clap(required = true, long)]
     url: String,
@@ -169,7 +172,12 @@ struct ConfigGlobalUseKeyRing {
 }
 
 impl Config {
-    pub fn run(&self, settings: &mut AppConfig) -> Result<()> {
+    pub async fn run(
+        &self,
+        settings: &mut AppConfig,
+        interaction: Arc<impl UserInteraction + 'static>,
+        notifier: Arc<impl Notifier + 'static>,
+    ) -> Result<()> {
         match &self.sub_command {
             ConfigSubCommand::Idp(val) => val.run(settings),
             ConfigSubCommand::Aws(val) => match &val.sub_command {
@@ -180,7 +188,9 @@ impl Config {
             ConfigSubCommand::Global(val) => match &val.sub_command {
                 ConfigGlobalSubCommand::UseKeyring(val) => val.run(settings),
                 ConfigGlobalSubCommand::DefaultIdp(val) => val.run(settings),
-                ConfigGlobalSubCommand::Yubikey(val) => val.run(settings),
+                ConfigGlobalSubCommand::Yubikey(val) => {
+                    val.run(settings, interaction, notifier).await
+                }
             },
         }
     }
@@ -205,7 +215,7 @@ impl ConfigIdp {
     fn run(&self, settings: &mut AppConfig) -> Result<()> {
         let idp = Idp::new(
             self.name.clone(),
-            self.r#type,
+            self.r#type.into(),
             self.url.clone(),
             self.username.clone(),
             self.mfa,
@@ -287,9 +297,16 @@ impl ConfigGlobalUseKeyRing {
 }
 
 impl ConfigGlobalYubikey {
-    fn run(&self, settings: &mut AppConfig) -> Result<()> {
+    async fn run(
+        &self,
+        settings: &mut AppConfig,
+        interaction: Arc<impl UserInteraction + 'static>,
+        notifier: Arc<impl Notifier + 'static>,
+    ) -> Result<()> {
         match &self.sub_command {
-            ConfigGlobalYubikeySubCommand::Enroll(val) => val.run(settings),
+            ConfigGlobalYubikeySubCommand::Enroll(val) => {
+                val.run(settings, interaction, notifier).await
+            }
             ConfigGlobalYubikeySubCommand::Disable(val) => val.run(settings),
             ConfigGlobalYubikeySubCommand::Status(val) => val.run(settings),
             ConfigGlobalYubikeySubCommand::WrapCached(val) => val.run(settings),
@@ -298,16 +315,21 @@ impl ConfigGlobalYubikey {
 }
 
 impl ConfigGlobalYubikeyEnroll {
-    fn run(&self, settings: &mut AppConfig) -> Result<()> {
+    async fn run(
+        &self,
+        settings: &mut AppConfig,
+        interaction: Arc<impl UserInteraction + 'static>,
+        notifier: Arc<impl Notifier + 'static>,
+    ) -> Result<()> {
         #[cfg(target_os = "windows")]
         {
-            let _ = settings;
+            let _ = (settings, interaction, notifier);
             Err(anyhow!("YubiKey wrapping is not supported on Windows"))
         }
 
         #[cfg(not(target_os = "windows"))]
         {
-            let config = c9s::outbound::yubikey::enroll(&self.rp_id)?;
+            let config = c9s::outbound::yubikey::enroll(&self.rp_id, interaction, notifier).await?;
             settings.set_yubikey(Some(config));
             println!("YubiKey successfully enrolled for secret wrapping.");
             Ok(())
@@ -328,7 +350,7 @@ impl ConfigGlobalYubikeyStatus {
         match settings.yubikey_config() {
             Some(yk) => {
                 println!("YubiKey status: Enrolled");
-                println!("Relying Party: {}", yk.rp_id);
+                println!("Relying Party: {}", yk.rp_id());
                 println!(
                     "Wrap cached secrets (AWS/Rancher): {}",
                     if settings.wrap_cached_secrets_enabled() {
@@ -360,6 +382,7 @@ impl ConfigGlobalYubikeyWrapCached {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use c9s::domain::models::idp::IdpType;
 
     const APP_URL: &str = "https://id.example.com/application/saml/aws/sso/binding/init/";
 
@@ -429,7 +452,7 @@ mod tests {
             panic!("expected the idp subcommand");
         };
         assert_eq!(idp.name, "suse");
-        assert_eq!(idp.r#type, IdpType::Authentik);
+        assert_eq!(IdpType::from(idp.r#type), IdpType::Authentik);
         assert!(idp.default);
         assert!(idp.mfa.is_none());
 

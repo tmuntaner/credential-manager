@@ -1,5 +1,6 @@
 //! Logs in through the public API only: the service with the real flow executor against a mock authentik.
 
+use async_trait::async_trait;
 use authentik::{
     AuthCode, Authenticator, AuthenticatorError, AuthentikError, AuthentikService, FlowError,
     HttpFlowExecutor, MfaMethod, Password, StateError, StateSource, TotpCode, UserCredentials,
@@ -26,18 +27,22 @@ impl StateSource for FixedState {
 /// Types the TOTP code `123456` and has no security key.
 struct TypedCode;
 
+#[async_trait(?Send)]
 impl Authenticator for TypedCode {
-    fn totp_code(&self) -> Result<TotpCode, AuthenticatorError> {
+    async fn totp_code(&self) -> Result<TotpCode, AuthenticatorError> {
         Ok(TotpCode::new("123456"))
     }
 
-    fn choose_method(&self, methods: &[MfaMethod]) -> Result<MfaMethod, AuthenticatorError> {
+    async fn choose_method(&self, methods: &[MfaMethod]) -> Result<MfaMethod, AuthenticatorError> {
         Ok(methods[0])
     }
 
-    fn mfa_rejected(&self, _reason: &str) {}
+    async fn mfa_rejected(&self, _reason: &str) {}
 
-    fn sign(&self, _request: &WebauthnRequest) -> Result<WebauthnAssertion, AuthenticatorError> {
+    async fn sign(
+        &self,
+        _request: &WebauthnRequest,
+    ) -> Result<WebauthnAssertion, AuthenticatorError> {
         Err(AuthenticatorError::Failed("no security key".into()))
     }
 }

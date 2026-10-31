@@ -6,9 +6,9 @@
 use crate::domain::models::login::{
     AwsLogin, AwsOverrides, RancherLogin, RancherOverrides, ResolveError,
 };
+use crate::domain::models::mfa::MfaSelection;
 use crate::domain::models::settings::{AppConfig, AwsAppType, AwsHost, AwsSsoHost, Idp};
 use crate::domain::ports::login::LoginResolver;
-use base::models::mfa::MfaSelection;
 
 /// Resolves logins from the settings.
 pub struct LoginResolverService {
@@ -194,70 +194,122 @@ impl<'a> From<&'a AwsSsoHost> for AwsEntry<'a> {
 mod tests {
     use super::*;
     use crate::domain::models::idp::IdpType;
+    use crate::domain::models::settings::RancherHost;
 
     const AWS_URL: &str = "https://id.example.com/application/saml/aws/sso/binding/init";
     const SSO_URL: &str = "https://id.example.com/application/saml/sso/sso/binding/init";
     const OTHER_URL: &str = "https://other.example.com/init";
 
-    fn settings() -> AppConfig {
-        toml::from_str(&format!(
-            r#"
-            [[aws_hosts]]
-            app_url = "{AWS_URL}"
-            username = "aws-user@example.com"
-            mfa = "totp"
-
-            [[aws_sso_hosts]]
-            app_url = "{SSO_URL}"
-            username = "sso-user@example.com"
-            region = "eu-central-1"
-            mfa = "webauthn"
-            "#
-        ))
+    fn aws_host(
+        url: &str,
+        username: Option<&str>,
+        idp: Option<&str>,
+        mfa: Option<MfaSelection>,
+    ) -> AwsHost {
+        AwsHost::new(
+            url.to_string(),
+            username.map(str::to_string),
+            idp.map(str::to_string),
+            mfa,
+        )
         .unwrap()
     }
 
-    fn idp_settings() -> AppConfig {
-        toml::from_str(&format!(
-            r#"
-            [global_settings]
-            default_idp = "suse"
-
-            [[idps]]
-            name = "suse"
-            type = "authentik"
-            url = "https://suse.example.com"
-            username = "idp-user@example.com"
-            mfa = "totp"
-
-            [[idps]]
-            name = "other"
-            url = "https://other.example.com"
-            username = "other-user@example.com"
-
-            [[aws_hosts]]
-            app_url = "{AWS_URL}"
-
-            [[aws_sso_hosts]]
-            app_url = "{SSO_URL}"
-            username = "app-user@example.com"
-            idp = "other"
-            region = "eu-central-1"
-            mfa = "webauthn"
-
-            [[rancher_hosts]]
-            url = "https://rancher.example.com"
-            client_id = "rancher"
-
-            [[rancher_hosts]]
-            url = "https://rancher2.example.com"
-            client_id = "rancher"
-            idp = "other"
-            username = "app-user@example.com"
-            mfa = "webauthn"
-            "#
-        ))
+    fn sso_host(
+        url: &str,
+        username: Option<&str>,
+        idp: Option<&str>,
+        mfa: Option<MfaSelection>,
+    ) -> AwsSsoHost {
+        AwsSsoHost::new(
+            url.to_string(),
+            username.map(str::to_string),
+            idp.map(str::to_string),
+            "eu-central-1".to_string(),
+            mfa,
+        )
         .unwrap()
+    }
+
+    fn rancher_host(
+        url: &str,
+        idp: Option<&str>,
+        username: Option<&str>,
+        mfa: Option<MfaSelection>,
+    ) -> RancherHost {
+        RancherHost::new(
+            url.to_string(),
+            "rancher".to_string(),
+            idp.map(str::to_string),
+            username.map(str::to_string),
+            mfa,
+        )
+        .unwrap()
+    }
+
+    fn idp(name: &str, url: &str, username: &str, mfa: Option<MfaSelection>) -> Idp {
+        Idp::new(
+            name.to_string(),
+            IdpType::Authentik,
+            url.to_string(),
+            username.to_string(),
+            mfa,
+        )
+        .unwrap()
+    }
+
+    fn settings() -> AppConfig {
+        let mut settings = AppConfig::default();
+        settings.add_aws_host(aws_host(
+            AWS_URL,
+            Some("aws-user@example.com"),
+            None,
+            Some(MfaSelection::Totp),
+        ));
+        settings.add_aws_sso_host(sso_host(
+            SSO_URL,
+            Some("sso-user@example.com"),
+            None,
+            Some(MfaSelection::WebAuthn),
+        ));
+        settings
+    }
+
+    fn idp_settings() -> AppConfig {
+        let mut settings = AppConfig::default();
+        settings.add_idp(idp(
+            "suse",
+            "https://suse.example.com",
+            "idp-user@example.com",
+            Some(MfaSelection::Totp),
+        ));
+        settings.add_idp(idp(
+            "other",
+            "https://other.example.com",
+            "other-user@example.com",
+            None,
+        ));
+        settings.set_default_idp("suse").unwrap();
+        settings.add_aws_host(aws_host(AWS_URL, None, None, None));
+        settings.add_aws_sso_host(sso_host(
+            SSO_URL,
+            Some("app-user@example.com"),
+            Some("other"),
+            Some(MfaSelection::WebAuthn),
+        ));
+        settings.add_rancher_host(rancher_host(
+            "https://rancher.example.com",
+            None,
+            None,
+            None,
+        ));
+        settings.add_rancher_host(rancher_host(
+            "https://rancher2.example.com",
+            Some("other"),
+            Some("app-user@example.com"),
+            Some(MfaSelection::WebAuthn),
+        ));
+        settings
     }
 
     fn aws(app_type: Option<AwsAppType>, app_url: Option<&str>) -> AwsOverrides {
@@ -336,15 +388,8 @@ mod tests {
 
     #[test]
     fn the_only_configured_app_type_is_used_without_an_app_url() {
-        let settings: AppConfig = toml::from_str(&format!(
-            r#"
-            [[aws_sso_hosts]]
-            app_url = "{SSO_URL}"
-            username = "u"
-            region = "eu-central-1"
-            "#
-        ))
-        .unwrap();
+        let mut settings = AppConfig::default();
+        settings.add_aws_sso_host(sso_host(SSO_URL, Some("u"), None, None));
 
         let found = LoginResolverService::new(settings)
             .resolve_aws(&aws(None, None))
@@ -363,19 +408,9 @@ mod tests {
             "the app-url is not configured, please supply an app-type"
         );
 
-        let both: AppConfig = toml::from_str(&format!(
-            r#"
-            [[aws_hosts]]
-            app_url = "{AWS_URL}"
-            username = "u"
-
-            [[aws_sso_hosts]]
-            app_url = "{AWS_URL}"
-            username = "u"
-            region = "eu-central-1"
-            "#
-        ))
-        .unwrap();
+        let mut both = AppConfig::default();
+        both.add_aws_host(aws_host(AWS_URL, Some("u"), None, None));
+        both.add_aws_sso_host(sso_host(AWS_URL, Some("u"), None, None));
         assert_eq!(
             error(LoginResolverService::new(both).resolve_aws(&aws(None, Some(AWS_URL)))),
             "the app-url is configured as both app types, please supply an app-type"
@@ -470,14 +505,8 @@ mod tests {
 
     #[test]
     fn aws_with_an_unknown_idp_is_an_error() {
-        let settings: AppConfig = toml::from_str(&format!(
-            r#"
-            [[aws_hosts]]
-            app_url = "{AWS_URL}"
-            idp = "missing"
-            "#
-        ))
-        .unwrap();
+        let mut settings = AppConfig::default();
+        settings.add_aws_host(aws_host(AWS_URL, None, Some("missing"), None));
 
         let message = error(
             LoginResolverService::new(settings).resolve_aws(&aws(Some(AwsAppType::Aws), None)),
@@ -563,15 +592,13 @@ mod tests {
 
     #[test]
     fn rancher_needs_an_idp() {
-        let settings: AppConfig = toml::from_str(
-            r#"
-            [[rancher_hosts]]
-            url = "https://rancher.example.com"
-            client_id = "rancher"
-            username = "user@example.com"
-            "#,
-        )
-        .unwrap();
+        let mut settings = AppConfig::default();
+        settings.add_rancher_host(rancher_host(
+            "https://rancher.example.com",
+            None,
+            Some("user@example.com"),
+            None,
+        ));
 
         let message = error(
             LoginResolverService::new(settings).resolve_rancher(&RancherOverrides::default()),

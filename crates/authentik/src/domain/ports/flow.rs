@@ -31,13 +31,18 @@ pub trait FlowExecutor {
 /// Answers MFA challenges during an Authentik flow.
 ///
 /// Implemented by the caller and passed to the [`FlowExecutor`].
+#[async_trait(?Send)]
 pub trait SecondFactor {
     /// Answers `challenge`. `idp_host` is the host of the authentik instance, e.g. `id.example.com`.
-    fn respond(&self, challenge: &MfaChallenge, idp_host: &str) -> Result<MfaResponse, MfaError>;
+    async fn respond(
+        &self,
+        challenge: &MfaChallenge,
+        idp_host: &str,
+    ) -> Result<MfaResponse, MfaError>;
 
     /// Called when authentik rejected the previous answer, with its reason. `Ok(())` allows another
     /// [`respond`](SecondFactor::respond), `Err` gives up.
-    fn rejected(&self, reason: &str) -> Result<(), MfaError>;
+    async fn rejected(&self, reason: &str) -> Result<(), MfaError>;
 }
 
 /// The Authentik flow errors

@@ -2,6 +2,7 @@
 
 use crate::domain::models::aws::{AwsError, Credential};
 use crate::domain::models::login::AwsLogin;
+use crate::domain::models::secret::SafeSecret;
 use crate::domain::models::settings::AwsAppType;
 use crate::domain::models::user_credentials::UserCredentials;
 use crate::domain::ports::aws::{AwsCredentialIssuer, AwsSsoCredentials, AwsStsCredentials};
@@ -34,12 +35,12 @@ impl AwsCredentialIssuer for AwsCredentialIssuerService {
     async fn issue(
         &self,
         login: &AwsLogin,
-        password: &str,
+        password: SafeSecret,
         role_arn: Option<&str>,
     ) -> Result<Vec<Credential>, AwsError> {
         let credentials = UserCredentials {
             username: login.username.to_string(),
-            password: password.to_string(),
+            password,
             mfa: login.mfa,
         };
         let assertion = self
@@ -61,8 +62,8 @@ impl AwsCredentialIssuer for AwsCredentialIssuerService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::models::mfa::MfaSelection;
     use crate::domain::models::saml::{SamlAssertion, SamlLoginError};
-    use base::models::mfa::MfaSelection;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -83,7 +84,9 @@ mod tests {
         ) -> Result<SamlAssertion, SamlLoginError> {
             self.calls.borrow_mut().push(format!(
                 "login {app_url} {} {} {:?}",
-                credentials.username, credentials.password, credentials.mfa
+                credentials.username,
+                credentials.password.into_inner(),
+                credentials.mfa
             ));
             if self.fail {
                 return Err(SamlLoginError::Failed("wrong password".into()));
@@ -171,7 +174,11 @@ mod tests {
         let (issuer, calls) = issuer(false);
 
         let credentials = issuer
-            .issue(&login(AwsAppType::Aws, None), "secret", Some("arn"))
+            .issue(
+                &login(AwsAppType::Aws, None),
+                SafeSecret::new("secret"),
+                Some("arn"),
+            )
             .await
             .unwrap();
 
@@ -192,7 +199,7 @@ mod tests {
         let credentials = issuer
             .issue(
                 &login(AwsAppType::AwsSso, Some("eu-central-1")),
-                "secret",
+                SafeSecret::new("secret"),
                 None,
             )
             .await
@@ -207,7 +214,11 @@ mod tests {
         let (issuer, _) = issuer(false);
 
         let err = issuer
-            .issue(&login(AwsAppType::AwsSso, None), "secret", None)
+            .issue(
+                &login(AwsAppType::AwsSso, None),
+                SafeSecret::new("secret"),
+                None,
+            )
             .await
             .unwrap_err();
 
@@ -219,7 +230,11 @@ mod tests {
         let (issuer, calls) = issuer(true);
 
         let err = issuer
-            .issue(&login(AwsAppType::Aws, None), "secret", None)
+            .issue(
+                &login(AwsAppType::Aws, None),
+                SafeSecret::new("secret"),
+                None,
+            )
             .await
             .unwrap_err();
 
