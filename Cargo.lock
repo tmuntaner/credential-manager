@@ -856,6 +856,7 @@ dependencies = [
  "toml",
  "url",
  "webauthn",
+ "zbus 6.2.0",
  "zeroize",
 ]
 

@@ -4,14 +4,14 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use log::{error, info, warn};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 use crate::domain::models::secret::SafeSecret;
 use crate::domain::models::user_interaction::UserNotice;
 use crate::domain::ports::notifier::Notifier;
 use crate::domain::ports::secret_wrapper::{SecretWrapper, WrapError};
 use crate::outbound::daemon::peer_cred::{
-    bind_secure_socket, verify_peer_connection, PeerIdentity,
+    bind_secure_socket, verify_peer_connection, PeerCredError, PeerIdentity,
 };
 use crate::outbound::daemon::protocol::{read_frame, write_frame, IpcRequest, IpcResponse};
 use crate::outbound::yubikey::{HmacSecretDeriver, YubikeyWrapper};
@@ -243,10 +243,15 @@ impl<W: DaemonKeyCache, N: Notifier> DaemonSession<W, N> {
     }
 }
 
+/// Verifies a connected peer. Called on every request.
+pub type PeerVerifier =
+    Arc<dyn Fn(&tokio::net::UnixStream) -> Result<PeerIdentity, PeerCredError> + Send + Sync>;
+
 /// The IPC background daemon for c9s.
 pub struct DaemonServer<W, N> {
     socket_path: PathBuf,
     session: Arc<DaemonSession<W, N>>,
+    verifier: PeerVerifier,
 }
 
 impl<W: DaemonKeyCache + 'static, N: Notifier + 'static> DaemonServer<W, N> {
@@ -265,7 +270,14 @@ impl<W: DaemonKeyCache + 'static, N: Notifier + 'static> DaemonServer<W, N> {
                 idle_timeout,
                 notify_on_decrypt,
             )),
+            verifier: Arc::new(verify_peer_connection),
         }
+    }
+
+    /// Replaces the peer verification.
+    pub fn with_verifier(mut self, verifier: PeerVerifier) -> Self {
+        self.verifier = verifier;
+        self
     }
 
     pub fn socket_path(&self) -> &Path {
@@ -286,7 +298,28 @@ impl<W: DaemonKeyCache + 'static, N: Notifier + 'static> DaemonServer<W, N> {
     pub async fn run_with_shutdown(
         &self,
         shutdown_tx: broadcast::Sender<()>,
+        shutdown_rx: broadcast::Receiver<()>,
+    ) -> Result<(), std::io::Error> {
+        // creates a locking channel
+        let (lock_tx, lock_rx) = mpsc::unbounded_channel();
+
+        // on linux, watch zbus for session events
+        #[cfg(target_os = "linux")]
+        crate::outbound::daemon::session_events::spawn(lock_tx.clone());
+
+        self.run_with_events(shutdown_tx, shutdown_rx, lock_rx, lock_tx)
+            .await
+    }
+
+    /// Runs the server loop.
+    /// An event for shutdown can stop the loop.
+    /// An event for lock can lock the daemon and clear secrets from memory.
+    async fn run_with_events(
+        &self,
+        shutdown_tx: broadcast::Sender<()>,
         mut shutdown_rx: broadcast::Receiver<()>,
+        mut lock_rx: mpsc::UnboundedReceiver<()>,
+        lock_tx: mpsc::UnboundedSender<()>,
     ) -> Result<(), std::io::Error> {
         // before we start, disable core dumps to protect the secrets within memory.
         disable_core_dumps();
@@ -304,26 +337,47 @@ impl<W: DaemonKeyCache + 'static, N: Notifier + 'static> DaemonServer<W, N> {
                     info!("daemon received shutdown signal");
                     break;
                 }
+                Some(()) = lock_rx.recv() => {
+                    if let Err(e) = session.lock() {
+                        error!("failed to lock on session event: {}", e);
+                    }
+                }
                 accept_res = listener.accept() => {
                     // incoming request
                     match accept_res {
                         Ok((mut stream, _)) => {
                             // before we do anything, verify the connection to be sure we
                             // should be communicating with it.
-                            let peer = match verify_peer_connection(&stream) {
-                                Ok(id) => id,
-                                Err(err) => {
-                                    warn!("peer verification failed: {}", err);
-                                    let err_resp = IpcResponse::Error {
-                                        message: format!("Access denied: {}", err),
-                                    };
-                                    let _ = write_frame(&mut stream, &err_resp).await;
-                                    continue;
-                                }
-                            };
+                            if let Err(err) = (self.verifier)(&stream) {
+                                warn!("peer verification failed: {}", err);
+                                let err_resp = IpcResponse::Error {
+                                    message: format!("Access denied: {}", err),
+                                };
+                                let _ = write_frame(&mut stream, &err_resp).await;
+                                continue;
+                            }
 
                             // read and handle the request.
                             while let Ok(req) = read_frame::<_, IpcRequest>(&mut stream).await {
+                                // apply session lock events that arrived while connected.
+                                while let Ok(()) = lock_rx.try_recv() {
+                                    let _ = session.lock();
+                                }
+
+                                // Verify Again!
+                                // The peer could have exec'd as another program since the last frame.
+                                let peer = match (self.verifier)(&stream) {
+                                    Ok(id) => id,
+                                    Err(err) => {
+                                        warn!("peer verification failed: {}", err);
+                                        let err_resp = IpcResponse::Error {
+                                            message: format!("Access denied: {}", err),
+                                        };
+                                        let _ = write_frame(&mut stream, &err_resp).await;
+                                        break;
+                                    }
+                                };
+
                                 // handle the request
                                 let (resp, should_stop) = session.handle_request(req, &peer).await;
 
@@ -351,6 +405,7 @@ impl<W: DaemonKeyCache + 'static, N: Notifier + 'static> DaemonServer<W, N> {
         // Clean the socket on shutdown
         let _ = std::fs::remove_file(&socket_path);
         let _ = self.session.lock();
+        drop(lock_tx);
         info!("daemon stopped and socket removed.");
 
         Ok(())
@@ -360,6 +415,7 @@ impl<W: DaemonKeyCache + 'static, N: Notifier + 'static> DaemonServer<W, N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outbound::daemon::peer_cred::verify_peer_connection_in_tests;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::net::UnixStream;
 
@@ -445,7 +501,8 @@ mod tests {
             notifier.clone(),
             Duration::from_secs(60),
             true,
-        );
+        )
+        .with_verifier(Arc::new(verify_peer_connection_in_tests));
 
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let srv_shutdown_tx = shutdown_tx.clone();
@@ -611,5 +668,118 @@ mod tests {
             }
         );
         assert_eq!(wrapper.clear_calls.load(Ordering::SeqCst), 1);
+    }
+
+    fn test_server(
+        sock_path: &Path,
+        wrapper: Arc<TestKeyCache>,
+    ) -> DaemonServer<TestKeyCache, MockNotifier> {
+        let notifier = Arc::new(MockNotifier {
+            notified: AtomicUsize::new(0),
+        });
+        DaemonServer::new(sock_path, wrapper, notifier, Duration::from_secs(60), false)
+            .with_verifier(Arc::new(verify_peer_connection_in_tests))
+    }
+
+    async fn wait_for_socket(sock_path: &Path) {
+        for _ in 0..50 {
+            if sock_path.exists() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn each_request_is_verified_again() {
+        use std::sync::atomic::AtomicBool;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let sock_path = temp_dir.path().join("verify.sock");
+        let wrapper = Arc::new(TestKeyCache::new());
+
+        let allow = Arc::new(AtomicBool::new(true));
+        let allow_in_verifier = allow.clone();
+        let server = test_server(&sock_path, wrapper).with_verifier(Arc::new(move |stream| {
+            if allow_in_verifier.load(Ordering::SeqCst) {
+                verify_peer_connection_in_tests(stream)
+            } else {
+                Err(PeerCredError::PeerTraced)
+            }
+        }));
+
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let srv_shutdown_tx = shutdown_tx.clone();
+        let srv_handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async move {
+                server
+                    .run_with_shutdown(srv_shutdown_tx, shutdown_rx)
+                    .await
+                    .unwrap();
+            });
+        });
+        wait_for_socket(&sock_path).await;
+
+        let mut client = UnixStream::connect(&sock_path).await.unwrap();
+
+        write_frame(&mut client, &IpcRequest::Status).await.unwrap();
+        let resp: IpcResponse = read_frame(&mut client).await.unwrap();
+        assert!(matches!(resp, IpcResponse::Status { .. }));
+
+        // the peer turns bad after the connection was accepted.
+        allow.store(false, Ordering::SeqCst);
+        write_frame(&mut client, &IpcRequest::Status).await.unwrap();
+        let resp: IpcResponse = read_frame(&mut client).await.unwrap();
+        match resp {
+            IpcResponse::Error { message } => assert!(message.contains("Access denied")),
+            other => panic!("unexpected response {:?}", other),
+        }
+
+        let _ = shutdown_tx.send(());
+        let _ = srv_handle.join();
+    }
+
+    #[tokio::test]
+    async fn lock_event_clears_the_key() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let sock_path = temp_dir.path().join("lock.sock");
+        let wrapper = Arc::new(TestKeyCache::new());
+        *wrapper.has_key.lock().unwrap() = true;
+        let server = test_server(&sock_path, wrapper.clone());
+
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (lock_tx, lock_rx) = mpsc::unbounded_channel();
+        let srv_shutdown_tx = shutdown_tx.clone();
+        let srv_lock_tx = lock_tx.clone();
+        let srv_handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async move {
+                server
+                    .run_with_events(srv_shutdown_tx, shutdown_rx, lock_rx, srv_lock_tx)
+                    .await
+                    .unwrap();
+            });
+        });
+        wait_for_socket(&sock_path).await;
+
+        lock_tx.send(()).unwrap();
+        for _ in 0..100 {
+            if !wrapper.has_key().unwrap() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(!wrapper.has_key().unwrap());
+        assert!(wrapper.clear_calls.load(Ordering::SeqCst) >= 1);
+
+        let _ = shutdown_tx.send(());
+        let _ = srv_handle.join();
     }
 }

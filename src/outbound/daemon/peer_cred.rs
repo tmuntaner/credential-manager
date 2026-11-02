@@ -17,6 +17,18 @@ pub enum PeerCredError {
     #[error("unauthorized calling binary: {path}")]
     UnauthorizedBinary { path: PathBuf },
 
+    #[error("peer process has exited")]
+    PeerExited,
+
+    #[error("peer process is being traced")]
+    PeerTraced,
+
+    #[error("peer process environment contains {var}")]
+    PeerEnvTampered { var: String },
+
+    #[error("failed to inspect peer process state: {0}")]
+    PeerInspectionFailed(#[source] std::io::Error),
+
     #[error("peer verification is unsupported on this platform")]
     UnsupportedPlatform,
 }
@@ -218,9 +230,171 @@ fn is_same_executable(pid: u32, peer_exe_path: &Path) -> Result<bool, PeerCredEr
     is_same_file(&peer, &own).map_err(PeerCredError::ExeLookupFailed)
 }
 
+/// `SO_PEERPIDFD`, added in Linux 6.5. Defined locally in case `libc` lacks it.
+#[cfg(target_os = "linux")]
+const SO_PEERPIDFD: libc::c_int = 77;
+
+/// Forbidden environment variables that allow a process to inject code into a binary.
+const FORBIDDEN_ENV_VARS: &[&[u8]] = &[b"LD_PRELOAD", b"LD_LIBRARY_PATH", b"LD_AUDIT"];
+
+/// Fetches a pidfd for the peer. This stays tied to a process, even if its PID was reused.
+/// Returns `None` for kernels older than 6.5.
+#[cfg(target_os = "linux")]
+fn get_peer_pidfd(
+    stream: &tokio::net::UnixStream,
+) -> Result<Option<std::os::fd::OwnedFd>, PeerCredError> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    // gets the pidfd
+    let mut pidfd: libc::c_int = -1;
+    let mut len = size_of::<libc::c_int>() as libc::socklen_t;
+    let ret = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            SO_PEERPIDFD,
+            &mut pidfd as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+
+    // if it's unsuccessful, return an error.
+    if ret != 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ENOPROTOOPT) {
+            return Ok(None);
+        }
+        return Err(PeerCredError::SocketQueryFailed(err));
+    }
+
+    Ok(Some(unsafe { OwnedFd::from_raw_fd(pidfd) }))
+}
+
+/// Parses the `Pid:` line of `/proc/self/fdinfo/<pidfd>`.
+#[cfg(target_os = "linux")]
+fn parse_fdinfo_pid(fdinfo: &[u8]) -> Option<i64> {
+    fdinfo
+        .split(|b| *b == b'\n')
+        .find_map(|line| line.strip_prefix(b"Pid:"))
+        .and_then(|rest| std::str::from_utf8(rest).ok())
+        .and_then(|rest| rest.trim().parse().ok())
+}
+
+/// Resolves the PID that a pidfd points to.
+/// A pidfd of a dead process has no PID.
+#[cfg(target_os = "linux")]
+fn pid_from_pidfd(pidfd: &std::os::fd::OwnedFd) -> Result<u32, PeerCredError> {
+    use std::os::fd::AsRawFd;
+
+    // gets the fdinfo from proc
+    let fdinfo = std::fs::read(format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd()))
+        .map_err(PeerCredError::PeerInspectionFailed)?;
+
+    // handle the fdinfo
+    match parse_fdinfo_pid(&fdinfo) {
+        Some(pid) if pid > 0 => Ok(pid as u32),
+        Some(_) => Err(PeerCredError::PeerExited),
+        None => Err(PeerCredError::PeerInspectionFailed(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "no Pid in pidfd fdinfo",
+        ))),
+    }
+}
+
+/// Confirms the pidfd process still exists.
+#[cfg(target_os = "linux")]
+fn ensure_pidfd_alive(pidfd: &std::os::fd::OwnedFd) -> Result<(), PeerCredError> {
+    use std::os::fd::AsRawFd;
+
+    // send a signal to the process referred to by the pidfd.
+    let ret = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            pidfd.as_raw_fd(),
+            0,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        )
+    };
+    if ret == 0 {
+        return Ok(());
+    }
+
+    let err = std::io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::ESRCH) {
+        Err(PeerCredError::PeerExited)
+    } else {
+        Err(PeerCredError::PeerInspectionFailed(err))
+    }
+}
+
+/// Reads the `TracerPid` from the contents of `/proc/<pid>/status`.
+#[cfg(target_os = "linux")]
+fn parse_tracer_pid(status: &[u8]) -> Option<u32> {
+    status
+        .split(|b| *b == b'\n')
+        .find_map(|line| line.strip_prefix(b"TracerPid:"))
+        .and_then(|rest| std::str::from_utf8(rest).ok())
+        .and_then(|rest| rest.trim().parse().ok())
+}
+
+/// Finds a forbidden variable in the contents of `/proc/<pid>/environ` (NUL separated entries).
+#[cfg(target_os = "linux")]
+fn find_forbidden_env(environ: &[u8], forbidden: &[&[u8]]) -> Option<String> {
+    environ.split(|b| *b == 0).find_map(|entry| {
+        let name = entry.split(|b| *b == b'=').next().unwrap_or_default();
+        forbidden
+            .contains(&name)
+            .then(|| String::from_utf8_lossy(name).into_owned())
+    })
+}
+
+/// Rejects peers that are being traced or that were started with library injection variables.
+/// An unreadable `status` or `environ` is a denial.
+#[cfg(target_os = "linux")]
+fn check_peer_hygiene(pid: u32, forbidden_env: &[&[u8]]) -> Result<(), PeerCredError> {
+    let status = std::fs::read(format!("/proc/{}/status", pid))
+        .map_err(PeerCredError::PeerInspectionFailed)?;
+    match parse_tracer_pid(&status) {
+        Some(0) => {}
+        Some(_) => return Err(PeerCredError::PeerTraced),
+        None => {
+            return Err(PeerCredError::PeerInspectionFailed(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "no TracerPid in status",
+            )))
+        }
+    }
+
+    let environ = std::fs::read(format!("/proc/{}/environ", pid))
+        .map_err(PeerCredError::PeerInspectionFailed)?;
+    if let Some(var) = find_forbidden_env(&environ, forbidden_env) {
+        return Err(PeerCredError::PeerEnvTampered { var });
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn check_peer_hygiene(_pid: u32, _forbidden_env: &[&[u8]]) -> Result<(), PeerCredError> {
+    /// macOS has no equivalent of the Linux checks.
+    Ok(())
+}
+
 /// Verify that the connected peer should actually connect to the daemon.
+///
+/// This runs for every request, so a peer that `exec`s something else after connecting is caught.
 pub fn verify_peer_connection(
     stream: &tokio::net::UnixStream,
+) -> Result<PeerIdentity, PeerCredError> {
+    verify_peer_with(stream, Some(FORBIDDEN_ENV_VARS))
+}
+
+/// Like [`verify_peer_connection`], which uses [`FORBIDDEN_ENV_VARS`], with the given forbidden
+/// environment variables. `None` skips the hygiene checks.
+fn verify_peer_with(
+    stream: &tokio::net::UnixStream,
+    forbidden_env: Option<&[&[u8]]>,
 ) -> Result<PeerIdentity, PeerCredError> {
     let creds = get_peer_credentials(stream)?;
 
@@ -233,8 +407,20 @@ pub fn verify_peer_connection(
         });
     }
 
+    // On Linux, prefer the pidfd: it pins the process the peer connected as, so a reused PID
+    // is not mistaken for it. Older kernels fall back to the PID from `SO_PEERCRED`.
+    #[cfg(target_os = "linux")]
+    let pidfd = get_peer_pidfd(stream)?;
+    #[cfg(target_os = "linux")]
+    let pid = match &pidfd {
+        Some(fd) => pid_from_pidfd(fd)?,
+        None => creds.pid,
+    };
+    #[cfg(not(target_os = "linux"))]
+    let pid = creds.pid;
+
     // get the binary name
-    let exe_path = get_peer_exe_path(creds.pid)?;
+    let exe_path = get_peer_exe_path(pid)?;
     let binary_name = exe_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -243,16 +429,36 @@ pub fn verify_peer_connection(
 
     // Only allow an executable by the same binary as the daemon. The attacker can
     // control the file name, so it's better to be safe.
-    if !is_same_executable(creds.pid, &exe_path)? {
+    if !is_same_executable(pid, &exe_path)? {
         return Err(PeerCredError::UnauthorizedBinary { path: exe_path });
     }
 
+    if let Some(forbidden_env) = forbidden_env {
+        check_peer_hygiene(pid, forbidden_env)?;
+    }
+
+    // the peer must still be alive after all the checks, otherwise they described something else.
+    #[cfg(target_os = "linux")]
+    if let Some(fd) = &pidfd {
+        ensure_pidfd_alive(fd)?;
+    }
+
     Ok(PeerIdentity {
-        pid: creds.pid,
+        pid,
         uid: creds.uid,
         exe_path,
         binary_name,
     })
+}
+
+/// Verification for tests that connect to a server in the same process: `cargo test` sets
+/// `LD_LIBRARY_PATH` for the test binary, and the server makes the process non-dumpable, which
+/// makes its `/proc` files unreadable. Hygiene is tested with child processes instead.
+#[cfg(test)]
+pub fn verify_peer_connection_in_tests(
+    stream: &tokio::net::UnixStream,
+) -> Result<PeerIdentity, PeerCredError> {
+    verify_peer_with(stream, None)
 }
 
 /// Gets the standard socket location.
@@ -341,7 +547,7 @@ mod tests {
     async fn peer_verification_succeeds_for_current_process() {
         let (tokio_a, _tokio_b) = tokio::net::UnixStream::pair().unwrap();
 
-        let identity = verify_peer_connection(&tokio_a).unwrap();
+        let identity = verify_peer_connection_in_tests(&tokio_a).unwrap();
         assert_eq!(identity.pid, std::process::id());
         assert_eq!(identity.uid, unsafe { libc::getuid() });
         assert!(!identity.binary_name.is_empty());
@@ -366,6 +572,87 @@ mod tests {
         if std::fs::hard_link(&exe, &link).is_ok() {
             assert!(is_same_file(&link, &exe).unwrap());
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn tracer_pid_is_parsed_from_status() {
+        assert_eq!(
+            parse_tracer_pid(b"Name:\tc9s\nTracerPid:\t0\nUid:\t1000\n"),
+            Some(0)
+        );
+        assert_eq!(
+            parse_tracer_pid(b"Name:\tc9s\nTracerPid:\t4242\n"),
+            Some(4242)
+        );
+        assert_eq!(parse_tracer_pid(b"Name:\tc9s\n"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn forbidden_env_is_detected_in_environ() {
+        assert_eq!(
+            find_forbidden_env(b"PATH=/bin\0HOME=/root\0", FORBIDDEN_ENV_VARS),
+            None
+        );
+        assert_eq!(
+            find_forbidden_env(b"PATH=/bin\0LD_PRELOAD=/tmp/x.so\0", FORBIDDEN_ENV_VARS),
+            Some("LD_PRELOAD".to_string())
+        );
+        assert_eq!(
+            find_forbidden_env(b"LD_LIBRARY_PATH=/tmp\0", FORBIDDEN_ENV_VARS),
+            Some("LD_LIBRARY_PATH".to_string())
+        );
+        assert_eq!(
+            find_forbidden_env(b"LD_AUDIT=a\0", FORBIDDEN_ENV_VARS),
+            Some("LD_AUDIT".to_string())
+        );
+        // a value that merely mentions the name, or a longer name, is fine
+        assert_eq!(
+            find_forbidden_env(b"X=LD_PRELOAD\0LD_PRELOAD_X=1\0", FORBIDDEN_ENV_VARS),
+            None
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    fn sleeping_child(preload: bool) -> std::process::Child {
+        let mut cmd = std::process::Command::new("sleep");
+        cmd.arg("30").env_remove("LD_LIBRARY_PATH");
+        if preload {
+            cmd.env("LD_PRELOAD", "/dev/null");
+        }
+        cmd.spawn().unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn hygiene_of_real_processes() {
+        let mut clean = sleeping_child(false);
+        let mut preloaded = sleeping_child(true);
+        // wait until both executed `sleep`; before that they show the environment of the fork.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        assert!(check_peer_hygiene(clean.id(), FORBIDDEN_ENV_VARS).is_ok());
+        assert!(matches!(
+            check_peer_hygiene(preloaded.id(), FORBIDDEN_ENV_VARS),
+            Err(PeerCredError::PeerEnvTampered { var }) if var == "LD_PRELOAD"
+        ));
+
+        clean.kill().unwrap();
+        preloaded.kill().unwrap();
+        let _ = clean.wait();
+        let _ = preloaded.wait();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pid_is_parsed_from_fdinfo() {
+        assert_eq!(
+            parse_fdinfo_pid(b"pos:\t0\nflags:\t02\nPid:\t1234\nNSpid:\t1234\n"),
+            Some(1234)
+        );
+        assert_eq!(parse_fdinfo_pid(b"Pid:\t-1\n"), Some(-1));
+        assert_eq!(parse_fdinfo_pid(b"pos:\t0\n"), None);
     }
 
     #[tokio::test]

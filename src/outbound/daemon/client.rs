@@ -335,7 +335,10 @@ mod tests {
             std::sync::Arc::new(DummyNotifier),
             Duration::from_secs(300),
             false,
-        );
+        )
+        .with_verifier(std::sync::Arc::new(
+            crate::outbound::daemon::peer_cred::verify_peer_connection_in_tests,
+        ));
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
         let srv_tx = shutdown_tx.clone();

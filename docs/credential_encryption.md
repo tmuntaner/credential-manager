@@ -78,6 +78,7 @@ Every secret in memory has the following protections:
 
 To improve ergonomics and prevent repetitive commands (such as multiple `aws` or `kubectl` invocations),
 `c9s` supports an in-memory background daemon without compromising security.
-The daemon keeps the derived key unlocked within an active session window and enforces OS kernel-level caller verification.
+The daemon keeps the derived key unlocked within an active session window and verifies every caller request with OS kernel-level checks, and locks when the session locks or the system suspends (Linux).
+It doesn't protect against malware running as the same user; see its threat model.
 
 For more details, see the [Background Daemon Documentation](daemon.md).
