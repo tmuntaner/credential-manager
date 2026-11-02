@@ -29,7 +29,7 @@ security-framework = "3.7"
 [target.'cfg(target_os = "linux")'.dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-zbus = "6"
+zbus = { workspace = true }
 futures-executor = "0.3"
 openssl = "0.10"
 hkdf = "0.13"

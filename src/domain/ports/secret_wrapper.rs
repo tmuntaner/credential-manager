@@ -42,3 +42,25 @@ pub trait SecretWrapper: Send + Sync {
     /// Unwraps `ciphertext` verifying the authenticity against `aad`.
     async fn unwrap(&self, aad: &[u8], ciphertext: &SafeSecret) -> Result<SafeSecret, WrapError>;
 }
+
+#[async_trait(?Send)]
+impl<W: SecretWrapper + ?Sized> SecretWrapper for std::sync::Arc<W> {
+    async fn wrap(&self, aad: &[u8], plaintext: &SafeSecret) -> Result<SafeSecret, WrapError> {
+        (**self).wrap(aad, plaintext).await
+    }
+
+    async fn unwrap(&self, aad: &[u8], ciphertext: &SafeSecret) -> Result<SafeSecret, WrapError> {
+        (**self).unwrap(aad, ciphertext).await
+    }
+}
+
+#[async_trait(?Send)]
+impl<W: SecretWrapper + ?Sized> SecretWrapper for Box<W> {
+    async fn wrap(&self, aad: &[u8], plaintext: &SafeSecret) -> Result<SafeSecret, WrapError> {
+        (**self).wrap(aad, plaintext).await
+    }
+
+    async fn unwrap(&self, aad: &[u8], ciphertext: &SafeSecret) -> Result<SafeSecret, WrapError> {
+        (**self).unwrap(aad, ciphertext).await
+    }
+}

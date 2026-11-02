@@ -165,6 +165,20 @@ impl<D: HmacSecretDeriver> YubikeyWrapper<D> {
         Ok(*self.lock_cached_key()?)
     }
 
+    /// Securely zeroizes and removes any cached encryption key from memory.
+    pub fn clear_cached_key(&self) -> Result<(), WrapError> {
+        let mut guard = self.lock_cached_key()?;
+        if let Some(mut key) = guard.take() {
+            key.zeroize();
+        }
+        Ok(())
+    }
+
+    /// Returns `true` if an encryption key is currently cached in memory.
+    pub fn has_cached_key(&self) -> Result<bool, WrapError> {
+        Ok(self.cached_key()?.is_some())
+    }
+
     /// The lock is never held across an await.
     fn lock_cached_key(&self) -> Result<std::sync::MutexGuard<'_, Option<[u8; 32]>>, WrapError> {
         self.cached_key
@@ -460,5 +474,27 @@ mod tests {
         let _ = wrapper.unwrap(aad, &ct2).await.unwrap();
 
         assert_eq!(wrapper.deriver.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn clear_cached_key_forces_rederivation() {
+        let deriver = FakeDeriver::new([0x42; 32]);
+        let wrapper =
+            YubikeyWrapper::with_deriver("example.com", vec![1, 2, 3], [0u8; 32], deriver);
+
+        let aad = b"aad";
+        let pt = SafeSecret::new("pass");
+
+        assert!(!wrapper.has_cached_key().unwrap());
+        let _ = wrapper.wrap(aad, &pt).await.unwrap();
+        assert!(wrapper.has_cached_key().unwrap());
+        assert_eq!(wrapper.deriver.calls.load(Ordering::SeqCst), 1);
+
+        wrapper.clear_cached_key().unwrap();
+        assert!(!wrapper.has_cached_key().unwrap());
+
+        let _ = wrapper.wrap(aad, &pt).await.unwrap();
+        assert!(wrapper.has_cached_key().unwrap());
+        assert_eq!(wrapper.deriver.calls.load(Ordering::SeqCst), 2);
     }
 }
