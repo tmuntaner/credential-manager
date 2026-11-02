@@ -1,12 +1,15 @@
 use crate::domain::models::oidc::AuthCode;
 use crate::domain::models::saml::SamlAssertion;
+use crate::domain::models::session::AuthentikSession;
 use crate::domain::models::user_credentials::UserCredentials;
 use crate::domain::ports::authenticator::Authenticator;
-use crate::domain::ports::flow::{FlowError, FlowExecutor};
+use crate::domain::ports::flow::{FlowError, FlowExecutor, Flowed};
+use crate::domain::ports::session::SessionCache;
 use crate::domain::ports::state::{StateError, StateSource};
 use crate::domain::services::mfa::InteractiveMfa;
 use std::error::Error;
 use thiserror::Error;
+use time::OffsetDateTime;
 use url::Url;
 
 /// How many times Authentik may reject the MFA challenges before giving up.
@@ -42,18 +45,22 @@ impl From<url::ParseError> for AuthentikError {
 }
 
 /// Logs users into Authentik.
-pub struct AuthentikService<F, S, A> {
+pub struct AuthentikService<F, S, A, C> {
     flows: F,
     state: S,
     authenticator: A,
+    sessions: C,
 }
 
-impl<F: FlowExecutor, S: StateSource, A: Authenticator> AuthentikService<F, S, A> {
-    pub fn new(flows: F, state: S, authenticator: A) -> Self {
+impl<F: FlowExecutor, S: StateSource, A: Authenticator, C: SessionCache>
+    AuthentikService<F, S, A, C>
+{
+    pub fn new(flows: F, state: S, authenticator: A, sessions: C) -> Self {
         Self {
             flows,
             state,
             authenticator,
+            sessions,
         }
     }
 
@@ -64,10 +71,19 @@ impl<F: FlowExecutor, S: StateSource, A: Authenticator> AuthentikService<F, S, A
         login: UserCredentials,
     ) -> Result<SamlAssertion, AuthentikError> {
         let mfa = InteractiveMfa::new(login.mfa, &self.authenticator);
+        let entry_url = ensure_trailing_slash(app_url)?;
+
+        // get the previous session
+        let previous = self.stored_session(&entry_url).await;
+
+        // run the saml flow.
+        let result = self
+            .flows
+            .saml(&entry_url, &login, &mfa, previous.as_ref())
+            .await;
 
         Ok(self
-            .flows
-            .saml(&ensure_trailing_slash(app_url)?, &login, &mfa)
+            .remember(&entry_url, previous.is_some(), result)
             .await?)
     }
 
@@ -83,12 +99,80 @@ impl<F: FlowExecutor, S: StateSource, A: Authenticator> AuthentikService<F, S, A
         let authorize_url = authorize_url(issuer, client_id, redirect_uri, &state)?;
         let mfa = InteractiveMfa::new(login.mfa, &self.authenticator);
 
-        let redirect = self
+        // get the previously stored session.
+        let previous = self.stored_session(&authorize_url).await;
+
+        // run the oauth flow
+        let result = self
             .flows
-            .oauth(&authorize_url, redirect_uri, &login, &mfa)
+            .oauth(
+                &authorize_url,
+                redirect_uri,
+                &login,
+                &mfa,
+                previous.as_ref(),
+            )
+            .await;
+
+        // store the session and get the result
+        let redirect = self
+            .remember(&authorize_url, previous.is_some(), result)
             .await?;
 
         code_from_redirect(&redirect, &state)
+    }
+
+    /// Get the stored session for a `url`.
+    async fn stored_session(&self, url: &Url) -> Option<AuthentikSession> {
+        let host = url.host_str()?;
+
+        match self.sessions.load(host).await {
+            // if the session is still fresh, return it
+            Ok(Some(session)) if session.is_fresh_at(OffsetDateTime::now_utc()) => Some(session),
+            // if there is a session, but it's not fresh, forget it and return None
+            Ok(Some(_)) => {
+                self.forget(host).await;
+                None
+            }
+            Ok(None) => None,
+            Err(e) => {
+                log::warn!("could not read the stored authentik session: {e}");
+                None
+            }
+        }
+    }
+
+    /// Stores the session from an ended flow and return its result.
+    async fn remember<T>(
+        &self,
+        url: &Url,
+        resumed: bool,
+        result: Result<Flowed<T>, FlowError>,
+    ) -> Result<T, FlowError> {
+        let host = url.host_str();
+
+        match result {
+            Ok(Flowed { value, session }) => {
+                if let (Some(host), Some(session)) = (host, session) {
+                    if let Err(e) = self.sessions.store(host, &session).await {
+                        log::warn!("could not store the authentik session: {e}");
+                    }
+                }
+                Ok(value)
+            }
+            Err(e) => {
+                if let (Some(host), true) = (host, resumed) {
+                    self.forget(host).await;
+                }
+                Err(e)
+            }
+        }
+    }
+
+    async fn forget(&self, host: &str) {
+        if let Err(e) = self.sessions.clear(host).await {
+            log::warn!("could not clear the stored authentik session: {e}");
+        }
     }
 }
 
@@ -143,7 +227,6 @@ fn code_from_redirect(redirect: &Url, state: &str) -> Result<AuthCode, Authentik
         .ok_or_else(|| AuthentikError::OidcNoCode(redirect.path().to_string()))
 }
 
-/// For some requests, we need to be sure to have a trailing slash.
 fn ensure_trailing_slash(app_url: &str) -> Result<Url, AuthentikError> {
     if app_url.ends_with('/') {
         Ok(Url::parse(app_url)?)
@@ -158,6 +241,7 @@ mod tests {
     use crate::domain::models::secret::Password;
     use crate::domain::ports::authenticator::MockAuthenticator;
     use crate::domain::ports::flow::SecondFactor;
+    use crate::domain::ports::session::{MockSessionCache, NoSessionCache, SessionCacheError};
     use crate::domain::ports::state::MockStateSource;
     use async_trait::async_trait;
     use std::cell::RefCell;
@@ -172,6 +256,10 @@ mod tests {
         result: RefCell<Option<Result<Url, FlowError>>>,
         assertion: Option<SamlAssertion>,
         calls: RefCell<Vec<(Url, String)>>,
+        /// The session every flow ends in.
+        ends_in: Option<AuthentikSession>,
+        /// The cookies of the session each flow started from.
+        started_from: RefCell<Vec<Option<String>>>,
     }
 
     impl FakeFlows {
@@ -184,6 +272,8 @@ mod tests {
                 result: RefCell::new(Some(result)),
                 assertion: None,
                 calls: RefCell::new(vec![]),
+                ends_in: None,
+                started_from: RefCell::new(vec![]),
             }
         }
 
@@ -192,7 +282,14 @@ mod tests {
                 result: RefCell::new(None),
                 assertion: Some(assertion),
                 calls: RefCell::new(vec![]),
+                ends_in: None,
+                started_from: RefCell::new(vec![]),
             }
+        }
+
+        fn ending_in_session(mut self, session: AuthentikSession) -> Self {
+            self.ends_in = Some(session);
+            self
         }
     }
 
@@ -203,11 +300,18 @@ mod tests {
             entry_url: &Url,
             login: &UserCredentials,
             _mfa: &dyn SecondFactor,
-        ) -> Result<SamlAssertion, FlowError> {
+            session: Option<&AuthentikSession>,
+        ) -> Result<Flowed<SamlAssertion>, FlowError> {
+            self.started_from
+                .borrow_mut()
+                .push(session.map(|s| s.cookies().to_string()));
             self.calls
                 .borrow_mut()
                 .push((entry_url.clone(), login.password.as_str().to_string()));
-            Ok(self.assertion.clone().expect("no SAML login in this test"))
+            Ok(Flowed {
+                value: self.assertion.clone().expect("no SAML login in this test"),
+                session: self.ends_in.clone(),
+            })
         }
 
         async fn oauth(
@@ -216,7 +320,11 @@ mod tests {
             redirect_uri: &str,
             _login: &UserCredentials,
             _mfa: &dyn SecondFactor,
-        ) -> Result<Url, FlowError> {
+            session: Option<&AuthentikSession>,
+        ) -> Result<Flowed<Url>, FlowError> {
+            self.started_from
+                .borrow_mut()
+                .push(session.map(|s| s.cookies().to_string()));
             self.calls
                 .borrow_mut()
                 .push((authorize_url.clone(), redirect_uri.to_string()));
@@ -224,6 +332,10 @@ mod tests {
                 .borrow_mut()
                 .take()
                 .expect("no OIDC login in this test")
+                .map(|value| Flowed {
+                    value,
+                    session: self.ends_in.clone(),
+                })
         }
     }
 
@@ -243,8 +355,16 @@ mod tests {
     fn service(
         flows: &FakeFlows,
         state: MockStateSource,
-    ) -> AuthentikService<&FakeFlows, MockStateSource, MockAuthenticator> {
-        AuthentikService::new(flows, state, MockAuthenticator::new())
+    ) -> AuthentikService<&FakeFlows, MockStateSource, MockAuthenticator, NoSessionCache> {
+        service_with(flows, state, NoSessionCache)
+    }
+
+    fn service_with<C: SessionCache>(
+        flows: &FakeFlows,
+        state: MockStateSource,
+        sessions: C,
+    ) -> AuthentikService<&FakeFlows, MockStateSource, MockAuthenticator, C> {
+        AuthentikService::new(flows, state, MockAuthenticator::new(), sessions)
     }
 
     async fn oidc_code(flows: &FakeFlows) -> Result<AuthCode, AuthentikError> {
@@ -377,5 +497,114 @@ mod tests {
             "openid profile email groups".to_string()
         )));
         assert!(query.contains(&("state".to_string(), "s".to_string())));
+    }
+
+    fn session(cookies: &str, created_at: OffsetDateTime) -> AuthentikSession {
+        AuthentikSession::new(cookies, created_at)
+    }
+
+    fn saml_assertion() -> SamlAssertion {
+        SamlAssertion {
+            saml_response: "r".to_string(),
+            destination: "https://aws/saml".to_string(),
+            relay_state: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stored_session_starts_the_flow_and_the_new_one_is_stored() {
+        let now = OffsetDateTime::now_utc();
+        let flows =
+            FakeFlows::handing_out(saml_assertion()).ending_in_session(session("c=new", now));
+        let mut cache = MockSessionCache::new();
+        cache
+            .expect_load()
+            .withf(|host| host == "id.example.com")
+            .times(1)
+            .returning(move |_| Ok(Some(session("c=old", now))));
+        cache
+            .expect_store()
+            .withf(|host, s| host == "id.example.com" && s.cookies() == "c=new")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        cache.expect_clear().never();
+
+        service_with(&flows, MockStateSource::new(), cache)
+            .saml_assertion(STORED_URL, credentials())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *flows.started_from.borrow(),
+            vec![Some("c=old".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_old_session_is_dropped_and_the_flow_starts_without_it() {
+        let flows = FakeFlows::handing_out(saml_assertion());
+        let mut cache = MockSessionCache::new();
+        cache.expect_load().times(1).returning(|_| {
+            Ok(Some(session(
+                "c=old",
+                OffsetDateTime::now_utc() - time::Duration::days(2),
+            )))
+        });
+        cache.expect_clear().times(1).returning(|_| Ok(()));
+        cache.expect_store().never();
+
+        service_with(&flows, MockStateSource::new(), cache)
+            .saml_assertion(STORED_URL, credentials())
+            .await
+            .unwrap();
+
+        assert_eq!(*flows.started_from.borrow(), vec![None]);
+    }
+
+    #[tokio::test]
+    async fn a_cache_that_fails_does_not_fail_the_login() {
+        let now = OffsetDateTime::now_utc();
+        let flows =
+            FakeFlows::handing_out(saml_assertion()).ending_in_session(session("c=new", now));
+        let failing = || SessionCacheError::Failed("keyring is locked".into());
+        let mut cache = MockSessionCache::new();
+        cache
+            .expect_load()
+            .times(1)
+            .returning(move |_| Err(failing()));
+        cache
+            .expect_store()
+            .times(1)
+            .returning(move |_, _| Err(failing()));
+
+        let found = service_with(&flows, MockStateSource::new(), cache)
+            .saml_assertion(STORED_URL, credentials())
+            .await
+            .unwrap();
+
+        assert_eq!(found, saml_assertion());
+        assert_eq!(*flows.started_from.borrow(), vec![None]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_flow_drops_the_session_it_started_from() {
+        let flows = FakeFlows::ending_in(Err(FlowError::AccessDenied("no".to_string())));
+        let mut cache = MockSessionCache::new();
+        cache
+            .expect_load()
+            .times(1)
+            .returning(|_| Ok(Some(session("c=old", OffsetDateTime::now_utc()))));
+        cache.expect_clear().times(1).returning(|_| Ok(()));
+        cache.expect_store().never();
+
+        let err = service_with(&flows, state("s"), cache)
+            .oidc_code(credentials(), ISSUER, "rancher", REDIRECT_URI)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            AuthentikError::Flow(FlowError::AccessDenied(_))
+        ));
     }
 }

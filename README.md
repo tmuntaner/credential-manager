@@ -67,6 +67,11 @@ c9s config global yubikey status
 c9s config global yubikey wrap-cached --enabled true
 ```
 
+With this enabled, c9s will also keep the authentik session (its cookies) in the keyring.
+It's encrypted like any other cached secret.
+When you log in within 8 hours, `c9s` will reuse it and skip the second factor.
+Without it enabled, it will not store the user's session.
+
 **Disable YubiKey Wrapping:**
 
 ```bash

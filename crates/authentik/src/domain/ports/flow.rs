@@ -1,11 +1,21 @@
 use crate::domain::models::mfa::{MfaChallenge, MfaResponse};
 use crate::domain::models::saml::SamlAssertion;
+use crate::domain::models::session::AuthentikSession;
 use crate::domain::models::user_credentials::UserCredentials;
 use crate::domain::ports::authenticator::AuthenticatorError;
 use async_trait::async_trait;
 use std::error::Error;
 use thiserror::Error;
 use url::Url;
+
+/// The result of a flow.
+#[derive(Debug)]
+pub struct Flowed<T> {
+    /// The value f the flow
+    pub value: T,
+    /// The session after the flow. It's `None` if the flow didn't start one.
+    pub session: Option<AuthentikSession>,
+}
 
 /// Runs the Authentik authentication flow.
 #[async_trait(?Send)]
@@ -16,7 +26,8 @@ pub trait FlowExecutor {
         entry_url: &Url,
         login: &UserCredentials,
         mfa: &dyn SecondFactor,
-    ) -> Result<SamlAssertion, FlowError>;
+        session: Option<&AuthentikSession>,
+    ) -> Result<Flowed<SamlAssertion>, FlowError>;
 
     /// Runs the flows for an OAuth application.
     async fn oauth(
@@ -25,7 +36,8 @@ pub trait FlowExecutor {
         redirect_uri: &str,
         login: &UserCredentials,
         mfa: &dyn SecondFactor,
-    ) -> Result<Url, FlowError>;
+        session: Option<&AuthentikSession>,
+    ) -> Result<Flowed<Url>, FlowError>;
 }
 
 /// Answers MFA challenges during an Authentik flow.

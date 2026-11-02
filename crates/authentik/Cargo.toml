@@ -16,6 +16,8 @@ serde_json = { workspace = true }
 reqwest = { workspace = true }
 async-trait = { workspace = true }
 base = { workspace = true }
+time = { workspace = true }
+log = { workspace = true }
 getrandom = "0.4"
 
 [dev-dependencies]

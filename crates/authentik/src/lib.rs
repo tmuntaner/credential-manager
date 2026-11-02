@@ -8,6 +8,8 @@
 //! Build the service with adapters of its ports:
 //! - [`FlowExecutor`]: [`HttpFlowExecutor`] runs the flows against authentik.
 //! - [`StateSource`]: [`RandomState`] makes the OAuth state.
+//! - [`SessionCache`] remembers the session between logins, so the next one needs no second factor. Use
+//!   [`NoSessionCache`] to remember nothing. Sessions authenticate as the user: store them encrypted.
 //! - [`Authenticator`] answers the second factor; implement it to ask the user and to sign with a security key.
 
 mod domain;
@@ -21,10 +23,12 @@ pub use domain::models::{
     oidc::AuthCode,
     saml::SamlAssertion,
     secret::{Password, TotpCode},
+    session::AuthentikSession,
     user_credentials::UserCredentials,
 };
 pub use domain::ports::authenticator::{Authenticator, AuthenticatorError};
-pub use domain::ports::flow::{FlowError, FlowExecutor, MfaError, SecondFactor};
+pub use domain::ports::flow::{FlowError, FlowExecutor, Flowed, MfaError, SecondFactor};
+pub use domain::ports::session::{NoSessionCache, SessionCache, SessionCacheError};
 pub use domain::ports::state::{StateError, StateSource};
 pub use domain::services::login::{AuthentikError, AuthentikService};
 pub use outbound::flow::HttpFlowExecutor;
