@@ -3,7 +3,7 @@ name = "base"
 authors = ["Thomas Muntaner <thomas.muntaner@gmail.com>"]
 version = "0.1.0"
 edition = "2021"
-license = "MPL-2.0"
+license = "EUPL-1.2+"
 description = "Shared HTTP client and models"
 publish = false
 

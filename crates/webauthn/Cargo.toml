@@ -3,7 +3,7 @@ name = "webauthn"
 authors = ["Thomas Muntaner <thomas.muntaner@gmail.com>"]
 version = "0.1.0"
 edition = "2018"
-license = "MPL-2.0"
+license = "EUPL-1.2+"
 description = "A webauthn client"
 publish = false
 

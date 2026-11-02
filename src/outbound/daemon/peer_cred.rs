@@ -377,7 +377,7 @@ fn check_peer_hygiene(pid: u32, forbidden_env: &[&[u8]]) -> Result<(), PeerCredE
 
 #[cfg(not(target_os = "linux"))]
 fn check_peer_hygiene(_pid: u32, _forbidden_env: &[&[u8]]) -> Result<(), PeerCredError> {
-    /// macOS has no equivalent of the Linux checks.
+    // macOS has no equivalent of the Linux checks.
     Ok(())
 }
 
