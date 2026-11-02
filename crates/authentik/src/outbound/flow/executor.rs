@@ -1,8 +1,10 @@
 use crate::domain::models::saml::SamlAssertion;
+use crate::domain::models::session::AuthentikSession;
 use crate::domain::models::user_credentials::UserCredentials;
-use crate::domain::ports::flow::{FlowError, FlowExecutor, SecondFactor};
+use crate::domain::ports::flow::{FlowError, FlowExecutor, Flowed, SecondFactor};
 use crate::outbound::flow::session::FlowSession;
 use async_trait::async_trait;
+use time::OffsetDateTime;
 use url::Url;
 
 /// Runs the Authentik auth flow.
@@ -22,10 +24,21 @@ impl FlowExecutor for HttpFlowExecutor {
         entry_url: &Url,
         login: &UserCredentials,
         mfa: &dyn SecondFactor,
-    ) -> Result<SamlAssertion, FlowError> {
-        Ok(FlowSession::new(mfa)?
+        session: Option<&AuthentikSession>,
+    ) -> Result<Flowed<SamlAssertion>, FlowError> {
+        let flow = FlowSession::new(mfa)?;
+        if let Some(session) = session {
+            flow.resume(entry_url, session);
+        }
+
+        let value = flow
             .login_saml(entry_url, &login.username, login.password.as_str())
-            .await?)
+            .await?;
+
+        Ok(Flowed {
+            value,
+            session: session_after(&flow, entry_url, session),
+        })
     }
 
     async fn oauth(
@@ -34,15 +47,40 @@ impl FlowExecutor for HttpFlowExecutor {
         redirect_uri: &str,
         login: &UserCredentials,
         mfa: &dyn SecondFactor,
-    ) -> Result<Url, FlowError> {
-        Ok(FlowSession::new(mfa)?
+        session: Option<&AuthentikSession>,
+    ) -> Result<Flowed<Url>, FlowError> {
+        let flow = FlowSession::new(mfa)?;
+        if let Some(session) = session {
+            flow.resume(authorize_url, session);
+        }
+
+        let value = flow
             .login_oidc(
                 authorize_url,
                 redirect_uri,
                 &login.username,
                 login.password.as_str(),
             )
-            .await?)
+            .await?;
+
+        Ok(Flowed {
+            value,
+            session: session_after(&flow, authorize_url, session),
+        })
+    }
+}
+
+/// The session after a flow ended.
+fn session_after(
+    flow: &FlowSession<'_>,
+    url: &Url,
+    before: Option<&AuthentikSession>,
+) -> Option<AuthentikSession> {
+    let after = flow.session(url, OffsetDateTime::now_utc())?;
+
+    match before {
+        Some(before) if before.cookies() == after.cookies() => Some(before.clone()),
+        _ => Some(after),
     }
 }
 
@@ -58,6 +96,7 @@ mod tests {
     use httpmock::Method::GET;
     use httpmock::MockServer;
     use serde_json::json;
+    use time::OffsetDateTime;
 
     fn credentials() -> UserCredentials {
         UserCredentials::new("user".to_string(), Password::new("secret"), None)
@@ -83,16 +122,55 @@ mod tests {
             challenge_response(then, AUTOSUBMIT_STS);
         });
 
-        let assertion = HttpFlowExecutor::new()
+        let flowed = HttpFlowExecutor::new()
             .saml(
                 &Url::parse(&server.url(INIT)).unwrap(),
                 &credentials(),
                 &FakeMfa::default(),
+                None,
             )
             .await
             .unwrap();
 
-        assert_eq!(assertion.destination, "https://signin.aws.amazon.com/saml");
+        assert_eq!(
+            flowed.value.destination,
+            "https://signin.aws.amazon.com/saml"
+        );
+        let session = flowed.session.expect("a session after the login");
+        assert!(session.cookies().contains("authentik_session=ok"));
+    }
+
+    #[tokio::test]
+    async fn saml_starts_from_the_session_it_is_given() {
+        let server = MockServer::start();
+        let resumed = server.mock(|when, then| {
+            when.method(GET)
+                .path(INIT)
+                .header_includes("Cookie", "authentik_session=old");
+            then.status(302).header("Location", "/if/flow/authz/");
+        });
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/api/v3/flows/executor/authz/")
+                .query_param("query", "");
+            challenge_response(then, AUTOSUBMIT_STS);
+        });
+        let before = AuthentikSession::new("authentik_session=old", OffsetDateTime::UNIX_EPOCH);
+
+        // The fake MFA answers nothing, so the login must not need a second factor.
+        let flowed = HttpFlowExecutor::new()
+            .saml(
+                &Url::parse(&server.url(INIT)).unwrap(),
+                &credentials(),
+                &FakeMfa::default(),
+                Some(&before),
+            )
+            .await
+            .unwrap();
+
+        resumed.assert();
+        // Unchanged cookies keep their age.
+        assert_eq!(flowed.session, Some(before));
     }
 
     #[tokio::test]
@@ -110,16 +188,22 @@ mod tests {
                 &server.url("/verify-auth"),
                 &credentials(),
                 &FakeMfa::default(),
+                None,
             )
             .await
             .unwrap();
 
-        assert_eq!(redirect.as_str(), target);
+        assert_eq!(redirect.value.as_str(), target);
     }
 
     async fn saml_error(server: &MockServer, mfa: &FakeMfa) -> FlowError {
         HttpFlowExecutor::new()
-            .saml(&Url::parse(&server.url(INIT)).unwrap(), &credentials(), mfa)
+            .saml(
+                &Url::parse(&server.url(INIT)).unwrap(),
+                &credentials(),
+                mfa,
+                None,
+            )
             .await
             .unwrap_err()
     }

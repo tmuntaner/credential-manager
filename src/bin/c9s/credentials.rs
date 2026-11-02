@@ -18,7 +18,7 @@ use c9s::domain::ports::user_interaction::UserInteraction;
 use c9s::domain::services::aws_credential_issuer::AwsCredentialIssuerService;
 use c9s::domain::services::login_resolver::LoginResolverService;
 use c9s::domain::services::rancher_credential_issuer::RancherCredentialIssuerService;
-use c9s::outbound::authentik::{AuthentikOidcClient, AuthentikSamlClient};
+use c9s::outbound::authentik::{AuthentikOidcClient, AuthentikSamlClient, StoredSessions};
 use c9s::outbound::aws::{SsoCredentials, StsCredentials};
 use c9s::outbound::keyring::KeyringSecretStore;
 use c9s::outbound::rancher::{RancherClient, RancherKubeconfig};
@@ -135,8 +135,11 @@ impl AwsCredentials {
         notifier: Arc<N>,
         settings: AppConfig,
     ) -> Result<()> {
-        let (idp_store, cache_store) =
-            create_secret_stores(&settings, prompt.clone(), notifier.clone())?;
+        let SecretStores {
+            idp: idp_store,
+            cache: cache_store,
+            session: session_store,
+        } = create_secret_stores(&settings, prompt.clone(), notifier.clone())?;
 
         if let Some(credential) =
             cached_credential(self.role_arn.clone(), cache_store.as_deref()).await
@@ -162,6 +165,7 @@ impl AwsCredentials {
                 self.enable_desktop_notifications,
                 prompt.clone(),
                 notifier.clone(),
+                StoredSessions::new(session_store),
             )),
             Box::new(StsCredentials::new()),
             Box::new(SsoCredentials::new()?),
@@ -203,8 +207,11 @@ impl RancherCredentials {
     ) -> Result<()> {
         let rancher = resolver.resolve_rancher(&self.overrides())?;
         let cache_key = format!("rancher:{}:{}", rancher.url, self.cluster);
-        let (idp_store, cache_store) =
-            create_secret_stores(&settings, prompt.clone(), notifier.clone())?;
+        let SecretStores {
+            idp: idp_store,
+            cache: cache_store,
+            session: session_store,
+        } = create_secret_stores(&settings, prompt.clone(), notifier.clone())?;
 
         let cached: Option<RancherCredential> =
             utils::get_cached_credential(&cache_key, cache_store.as_deref())
@@ -232,6 +239,7 @@ impl RancherCredentials {
                 self.enable_desktop_notifications,
                 prompt.clone(),
                 notifier.clone(),
+                StoredSessions::new(session_store),
             )),
         };
 
@@ -277,14 +285,29 @@ impl RancherCredentials {
 
 type OptionalStore = Option<Box<dyn SecretStore>>;
 
+/// The secret stores of a run.
+struct SecretStores {
+    /// Holds the passwords of the identity provider.
+    idp: OptionalStore,
+    /// Holds the issued credentials.
+    cache: OptionalStore,
+    /// Holds the authentik sessions. Only set when they are encrypted: with YubiKey wrapping and
+    /// `wrap-cached` enabled.
+    session: OptionalStore,
+}
+
 fn create_secret_stores<U: UserInteraction + 'static, N: Notifier + 'static>(
     settings: &AppConfig,
     prompt: Arc<U>,
     notifier: Arc<N>,
-) -> Result<(OptionalStore, OptionalStore)> {
+) -> Result<SecretStores> {
     // if the keyring is disabled, return early
     if !settings.keyring_enabled() {
-        return Ok((None, None));
+        return Ok(SecretStores {
+            idp: None,
+            cache: None,
+            session: None,
+        });
     }
 
     // get the yubikey from the config
@@ -336,25 +359,43 @@ fn create_secret_stores<U: UserInteraction + 'static, N: Notifier + 'static>(
 
             // Get the cache store depending on if wrapped cached secrets are enabled.
             // If enabled, it will wrap secrets other than idp credentials.
-            let cache_store: Box<dyn SecretStore> = if settings.wrap_cached_secrets_enabled() {
+            let wrap_cached = settings.wrap_cached_secrets_enabled();
+            let cache_store: Box<dyn SecretStore> = if wrap_cached {
                 Box::new(
                     c9s::domain::services::wrapping_secret_store::WrappingSecretStore::new(
                         KeyringSecretStore::new(),
-                        wrapper,
+                        wrapper.clone(),
                     ),
                 )
             } else {
                 Box::new(KeyringSecretStore::new())
             };
 
-            return Ok((Some(Box::new(idp_store)), Some(cache_store)));
+            // creates the session store to cache the user's session in the idp.
+            let session_store: OptionalStore = wrap_cached.then(|| {
+                Box::new(
+                    c9s::domain::services::wrapping_secret_store::WrappingSecretStore::with_policy(
+                        KeyringSecretStore::new(),
+                        wrapper,
+                        c9s::domain::services::wrapping_secret_store::WrappingPolicy::Strict,
+                    ),
+                ) as Box<dyn SecretStore>
+            });
+
+            return Ok(SecretStores {
+                idp: Some(Box::new(idp_store)),
+                cache: Some(cache_store),
+                session: session_store,
+            });
         }
     }
 
-    Ok((
-        Some(Box::new(KeyringSecretStore::new())),
-        Some(Box::new(KeyringSecretStore::new())),
-    ))
+    // if we don't wrap secrets, there is no session stores.
+    Ok(SecretStores {
+        idp: Some(Box::new(KeyringSecretStore::new())),
+        cache: Some(Box::new(KeyringSecretStore::new())),
+        session: None,
+    })
 }
 
 async fn cached_credential(
@@ -539,22 +580,31 @@ mod tests {
         let mut settings = AppConfig::default();
         settings.set_use_keyring(false);
 
-        let (idp_store, cache_store) =
-            create_secret_stores(&settings, Arc::new(NoInteraction), Arc::new(NoInteraction))
-                .unwrap();
+        let SecretStores {
+            idp: idp_store,
+            cache: cache_store,
+            session: session_store,
+        } = create_secret_stores(&settings, Arc::new(NoInteraction), Arc::new(NoInteraction))
+            .unwrap();
         assert!(idp_store.is_none());
         assert!(cache_store.is_none());
+        assert!(session_store.is_none());
     }
 
     #[test]
     fn secret_stores_plain_keyring_when_not_enrolled() {
         let settings = AppConfig::default();
 
-        let (idp_store, cache_store) =
-            create_secret_stores(&settings, Arc::new(NoInteraction), Arc::new(NoInteraction))
-                .unwrap();
+        let SecretStores {
+            idp: idp_store,
+            cache: cache_store,
+            session: session_store,
+        } = create_secret_stores(&settings, Arc::new(NoInteraction), Arc::new(NoInteraction))
+            .unwrap();
         assert!(idp_store.is_some());
         assert!(cache_store.is_some());
+        // Without wrapping, sessions are not stored.
+        assert!(session_store.is_none());
     }
 
     #[test]
@@ -566,19 +616,34 @@ mod tests {
         settings.set_yubikey(Some(yk));
 
         // Default: wrap_cached_secrets = false
-        let (idp_store, cache_store) =
-            create_secret_stores(&settings, Arc::new(NoInteraction), Arc::new(NoInteraction))
-                .unwrap();
+        let SecretStores {
+            idp: idp_store,
+            cache: cache_store,
+            session: session_store,
+        } = create_secret_stores(&settings, Arc::new(NoInteraction), Arc::new(NoInteraction))
+            .unwrap();
         assert!(idp_store.is_some());
         assert!(cache_store.is_some());
+        assert!(session_store.is_none());
 
         // Configured: wrap_cached_secrets = true
         settings.set_wrap_cached_secrets(true);
-        let (idp_store, cache_store) =
-            create_secret_stores(&settings, Arc::new(NoInteraction), Arc::new(NoInteraction))
-                .unwrap();
+        let SecretStores {
+            idp: idp_store,
+            cache: cache_store,
+            session: session_store,
+        } = create_secret_stores(&settings, Arc::new(NoInteraction), Arc::new(NoInteraction))
+            .unwrap();
         assert!(idp_store.is_some());
         assert!(cache_store.is_some());
+        assert!(session_store.is_some());
+
+        // Keyring disabled: nothing is stored, even when wrapping is on.
+        settings.set_use_keyring(false);
+        let stores =
+            create_secret_stores(&settings, Arc::new(NoInteraction), Arc::new(NoInteraction))
+                .unwrap();
+        assert!(stores.session.is_none());
     }
 
     #[test]

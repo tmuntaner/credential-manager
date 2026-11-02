@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use authentik::{
     AuthCode, Authenticator, AuthenticatorError, AuthentikError, AuthentikService, FlowError,
-    HttpFlowExecutor, MfaMethod, Password, StateError, StateSource, TotpCode, UserCredentials,
-    WebauthnAssertion, WebauthnRequest,
+    HttpFlowExecutor, MfaMethod, NoSessionCache, Password, StateError, StateSource, TotpCode,
+    UserCredentials, WebauthnAssertion, WebauthnRequest,
 };
 use httpmock::Method::{GET, POST};
 use httpmock::{MockServer, Then};
@@ -47,8 +47,13 @@ impl Authenticator for TypedCode {
     }
 }
 
-fn service() -> AuthentikService<HttpFlowExecutor, FixedState, TypedCode> {
-    AuthentikService::new(HttpFlowExecutor::new(), FixedState, TypedCode)
+fn service() -> AuthentikService<HttpFlowExecutor, FixedState, TypedCode, NoSessionCache> {
+    AuthentikService::new(
+        HttpFlowExecutor::new(),
+        FixedState,
+        TypedCode,
+        NoSessionCache,
+    )
 }
 
 fn login(mfa: Option<MfaMethod>) -> UserCredentials {

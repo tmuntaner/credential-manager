@@ -5,6 +5,7 @@ use crate::domain::ports::login::{OidcAuthorizer, SamlIdentityProvider};
 use crate::domain::ports::notifier::Notifier;
 use crate::domain::ports::user_interaction::UserInteraction;
 use crate::outbound::authentik::authenticator::InteractiveAuthenticator;
+use crate::outbound::authentik::session_cache::StoredSessions;
 use crate::outbound::webauthn::adapter::WebauthnAdapter;
 use crate::outbound::webauthn::ui::UserInteractionKeyUi;
 use async_trait::async_trait;
@@ -17,12 +18,14 @@ type Service<U, N> = AuthentikService<
     HttpFlowExecutor,
     RandomState,
     InteractiveAuthenticator<WebauthnAdapter, U, N>,
+    StoredSessions,
 >;
 
 fn service<U: UserInteraction + 'static, N: Notifier + 'static>(
     enable_desktop_notifications: bool,
     interaction: Arc<U>,
     notifier: Arc<N>,
+    sessions: StoredSessions,
 ) -> Service<U, N> {
     let key_ui = Arc::new(UserInteractionKeyUi::new(
         interaction.clone(),
@@ -34,6 +37,7 @@ fn service<U: UserInteraction + 'static, N: Notifier + 'static>(
         HttpFlowExecutor::new(),
         RandomState::new(),
         InteractiveAuthenticator::new(webauthn_adapter, interaction, notifier),
+        sessions,
     )
 }
 
@@ -43,9 +47,19 @@ pub struct AuthentikSamlClient<U: UserInteraction + 'static, N: Notifier + 'stat
 }
 
 impl<U: UserInteraction + 'static, N: Notifier + 'static> AuthentikSamlClient<U, N> {
-    pub fn new(enable_desktop_notifications: bool, interaction: Arc<U>, notifier: Arc<N>) -> Self {
+    pub fn new(
+        enable_desktop_notifications: bool,
+        interaction: Arc<U>,
+        notifier: Arc<N>,
+        sessions: StoredSessions,
+    ) -> Self {
         Self {
-            service: service(enable_desktop_notifications, interaction, notifier),
+            service: service(
+                enable_desktop_notifications,
+                interaction,
+                notifier,
+                sessions,
+            ),
         }
     }
 }
@@ -83,9 +97,15 @@ impl<U: UserInteraction + 'static, N: Notifier + 'static> AuthentikOidcClient<U,
         enable_desktop_notifications: bool,
         interaction: Arc<U>,
         notifier: Arc<N>,
+        sessions: StoredSessions,
     ) -> Self {
         Self {
-            service: service(enable_desktop_notifications, interaction, notifier),
+            service: service(
+                enable_desktop_notifications,
+                interaction,
+                notifier,
+                sessions,
+            ),
             issuer,
             client_id,
         }

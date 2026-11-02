@@ -1,9 +1,11 @@
+use reqwest::cookie::Jar;
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, ACCEPT, CONTENT_TYPE, LOCATION, SET_COOKIE,
 };
 use reqwest::{Client, Method, Response, StatusCode};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use url::Url;
@@ -100,9 +102,14 @@ impl ApiClient {
 
     /// Same as [`ApiClient::new`] but does not follow redirects, so the caller can inspect them.
     pub fn new_no_redirect() -> Result<ApiClient, ApiError> {
+        Self::new_no_redirect_with_jar(Arc::new(Jar::default()))
+    }
+
+    /// Same as [`ApiClient::new_no_redirect`] but keeps the cookies in `jar`, so the caller can read and seed them.
+    pub fn new_no_redirect_with_jar(jar: Arc<Jar>) -> Result<ApiClient, ApiError> {
         Ok(ApiClient {
             http_client: Client::builder()
-                .cookie_store(true)
+                .cookie_provider(jar)
                 .user_agent(USER_AGENT)
                 .redirect(reqwest::redirect::Policy::none())
                 .build()?,

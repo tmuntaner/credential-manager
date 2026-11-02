@@ -1,11 +1,15 @@
 use crate::domain::models::saml::SamlAssertion;
+use crate::domain::models::session::AuthentikSession;
 use crate::domain::ports::flow::{FlowError, MfaError, SecondFactor};
 use crate::outbound::flow::challenge::{self, AutosubmitChallenge, Challenge, ChallengeError};
 use crate::outbound::flow::mfa;
 use base::api_client::{AcceptType, ApiClient, ApiError, RawResponse};
+use reqwest::cookie::{CookieStore, Jar};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
+use std::sync::Arc;
 use thiserror::Error;
+use time::OffsetDateTime;
 use url::{form_urlencoded, Url};
 
 /// The maximum amount of Flows before giving up.
@@ -118,15 +122,34 @@ enum FlowOutcome {
 /// Runs the flow executor API headlessly, with a cookie jar to keep state.
 pub struct FlowSession<'a> {
     client: ApiClient,
+    jar: Arc<Jar>,
     mfa: &'a dyn SecondFactor,
 }
 
 impl<'a> FlowSession<'a> {
     pub fn new(mfa: &'a dyn SecondFactor) -> Result<Self, ExecutorError> {
+        let jar = Arc::new(Jar::default());
+
         Ok(FlowSession {
-            client: ApiClient::new_no_redirect()?,
+            client: ApiClient::new_no_redirect_with_jar(jar.clone())?,
+            jar,
             mfa,
         })
+    }
+
+    /// Starts from the cookies of an earlier login to the instance at `url`.
+    pub fn resume(&self, url: &Url, session: &AuthentikSession) {
+        for cookie in session.cookies().split("; ") {
+            self.jar.add_cookie_str(cookie, url);
+        }
+    }
+
+    /// The cookies the instance at `url` set, if there are any.
+    pub fn session(&self, url: &Url, now: OffsetDateTime) -> Option<AuthentikSession> {
+        let header = self.jar.cookies(url)?;
+        let cookies = header.to_str().ok()?;
+
+        Some(AuthentikSession::new(cookies, now))
     }
 
     /// Starts the SAML login flow.
