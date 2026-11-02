@@ -31,9 +31,23 @@ For more information, please see our documentation on [credential encryption](do
 It uses an encryption key derived from a physical YubiKey touch via FIDO2 `hmac-secret` (Linux and macOS).
 This is not supported on Windows.
 
-- The derived key is cached in zeroized memory. It exists only in the process lifetime and requires a physical touch per invocation.
+- By default, the derived key is cached in the background daemon (see [Background Daemon](docs/daemon.md)) for 15 minutes of activity, reducing physical touch fatigue while maintaining strict local process isolation.
+- When the daemon is disabled or unreachable, `c9s` falls back to per-process derivation, requiring a physical touch per invocation.
 - Once a YubiKey is enrolled, it will always wrap IdP credentials.
 - If you want to wrap other secrets, you can. It will just require one physical touch per invocation.
+
+**Daemon Management Commands:**
+
+```bash
+# Check daemon status and remaining idle TTL
+c9s daemon status
+
+# Manually lock and zeroize cached keys
+c9s daemon lock
+
+# Stop the background daemon
+c9s daemon stop
+```
 
 **Enroll a YubiKey:**
 

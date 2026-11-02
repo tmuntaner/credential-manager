@@ -1,11 +1,15 @@
 mod args;
 mod config;
 mod credentials;
+#[cfg(unix)]
+mod daemon;
 mod utils;
 
 use crate::args::PromptModeArg;
 use crate::config::Config;
 use crate::credentials::Credentials;
+#[cfg(unix)]
+use crate::daemon::Daemon;
 use anyhow::Result;
 use c9s::domain::ports::config::ConfigStore;
 use c9s::outbound::config::config_store::ConfigFileAdapter;
@@ -28,6 +32,8 @@ struct Opts {
 enum SubCommand {
     Config(Config),
     Creds(Credentials),
+    #[cfg(unix)]
+    Daemon(Daemon),
     Licenses(Licenses),
 }
 
@@ -56,6 +62,8 @@ async fn main() -> Result<()> {
             store.save(&settings)?;
         }
         SubCommand::Creds(val) => val.run(settings, interaction, notifier).await?,
+        #[cfg(unix)]
+        SubCommand::Daemon(val) => val.run(settings, interaction, notifier).await?,
         SubCommand::Licenses(val) => val.run()?,
     }
 
