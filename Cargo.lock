@@ -837,6 +837,7 @@ dependencies = [
  "hkdf 0.13.0",
  "httpmock",
  "keyring",
+ "libc",
  "log",
  "mockall",
  "notify-rust",

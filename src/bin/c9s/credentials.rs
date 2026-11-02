@@ -302,13 +302,31 @@ fn create_secret_stores<U: UserInteraction + 'static, N: Notifier + 'static>(
             let salt = *yk.salt();
 
             // build the wrapper
-            let wrapper = c9s::outbound::yubikey::YubikeyWrapper::new(
+            let yk_wrapper = c9s::outbound::yubikey::YubikeyWrapper::new(
                 yk.rp_id(),
                 credential_id,
                 salt,
                 prompt,
                 notifier,
             );
+
+            let wrapper: Arc<dyn c9s::domain::ports::secret_wrapper::SecretWrapper> = if settings
+                .daemon_enabled()
+            {
+                let socket_path = settings
+                    .daemon_config()
+                    .and_then(|d| d.socket_path())
+                    .cloned()
+                    .unwrap_or_else(c9s::outbound::daemon::peer_cred::default_socket_path);
+
+                let daemon_wrapper = c9s::outbound::daemon::DaemonSecretWrapper::new(socket_path)
+                    .with_fallback(Box::new(yk_wrapper))
+                    .with_auto_spawn(true);
+
+                Arc::new(daemon_wrapper)
+            } else {
+                Arc::new(yk_wrapper)
+            };
 
             // build the wrapping secret store
             let idp_store = c9s::domain::services::wrapping_secret_store::WrappingSecretStore::new(

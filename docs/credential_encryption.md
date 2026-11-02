@@ -73,3 +73,11 @@ Every secret in memory has the following protections:
 3. It base64 decodes the secret.
 4. It splits the payload, separating the payload from the encrypted data.
 5. It calls AES-256-GCM-Decrypt to decrypt the data with the derived key.
+
+## Background Daemon & Session Caching
+
+To improve ergonomics and prevent repetitive commands (such as multiple `aws` or `kubectl` invocations),
+`c9s` supports an in-memory background daemon without compromising security.
+The daemon keeps the derived key unlocked within an active session window and enforces OS kernel-level caller verification.
+
+For more details, see the [Background Daemon Documentation](daemon.md).

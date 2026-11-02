@@ -41,6 +41,38 @@ pub struct GlobalSettings {
     pub wrap_cached_secrets: Option<bool>,
     pub prompt: Option<PromptMode>,
     pub pinentry: Option<PathBuf>,
+    pub daemon: Option<DaemonConfig>,
+}
+
+/// Configuration for the background daemon.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct DaemonConfig {
+    pub enabled: Option<bool>,
+    pub socket_path: Option<PathBuf>,
+    pub idle_timeout_minutes: Option<u64>,
+    pub notify_on_decrypt: Option<bool>,
+}
+
+impl DaemonConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
+    }
+
+    pub fn socket_path(&self) -> Option<&PathBuf> {
+        self.socket_path.as_ref()
+    }
+
+    pub fn idle_timeout_minutes(&self) -> u64 {
+        self.idle_timeout_minutes.unwrap_or(15)
+    }
+
+    pub fn notify_on_decrypt(&self) -> bool {
+        self.notify_on_decrypt.unwrap_or(true)
+    }
 }
 
 /// Configuration for hardware-backed secret wrapping using a YubiKey.
@@ -173,6 +205,22 @@ impl AppConfig {
 
     pub fn pinentry_program(&self) -> Option<PathBuf> {
         self.global_settings.pinentry.clone()
+    }
+
+    pub fn daemon_config(&self) -> Option<&DaemonConfig> {
+        self.global_settings.daemon.as_ref()
+    }
+
+    pub fn set_daemon_config(&mut self, config: Option<DaemonConfig>) {
+        self.global_settings.daemon = config;
+    }
+
+    pub fn daemon_enabled(&self) -> bool {
+        self.global_settings
+            .daemon
+            .as_ref()
+            .map(|d| d.enabled())
+            .unwrap_or(true)
     }
 
     pub fn add_idp(&mut self, idp: Idp) {

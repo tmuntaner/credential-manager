@@ -5,7 +5,8 @@ use crate::domain::models::idp::IdpType;
 use crate::domain::models::mfa::{MfaSelection, MfaSelectionError};
 use crate::domain::models::prompt_mode::PromptMode;
 use crate::domain::models::settings::{
-    AppConfig, AwsHost, AwsSsoHost, GlobalSettings, Idp, RancherHost, SettingsError, YubikeyConfig,
+    AppConfig, AwsHost, AwsSsoHost, DaemonConfig, GlobalSettings, Idp, RancherHost, SettingsError,
+    YubikeyConfig,
 };
 use crate::domain::ports::config::ConfigError;
 use base64::engine::general_purpose::STANDARD;
@@ -30,6 +31,37 @@ struct FileGlobalSettings {
     wrap_cached_secrets: Option<bool>,
     prompt: Option<FilePromptMode>,
     pinentry: Option<PathBuf>,
+    daemon: Option<FileDaemonConfig>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct FileDaemonConfig {
+    enabled: Option<bool>,
+    socket_path: Option<PathBuf>,
+    idle_timeout_minutes: Option<u64>,
+    notify_on_decrypt: Option<bool>,
+}
+
+impl From<&DaemonConfig> for FileDaemonConfig {
+    fn from(cfg: &DaemonConfig) -> Self {
+        Self {
+            enabled: cfg.enabled,
+            socket_path: cfg.socket_path.clone(),
+            idle_timeout_minutes: cfg.idle_timeout_minutes,
+            notify_on_decrypt: cfg.notify_on_decrypt,
+        }
+    }
+}
+
+impl From<FileDaemonConfig> for DaemonConfig {
+    fn from(file: FileDaemonConfig) -> Self {
+        Self {
+            enabled: file.enabled,
+            socket_path: file.socket_path,
+            idle_timeout_minutes: file.idle_timeout_minutes,
+            notify_on_decrypt: file.notify_on_decrypt,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -134,6 +166,7 @@ impl From<&GlobalSettings> for FileGlobalSettings {
             wrap_cached_secrets: settings.wrap_cached_secrets,
             prompt: settings.prompt.map(Into::into),
             pinentry: settings.pinentry.clone(),
+            daemon: settings.daemon.as_ref().map(Into::into),
         }
     }
 }
@@ -268,6 +301,7 @@ impl TryFrom<FileGlobalSettings> for GlobalSettings {
             wrap_cached_secrets: file.wrap_cached_secrets,
             prompt: file.prompt.map(Into::into),
             pinentry: file.pinentry,
+            daemon: file.daemon.map(Into::into),
         })
     }
 }
@@ -497,6 +531,30 @@ mod tests {
             settings.pinentry_program(),
             Some(PathBuf::from("/usr/bin/pinentry"))
         );
+    }
+
+    #[test]
+    fn daemon_settings_round_trip() {
+        let mut settings = AppConfig::default();
+        settings.set_daemon_config(Some(DaemonConfig {
+            enabled: Some(true),
+            socket_path: Some(PathBuf::from("/tmp/custom.sock")),
+            idle_timeout_minutes: Some(30),
+            notify_on_decrypt: Some(false),
+        }));
+
+        let toml = save(&settings);
+        assert!(toml.contains("idle_timeout_minutes = 30"), "{toml}");
+
+        let loaded = load(&toml);
+        let daemon = loaded.daemon_config().unwrap();
+        assert!(daemon.enabled());
+        assert_eq!(
+            daemon.socket_path(),
+            Some(&PathBuf::from("/tmp/custom.sock"))
+        );
+        assert_eq!(daemon.idle_timeout_minutes(), 30);
+        assert!(!daemon.notify_on_decrypt());
     }
 
     #[test]
