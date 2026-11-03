@@ -1,6 +1,6 @@
 [package]
 name = "c9s"
-version = "0.1.0-beta1"
+version = "0.1.0-beta2"
 edition = "2021"
 license = "EUPL-1.2+"
 
@@ -72,6 +72,6 @@ libc = "0.2"
 zbus = { workspace = true }
 
 [dev-dependencies]
-httpmock = { workspace = true,  }
+httpmock = { workspace = true }
 mockall = { workspace = true }
 tempfile = "3"
