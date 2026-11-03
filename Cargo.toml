@@ -1,6 +1,6 @@
 [package]
 name = "c9s"
-version = "0.1.0-alpha18"
+version = "0.1.0-beta1"
 edition = "2021"
 license = "EUPL-1.2+"
 
