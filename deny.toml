@@ -70,6 +70,11 @@ feature-depth = 1
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
 ignore = [
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5 via authenticator 0.5.0 -> p256 0.13 (crates/webauthn); no authenticator release drops it" },
+    { id = "RUSTSEC-2021-0127", reason = "serde_cbor is unmaintained; required by authenticator 0.5.0, which has no release that drops it" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; zbus 5 pinned by notify-rust 4.x, no release moves off it" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; zbus 5 pinned by notify-rust 4.x, no release moves off it" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; zbus 5 pinned by notify-rust 4.x, no release moves off it" },
     #"RUSTSEC-0000-0000",
     #{ id = "RUSTSEC-0000-0000", reason = "you can specify a reason the advisory is ignored" },
     #"a-crate-that-is-yanked@0.1.1", # you can also ignore yanked crate versions if you wish
@@ -99,12 +104,10 @@ allow = [
     "EUPL-1.2",
     "CDLA-Permissive-2.0",
     "Zlib",
-    "0BSD",
     "BSD-2-Clause",
     "CC0-1.0",
     "Unlicense",
-    "BSL-1.0",
-    "EUPL-1.2"
+    "BSL-1.0"
 ]
 
 # The confidence threshold for detecting a license from license text.
