@@ -1,4 +1,4 @@
-use crate::domain::models::user_interaction::{ChoicePrompt, SecretPrompt, UserNotice};
+use crate::domain::models::user_interaction::{ChoicePrompt, SecretKind, SecretPrompt, UserNotice};
 use crate::domain::ports::notifier::Notifier;
 use crate::domain::ports::user_interaction::{InteractionError, UserInteraction};
 use crate::domain::ports::webauthn::WebauthnClientPort;
@@ -69,7 +69,8 @@ where
             .interaction
             .ask_secret(
                 SecretPrompt::new(TITLE, "TOTP code")
-                    .with_description("Enter the one-time code from your authenticator app."),
+                    .with_description("Enter the one-time code from your authenticator app.")
+                    .with_kind(SecretKind::Totp),
             )
             .await?;
 

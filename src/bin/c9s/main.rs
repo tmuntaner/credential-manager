@@ -11,7 +11,7 @@ use crate::credentials::Credentials;
 #[cfg(unix)]
 use crate::daemon::Daemon;
 use anyhow::Result;
-use c9s::domain::ports::config::ConfigStore;
+use c9s::domain::services::settings_editor::SettingsService;
 use c9s::outbound::config::config_store::ConfigFileAdapter;
 use clap::Parser;
 
@@ -49,15 +49,12 @@ impl Licenses {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opt: Opts = Opts::parse();
-    let store = ConfigFileAdapter::in_user_config_dir()?;
-    let mut settings = store.load()?;
+    let settings_service = SettingsService::new(ConfigFileAdapter::in_user_config_dir()?);
+    let settings = settings_service.load()?;
     let (interaction, notifier) = utils::interaction(&settings, opt.prompt.map(Into::into));
 
     match opt.sub_command {
-        SubCommand::Config(val) => {
-            val.run(&mut settings, interaction, notifier).await?;
-            store.save(&settings)?;
-        }
+        SubCommand::Config(val) => val.run(&settings_service, interaction, notifier).await?,
         SubCommand::Creds(val) => val.run(settings, interaction, notifier).await?,
         #[cfg(unix)]
         SubCommand::Daemon(val) => val.run(settings, interaction, notifier).await?,

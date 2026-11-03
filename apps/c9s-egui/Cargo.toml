@@ -1,0 +1,25 @@
+[package]
+name = "c9s-egui"
+version = "0.1.0-beta2"
+edition = "2021"
+license = "EUPL-1.2+"
+description = "Desktop app to get temporary credentials without the command line (egui)"
+
+[dependencies]
+c9s = { path = "../.." }
+eframe = { version = "0.37", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "wayland", "x11"] }
+log = { workspace = true }
+tokio = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+egui_kittest = "0.37"
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"

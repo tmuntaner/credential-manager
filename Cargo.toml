@@ -8,7 +8,10 @@ license = "EUPL-1.2+"
 
 [workspace]
 resolver = "3"
-members = ["crates/base", "crates/webauthn", "crates/keyring", "crates/rancher", "crates/authentik"]
+members = ["crates/base", "crates/webauthn", "crates/keyring", "crates/rancher", "crates/authentik", "apps/c9s-egui"]
+# The GUI builds without system -dev packages but is a big dependency tree, so a plain `cargo build`/`cargo test`
+# leaves it out. Use `-p c9s-egui`.
+default-members = [".", "crates/base", "crates/webauthn", "crates/keyring", "crates/rancher", "crates/authentik"]
 
 [workspace.dependencies]
 base = { path = "./crates/base" }

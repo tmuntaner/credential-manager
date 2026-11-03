@@ -1,26 +1,24 @@
 use crate::args::AwsAppTypeArg;
-use crate::utils;
+use crate::utils::parse_ttl;
 use anyhow::{anyhow, Result};
+use c9s::app::aws::{issue_aws, AwsRequest};
+use c9s::app::cache::{cache_warning, get_cached_credential, set_cached_credential_best_effort};
+use c9s::app::passwords::get_password;
+use c9s::app::secrets::{create_secret_stores, SecretStores};
 use c9s::domain::models::aws::Credential;
+use c9s::domain::models::idp::IdpType;
 use c9s::domain::models::login::{AwsOverrides, RancherOverrides};
 use c9s::domain::models::mfa::MfaSelection;
 use c9s::domain::models::rancher_credentials::RancherCredential;
 use c9s::domain::models::settings::AppConfig;
 use c9s::domain::models::user_credentials::UserCredentials;
 use c9s::domain::ports::login::LoginResolver;
-use c9s::domain::ports::rancher::{KubeconfigRenderer, RancherCredentialIssuer};
-
-use c9s::domain::models::idp::IdpType;
-use c9s::domain::ports::aws::AwsCredentialIssuer;
 use c9s::domain::ports::notifier::Notifier;
-use c9s::domain::ports::secret_store::SecretStore;
+use c9s::domain::ports::rancher::{KubeconfigRenderer, RancherCredentialIssuer};
 use c9s::domain::ports::user_interaction::UserInteraction;
-use c9s::domain::services::aws_credential_issuer::AwsCredentialIssuerService;
 use c9s::domain::services::login_resolver::LoginResolverService;
 use c9s::domain::services::rancher_credential_issuer::RancherCredentialIssuerService;
-use c9s::outbound::authentik::{AuthentikOidcClient, AuthentikSamlClient, StoredSessions};
-use c9s::outbound::aws::{SsoCredentials, StsCredentials};
-use c9s::outbound::keyring::KeyringSecretStore;
+use c9s::outbound::authentik::{AuthentikOidcClient, StoredSessions};
 use c9s::outbound::rancher::{RancherClient, RancherKubeconfig};
 use clap::Parser;
 use clap::ValueEnum;
@@ -28,7 +26,6 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use time::OffsetDateTime;
-use utils::parse_ttl;
 
 #[derive(Parser)]
 pub struct Credentials {
@@ -119,7 +116,7 @@ impl Credentials {
     ) -> Result<()> {
         let resolver = LoginResolverService::new(settings.clone());
         match &self.sub_command {
-            CredentialsSubCommands::Aws(val) => val.run(resolver, prompt, notifier, settings).await,
+            CredentialsSubCommands::Aws(val) => val.run(prompt, notifier, settings).await,
             CredentialsSubCommands::Rancher(val) => {
                 val.run(resolver, prompt, notifier, settings).await
             }
@@ -130,60 +127,22 @@ impl Credentials {
 impl AwsCredentials {
     async fn run<U: UserInteraction + 'static, N: Notifier + 'static>(
         &self,
-        resolver: LoginResolverService,
         prompt: Arc<U>,
         notifier: Arc<N>,
         settings: AppConfig,
     ) -> Result<()> {
-        let SecretStores {
-            idp: idp_store,
-            cache: cache_store,
-            session: session_store,
-        } = create_secret_stores(&settings, prompt.clone(), notifier.clone())?;
+        let credentials = issue_aws(&settings, &self.request(), prompt, notifier).await?;
 
-        if let Some(credential) =
-            cached_credential(self.role_arn.clone(), cache_store.as_deref()).await
-        {
-            print_credentials(&[credential], self.output)?;
+        print_credentials(&credentials, self.output)
+    }
 
-            return Ok(());
+    fn request(&self) -> AwsRequest {
+        AwsRequest {
+            overrides: self.overrides(),
+            role_arn: self.role_arn.clone(),
+            with_password: self.with_password,
+            enable_desktop_notifications: self.enable_desktop_notifications,
         }
-
-        let login = resolver.resolve_aws(&self.overrides())?;
-
-        let password = utils::get_password(
-            login.password_url().to_string(),
-            login.username.clone(),
-            self.with_password,
-            idp_store.as_deref(),
-            prompt.as_ref(),
-        )
-        .await?;
-
-        let aws_credentials = AwsCredentialIssuerService::new(
-            Box::new(AuthentikSamlClient::new(
-                self.enable_desktop_notifications,
-                prompt.clone(),
-                notifier.clone(),
-                StoredSessions::new(session_store),
-            )),
-            Box::new(StsCredentials::new()),
-            Box::new(SsoCredentials::new()?),
-        )
-        .issue(&login, password, self.role_arn.as_deref())
-        .await?;
-
-        print_credentials(&aws_credentials, self.output)?;
-        if let Some(role_arn) = &self.role_arn {
-            if aws_credentials.len() == 1 {
-                let credential = aws_credentials
-                    .first()
-                    .ok_or_else(|| anyhow!("failed to get credential"))?;
-                utils::set_cached_credential(role_arn, credential, cache_store.as_deref()).await?;
-            }
-        }
-
-        Ok(())
     }
 
     fn overrides(&self) -> AwsOverrides {
@@ -214,7 +173,7 @@ impl RancherCredentials {
         } = create_secret_stores(&settings, prompt.clone(), notifier.clone())?;
 
         let cached: Option<RancherCredential> =
-            utils::get_cached_credential(&cache_key, cache_store.as_deref())
+            get_cached_credential(&cache_key, cache_store.as_deref())
                 .await
                 .unwrap_or_default();
         if let Some(credential) = cached
@@ -223,7 +182,7 @@ impl RancherCredentials {
             return self.print(&credential);
         }
 
-        let password = utils::get_password(
+        let password = get_password(
             rancher.idp_url.clone(),
             rancher.username.clone(),
             self.with_password,
@@ -259,7 +218,12 @@ impl RancherCredentials {
         .await?;
 
         self.print(&credential)?;
-        utils::set_cached_credential(&cache_key, &credential, cache_store.as_deref()).await?;
+        // The cache only saves a login: the credential was printed, so a failure is only a warning.
+        if let Some(error) =
+            set_cached_credential_best_effort(&cache_key, &credential, cache_store.as_deref()).await
+        {
+            eprintln!("warning: {}", cache_warning(&error));
+        }
 
         Ok(())
     }
@@ -281,132 +245,6 @@ impl RancherCredentials {
             mfa: self.mfa,
         }
     }
-}
-
-type OptionalStore = Option<Box<dyn SecretStore>>;
-
-/// The secret stores of a run.
-struct SecretStores {
-    /// Holds the passwords of the identity provider.
-    idp: OptionalStore,
-    /// Holds the issued credentials.
-    cache: OptionalStore,
-    /// Holds the authentik sessions. Only set when they are encrypted: with YubiKey wrapping and
-    /// `wrap-cached` enabled.
-    session: OptionalStore,
-}
-
-fn create_secret_stores<U: UserInteraction + 'static, N: Notifier + 'static>(
-    settings: &AppConfig,
-    prompt: Arc<U>,
-    notifier: Arc<N>,
-) -> Result<SecretStores> {
-    // if the keyring is disabled, return early
-    if !settings.keyring_enabled() {
-        return Ok(SecretStores {
-            idp: None,
-            cache: None,
-            session: None,
-        });
-    }
-
-    // get the yubikey from the config
-    if let Some(yk) = settings.yubikey_config() {
-        #[cfg(target_os = "windows")]
-        {
-            let _ = (yk, prompt, notifier);
-            return Err(anyhow!("YubiKey wrapping is not supported on Windows"));
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            // find the yubikey and the salt
-            let credential_id = yk.credential_id().to_vec();
-            let salt = *yk.salt();
-
-            // build the wrapper
-            let yk_wrapper = c9s::outbound::yubikey::YubikeyWrapper::new(
-                yk.rp_id(),
-                credential_id,
-                salt,
-                prompt,
-                notifier,
-            );
-
-            let wrapper: Arc<dyn c9s::domain::ports::secret_wrapper::SecretWrapper> = if settings
-                .daemon_enabled()
-            {
-                let socket_path = settings
-                    .daemon_config()
-                    .and_then(|d| d.socket_path())
-                    .cloned()
-                    .unwrap_or_else(c9s::outbound::daemon::peer_cred::default_socket_path);
-
-                let daemon_wrapper = c9s::outbound::daemon::DaemonSecretWrapper::new(socket_path)
-                    .with_fallback(Box::new(yk_wrapper))
-                    .with_auto_spawn(true);
-
-                Arc::new(daemon_wrapper)
-            } else {
-                Arc::new(yk_wrapper)
-            };
-
-            // build the wrapping secret store
-            let idp_store = c9s::domain::services::wrapping_secret_store::WrappingSecretStore::new(
-                KeyringSecretStore::new(),
-                wrapper.clone(),
-            );
-
-            // Get the cache store depending on if wrapped cached secrets are enabled.
-            // If enabled, it will wrap secrets other than idp credentials.
-            let wrap_cached = settings.wrap_cached_secrets_enabled();
-            let cache_store: Box<dyn SecretStore> = if wrap_cached {
-                Box::new(
-                    c9s::domain::services::wrapping_secret_store::WrappingSecretStore::new(
-                        KeyringSecretStore::new(),
-                        wrapper.clone(),
-                    ),
-                )
-            } else {
-                Box::new(KeyringSecretStore::new())
-            };
-
-            // creates the session store to cache the user's session in the idp.
-            let session_store: OptionalStore = wrap_cached.then(|| {
-                Box::new(
-                    c9s::domain::services::wrapping_secret_store::WrappingSecretStore::with_policy(
-                        KeyringSecretStore::new(),
-                        wrapper,
-                        c9s::domain::services::wrapping_secret_store::WrappingPolicy::Strict,
-                    ),
-                ) as Box<dyn SecretStore>
-            });
-
-            return Ok(SecretStores {
-                idp: Some(Box::new(idp_store)),
-                cache: Some(cache_store),
-                session: session_store,
-            });
-        }
-    }
-
-    // if we don't wrap secrets, there is no session stores.
-    Ok(SecretStores {
-        idp: Some(Box::new(KeyringSecretStore::new())),
-        cache: Some(Box::new(KeyringSecretStore::new())),
-        session: None,
-    })
-}
-
-async fn cached_credential(
-    role_arn: Option<String>,
-    store: Option<&dyn SecretStore>,
-) -> Option<Credential> {
-    let credential: Option<Credential> = utils::get_cached_credential(&role_arn?, store)
-        .await
-        .unwrap_or_default();
-
-    credential.filter(|credential| credential.is_valid_at(OffsetDateTime::now_utc()))
 }
 
 fn print_credentials(aws_credentials: &[Credential], output: Option<OutputOptions>) -> Result<()> {
@@ -450,38 +288,7 @@ fn print_credentials(aws_credentials: &[Credential], output: Option<OutputOption
 #[cfg(test)]
 mod tests {
     use super::*;
-    use c9s::domain::models::secret::SafeSecret;
     use c9s::domain::models::settings::AwsAppType;
-    use c9s::domain::models::user_interaction::{
-        ChoicePrompt, ConfirmPrompt, SecretPrompt, UserNotice,
-    };
-    use c9s::domain::ports::notifier::NotifyError;
-    use c9s::domain::ports::user_interaction::InteractionError;
-
-    /// Stands in for the user. The tests only build the stores, so nothing is ever asked.
-    struct NoInteraction;
-
-    #[async_trait::async_trait(?Send)]
-    impl UserInteraction for NoInteraction {
-        async fn ask_secret(&self, _: SecretPrompt) -> Result<SafeSecret, InteractionError> {
-            Err(InteractionError::Unavailable)
-        }
-
-        async fn confirm(&self, _: ConfirmPrompt) -> Result<bool, InteractionError> {
-            Err(InteractionError::Unavailable)
-        }
-
-        async fn choose(&self, _: &ChoicePrompt) -> Result<usize, InteractionError> {
-            Err(InteractionError::Unavailable)
-        }
-    }
-
-    #[async_trait::async_trait(?Send)]
-    impl Notifier for NoInteraction {
-        async fn notify(&self, _: &UserNotice) -> Result<(), NotifyError> {
-            Err(NotifyError::Unavailable)
-        }
-    }
 
     const SSO_URL: &str = "https://id.example.com/application/saml/sso/sso/binding/init";
 
@@ -573,96 +380,5 @@ mod tests {
             rancher_credentials(&["-c", "x", "--output", "exec-credential", "--ttl", "5m"])
                 .unwrap();
         assert_eq!(rancher.output, Some(RancherOutput::ExecCredential));
-    }
-
-    #[test]
-    fn secret_stores_disabled_when_keyring_disabled() {
-        let mut settings = AppConfig::default();
-        settings.set_use_keyring(false);
-
-        let SecretStores {
-            idp: idp_store,
-            cache: cache_store,
-            session: session_store,
-        } = create_secret_stores(&settings, Arc::new(NoInteraction), Arc::new(NoInteraction))
-            .unwrap();
-        assert!(idp_store.is_none());
-        assert!(cache_store.is_none());
-        assert!(session_store.is_none());
-    }
-
-    #[test]
-    fn secret_stores_plain_keyring_when_not_enrolled() {
-        let settings = AppConfig::default();
-
-        let SecretStores {
-            idp: idp_store,
-            cache: cache_store,
-            session: session_store,
-        } = create_secret_stores(&settings, Arc::new(NoInteraction), Arc::new(NoInteraction))
-            .unwrap();
-        assert!(idp_store.is_some());
-        assert!(cache_store.is_some());
-        // Without wrapping, sessions are not stored.
-        assert!(session_store.is_none());
-    }
-
-    #[test]
-    #[cfg(not(target_os = "windows"))]
-    fn secret_stores_when_yubikey_enrolled() {
-        let mut settings = AppConfig::default();
-        let yk =
-            c9s::domain::models::settings::YubikeyConfig::new(&[1, 2, 3], "localhost", &[0x42; 32]);
-        settings.set_yubikey(Some(yk));
-
-        // Default: wrap_cached_secrets = false
-        let SecretStores {
-            idp: idp_store,
-            cache: cache_store,
-            session: session_store,
-        } = create_secret_stores(&settings, Arc::new(NoInteraction), Arc::new(NoInteraction))
-            .unwrap();
-        assert!(idp_store.is_some());
-        assert!(cache_store.is_some());
-        assert!(session_store.is_none());
-
-        // Configured: wrap_cached_secrets = true
-        settings.set_wrap_cached_secrets(true);
-        let SecretStores {
-            idp: idp_store,
-            cache: cache_store,
-            session: session_store,
-        } = create_secret_stores(&settings, Arc::new(NoInteraction), Arc::new(NoInteraction))
-            .unwrap();
-        assert!(idp_store.is_some());
-        assert!(cache_store.is_some());
-        assert!(session_store.is_some());
-
-        // Keyring disabled: nothing is stored, even when wrapping is on.
-        settings.set_use_keyring(false);
-        let stores =
-            create_secret_stores(&settings, Arc::new(NoInteraction), Arc::new(NoInteraction))
-                .unwrap();
-        assert!(stores.session.is_none());
-    }
-
-    #[test]
-    #[cfg(target_os = "windows")]
-    fn secret_stores_when_yubikey_enrolled() {
-        let mut settings = AppConfig::default();
-        let yk =
-            c9s::domain::models::settings::YubikeyConfig::new(&[1, 2, 3], "localhost", &[0x42; 32]);
-        settings.set_yubikey(Some(yk));
-
-        let err =
-            match create_secret_stores(&settings, Arc::new(NoInteraction), Arc::new(NoInteraction))
-            {
-                Err(e) => e,
-                Ok(_) => panic!("expected create_secret_stores to fail on Windows"),
-            };
-        assert_eq!(
-            err.to_string(),
-            "YubiKey wrapping is not supported on Windows"
-        );
     }
 }

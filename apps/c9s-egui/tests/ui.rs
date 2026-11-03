@@ -1,0 +1,345 @@
+//! The window, driven through its accessibility tree (what a screen reader sees), without a native window.
+//!
+//! Each test uses its own settings file, and checks the file the way the CLI reads it.
+
+use c9s::app::prompts::WindowInteraction;
+use c9s::app::settings::{AwsAppForm, AwsAppKind, IdpForm, MfaChoice, SettingsPage};
+use c9s::domain::models::login::{AwsOverrides, RancherOverrides};
+use c9s::domain::models::user_interaction::SecretPrompt;
+use c9s::domain::ports::config::ConfigStore;
+use c9s::domain::ports::login::LoginResolver;
+use c9s::domain::ports::user_interaction::UserInteraction;
+use c9s::domain::services::login_resolver::LoginResolverService;
+use c9s::outbound::config::config_store::ConfigFileAdapter;
+use c9s_egui::app::C9sApp;
+use eframe::egui::accesskit::Role;
+use egui_kittest::kittest::{NodeT, Queryable};
+use egui_kittest::Harness;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+const APP_URL: &str = "https://id.example.com/application/saml/aws/sso/binding/init";
+
+struct Window {
+    dir: tempfile::TempDir,
+}
+
+impl Window {
+    fn new() -> Self {
+        Self {
+            dir: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    fn path(&self) -> PathBuf {
+        self.dir.path().join("c9s").join("settings.toml")
+    }
+
+    fn store(&self) -> ConfigFileAdapter {
+        ConfigFileAdapter::at(self.path())
+    }
+
+    /// The app, created on the first frame (it needs the context of the harness).
+    fn open(&self) -> Harness<'static, Option<C9sApp>> {
+        let path = self.path();
+        let mut harness = Harness::builder()
+            .with_size([900.0, 900.0])
+            // A new dialog takes a few frames to find its size (see `ui::dialog::modal`).
+            .with_max_steps(12)
+            .build_ui_state(
+                move |ui, app: &mut Option<C9sApp>| {
+                    app.get_or_insert_with(|| {
+                        C9sApp::new(ui.ctx().clone(), ConfigFileAdapter::at(path.clone()))
+                    })
+                    .show(ui);
+                },
+                None,
+            );
+        harness.run();
+        harness
+    }
+
+    /// Settings made without the window, as if by `c9s config`.
+    fn with_idp_and_aws(&self) {
+        let page = SettingsPage::new(self.store());
+        page.save_idp(IdpForm {
+            editing: false,
+            name: "work".into(),
+            url: "https://id.example.com".into(),
+            username: "me@example.com".into(),
+            mfa: MfaChoice::Totp,
+        })
+        .unwrap();
+        page.save_aws_app(AwsAppForm {
+            original: None,
+            app_url: APP_URL.into(),
+            kind: AwsAppKind::Aws,
+            region: None,
+            idp: "work".into(),
+            username: None,
+            mfa: None,
+        })
+        .unwrap();
+    }
+}
+
+fn click_button(harness: &mut Harness<'_, Option<C9sApp>>, name: &str) {
+    harness.get_by_role_and_label(Role::Button, name).click();
+    harness.run();
+}
+
+/// Draws frames until `ready` holds. For what another thread does (a flow asks a question): the window cannot
+/// know when it comes, so it is waited for with a deadline and a clear failure, not a fixed number of tries.
+fn wait_until(
+    harness: &mut Harness<'_, Option<C9sApp>>,
+    what: &str,
+    ready: impl Fn(&Harness<'_, Option<C9sApp>>) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        harness.run();
+        if ready(harness) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn type_into(harness: &mut Harness<'_, Option<C9sApp>>, field: &str, text: &str) {
+    harness.get_by_label(field).focus();
+    harness.run();
+    harness.get_by_label(field).type_text(text);
+    harness.run();
+}
+
+#[test]
+fn a_first_run_starts_on_the_checklist() {
+    let window = Window::new();
+    let harness = window.open();
+
+    harness.get_by_label("Get started");
+    harness.get_by_label("Add your identity provider");
+    assert_eq!(harness.get_all_by_label("(To do)").count(), 2);
+    harness.get_by_label("(Optional)");
+}
+
+#[test]
+fn an_identity_provider_and_an_aws_account_are_set_up_and_found_by_the_cli() {
+    let window = Window::new();
+    let mut harness = window.open();
+
+    harness.get_by_label("Add your identity provider").click();
+    harness.run();
+    click_button(&mut harness, "Add identity provider");
+    // The first field has the focus when the dialog opens.
+    assert!(harness.get_by_label("Name").is_focused());
+    type_into(&mut harness, "Name", "work");
+    type_into(&mut harness, "Web address", " https://id.example.com/ ");
+    type_into(&mut harness, "User name", "me@example.com");
+    click_button(&mut harness, "Save");
+
+    harness.get_by_label("Identity provider work saved.");
+    // The focus lands on the entry that was saved.
+    assert!(harness
+        .get_by_role_and_label(Role::Button, "Edit work")
+        .is_focused());
+
+    click_button(&mut harness, "AWS accounts");
+    click_button(&mut harness, "Add AWS account");
+    type_into(&mut harness, "Web address of the application", APP_URL);
+    click_button(&mut harness, "Save");
+    harness.get_by_label("AWS account saved.");
+
+    let settings = window.store().load().unwrap();
+    let login = LoginResolverService::new(settings)
+        .resolve_aws(&AwsOverrides::default())
+        .unwrap();
+    assert_eq!(login.username, "me@example.com");
+    assert_eq!(login.idp_url, "https://id.example.com");
+}
+
+#[test]
+fn every_bad_field_is_shown_under_it_and_nothing_is_written() {
+    let window = Window::new();
+    let mut harness = window.open();
+
+    click_button(&mut harness, "Identity providers");
+    click_button(&mut harness, "Add identity provider");
+    type_into(&mut harness, "Web address", "http://id.example.com");
+    click_button(&mut harness, "Save");
+
+    harness.get_by_label("Error: Enter a name, like work");
+    harness.get_by_label_contains("Error: The web address must start with https://");
+    harness.get_by_label("Error: Enter your user name.");
+    harness.get_by_label("Error: 3 problems to fix.");
+    // The focus moves to the first field with an error.
+    assert!(harness.get_by_label("Name").is_focused());
+    assert!(!window.path().exists());
+
+    // Esc closes the dialog without saving.
+    harness.key_press(eframe::egui::Key::Escape);
+    harness.run();
+    assert!(harness.query_by_label("Name").is_none());
+}
+
+#[test]
+fn an_identity_provider_in_use_is_not_removed() {
+    let window = Window::new();
+    window.with_idp_and_aws();
+    let mut harness = window.open();
+
+    click_button(&mut harness, "Identity providers");
+    click_button(&mut harness, "Remove work");
+    harness.get_by_label("Remove work?");
+    // Removing is chosen on purpose: the focus starts on Cancel.
+    assert!(harness
+        .get_by_role_and_label(Role::Button, "Cancel")
+        .is_focused());
+    click_button(&mut harness, "Remove");
+
+    harness.get_by_label_contains("Error: work cannot be removed");
+    assert!(harness
+        .query_by_role_and_label(Role::Button, "Remove")
+        .is_none());
+    click_button(&mut harness, "Close");
+    assert_eq!(window.store().load().unwrap().idps().len(), 1);
+}
+
+#[test]
+fn a_rancher_is_set_up_with_the_default_identity_provider() {
+    let window = Window::new();
+    window.with_idp_and_aws();
+    let mut harness = window.open();
+
+    click_button(&mut harness, "Rancher");
+    click_button(&mut harness, "Add Rancher");
+    type_into(
+        &mut harness,
+        "Web address of Rancher",
+        "https://rancher.example.com",
+    );
+    click_button(&mut harness, "Save");
+    harness.get_by_label("Rancher saved.");
+
+    let settings = window.store().load().unwrap();
+    let login = LoginResolverService::new(settings)
+        .resolve_rancher(&RancherOverrides::default())
+        .unwrap();
+    assert_eq!(login.client_id, "rancher");
+    assert_eq!(login.username, "me@example.com");
+}
+
+#[test]
+fn every_input_is_named_by_its_label() {
+    let window = Window::new();
+    window.with_idp_and_aws();
+    let mut harness = window.open();
+
+    for (section, add) in [
+        ("Identity providers", "Add identity provider"),
+        ("AWS accounts", "Add AWS account"),
+        ("Rancher", "Add Rancher"),
+    ] {
+        click_button(&mut harness, section);
+        click_button(&mut harness, add);
+        let inputs: Vec<_> = harness.get_all_by_role(Role::TextInput).collect();
+        assert!(!inputs.is_empty(), "{add}");
+        for input in inputs {
+            let name = input.accesskit_node().label().unwrap_or_default();
+            assert!(!name.trim().is_empty(), "{add}: an input without a name");
+        }
+        click_button(&mut harness, "Cancel");
+    }
+    // Buttons that repeat in every entry say which entry.
+    click_button(&mut harness, "Identity providers");
+    harness.get_by_role_and_label(Role::Button, "Edit work");
+}
+
+#[test]
+fn a_password_is_asked_in_the_window_and_not_exposed() {
+    let window = Window::new();
+    let mut harness = window.open();
+    let bridge = harness.state().as_ref().unwrap().bridge();
+
+    // A flow runs on its own thread with its own runtime, as credential flows will.
+    let flow = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            WindowInteraction::new(bridge)
+                .ask_secret(SecretPrompt::new("Sign in to work", "Password"))
+                .await
+                .map(|secret| secret.expose_secret().to_string())
+        })
+    });
+    wait_until(&mut harness, "the password question", |h| {
+        h.query_by_label("Password").is_some()
+    });
+
+    let field = harness.get_by_label("Password");
+    assert!(field.is_focused());
+    field.type_text("hunter2");
+    harness.run();
+    // The screen reader and the screen get dots, not the password.
+    let shown = harness.get_by_label("Password").value().unwrap_or_default();
+    assert!(!shown.contains("hunter2"), "{shown}");
+    assert_eq!(shown.chars().count(), 7);
+    click_button(&mut harness, "Continue");
+
+    assert_eq!(flow.join().unwrap().unwrap(), "hunter2");
+    assert!(harness.query_by_label("Password").is_none());
+}
+
+#[test]
+#[ignore]
+fn credentials_run_as_a_job_that_asks_in_the_window() {
+    let window = Window::new();
+    window.with_idp_and_aws();
+    let mut harness = window.open();
+
+    click_button(&mut harness, "Credentials");
+    click_button(&mut harness, &format!("Get credentials {APP_URL}"));
+    // The flow runs: the screen says so and offers to cancel it.
+    harness.get_by_role_and_label(Role::Button, "Cancel");
+    // The question of the flow is on top; nothing can be started again meanwhile.
+    wait_until(&mut harness, "the question of the flow", |h| {
+        h.query_by_label("Credentials are not available yet")
+            .is_some()
+    });
+    harness.get_by_role_and_label(Role::Button, "Yes").click();
+    harness.run();
+
+    wait_until(&mut harness, "the end of the flow", |h| {
+        h.query_by_label_contains("Pretended to sign in").is_some()
+    });
+    // The job is over: the buttons are back.
+    assert!(harness
+        .query_by_role_and_label(Role::Button, "Cancel")
+        .is_none());
+}
+
+#[test]
+#[ignore]
+fn a_cancelled_question_ends_the_flow_with_an_error() {
+    let window = Window::new();
+    window.with_idp_and_aws();
+    let mut harness = window.open();
+
+    click_button(&mut harness, "Credentials");
+    click_button(&mut harness, &format!("Get credentials {APP_URL}"));
+    wait_until(&mut harness, "the question of the flow", |h| {
+        h.query_by_label("Credentials are not available yet")
+            .is_some()
+    });
+    // Esc cancels the question; the flow then ends with an error.
+    harness.key_press(eframe::egui::Key::Escape);
+    wait_until(&mut harness, "the end of the flow", |h| {
+        h.query_by_label_contains("Error:").is_some()
+    });
+    assert!(harness
+        .query_by_label("Credentials are not available yet")
+        .is_none());
+}

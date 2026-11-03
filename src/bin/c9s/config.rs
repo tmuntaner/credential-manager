@@ -1,11 +1,13 @@
 use crate::args::IdpTypeArg;
 use crate::utils::true_or_false;
-use anyhow::anyhow;
 use anyhow::Result;
 use c9s::domain::models::mfa::MfaSelection;
-use c9s::domain::models::settings::{AppConfig, AwsHost, AwsSsoHost, Idp, RancherHost};
+use c9s::domain::ports::config::ConfigStore;
 use c9s::domain::ports::notifier::Notifier;
 use c9s::domain::ports::user_interaction::UserInteraction;
+use c9s::domain::services::settings_editor::{
+    AwsAppInput, AwsAppKind, IdpInput, RancherInput, SaveAs, SettingsService,
+};
 use clap::Parser;
 use std::sync::Arc;
 
@@ -37,9 +39,6 @@ struct ConfigIdp {
     username: String,
     #[clap(short, long)]
     mfa: Option<MfaSelection>,
-    /// Use it for the apps that name no identity provider
-    #[clap(long)]
-    default: bool,
 }
 
 #[derive(Parser)]
@@ -49,9 +48,9 @@ struct ConfigRancher {
     url: String,
     #[clap(required = true, long)]
     client_id: String,
-    /// The identity provider to log in with, defaults to the default one
-    #[clap(long)]
-    idp: Option<String>,
+    /// The identity provider to log in with (see `c9s config idp`)
+    #[clap(required = true, long)]
+    idp: String,
     /// Overrides the username of the identity provider
     #[clap(short, long)]
     username: Option<String>,
@@ -76,9 +75,9 @@ enum ConfigAwsSubCommand {
 struct ConfigAwsApp {
     #[clap(required = true, long)]
     app_url: String,
-    /// The identity provider to log in with, defaults to the default one
-    #[clap(long)]
-    idp: Option<String>,
+    /// The identity provider to log in with (see `c9s config idp`)
+    #[clap(required = true, long)]
+    idp: String,
     /// Overrides the username of the identity provider
     #[clap(short, long)]
     username: Option<String>,
@@ -91,9 +90,9 @@ struct ConfigAwsApp {
 struct ConfigAwsSso {
     #[clap(required = true, long)]
     app_url: String,
-    /// The identity provider to log in with, defaults to the default one
-    #[clap(long)]
-    idp: Option<String>,
+    /// The identity provider to log in with (see `c9s config idp`)
+    #[clap(required = true, long)]
+    idp: String,
     /// Overrides the username of the identity provider
     #[clap(short, long)]
     username: Option<String>,
@@ -113,7 +112,6 @@ struct ConfigGlobal {
 #[derive(Parser)]
 enum ConfigGlobalSubCommand {
     UseKeyring(ConfigGlobalUseKeyRing),
-    DefaultIdp(ConfigGlobalDefaultIdp),
     Yubikey(ConfigGlobalYubikey),
 }
 
@@ -157,13 +155,6 @@ struct ConfigGlobalYubikeyWrapCached {
 }
 
 #[derive(Parser)]
-/// The identity provider for the apps that name none
-struct ConfigGlobalDefaultIdp {
-    #[clap(required = true, long)]
-    name: String,
-}
-
-#[derive(Parser)]
 /// Whether c9s should use a keyring service.
 struct ConfigGlobalUseKeyRing {
     /// Accepted values: "true" or "false"
@@ -174,7 +165,7 @@ struct ConfigGlobalUseKeyRing {
 impl Config {
     pub async fn run(
         &self,
-        settings: &mut AppConfig,
+        settings: &SettingsService<impl ConfigStore>,
         interaction: Arc<impl UserInteraction + 'static>,
         notifier: Arc<impl Notifier + 'static>,
     ) -> Result<()> {
@@ -187,7 +178,6 @@ impl Config {
             ConfigSubCommand::Rancher(val) => val.run(settings),
             ConfigSubCommand::Global(val) => match &val.sub_command {
                 ConfigGlobalSubCommand::UseKeyring(val) => val.run(settings),
-                ConfigGlobalSubCommand::DefaultIdp(val) => val.run(settings),
                 ConfigGlobalSubCommand::Yubikey(val) => {
                     val.run(settings, interaction, notifier).await
                 }
@@ -196,101 +186,61 @@ impl Config {
     }
 }
 
-/// The username has to come from the app or from the identity provider it resolves to.
-fn check_identity(
-    settings: &AppConfig,
-    idp: Option<&str>,
-    username: &Option<String>,
-) -> Result<()> {
-    if username.is_none() && settings.resolve_idp(idp)?.is_none() {
-        return Err(anyhow!(
-            "please supply a username, or an identity provider with `--idp` (see `c9s config idp`)"
-        ));
-    }
-
-    Ok(())
-}
-
 impl ConfigIdp {
-    fn run(&self, settings: &mut AppConfig) -> Result<()> {
-        let idp = Idp::new(
+    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+        let mut input = IdpInput::new(
             self.name.clone(),
             self.r#type.into(),
             self.url.clone(),
             self.username.clone(),
-            self.mfa,
-        )?;
-        settings.add_idp(idp);
-        if self.default {
-            settings.set_default_idp(&self.name)?;
-        }
+        );
+        input.mfa = self.mfa;
+        settings.save_idp(input, SaveAs::Upsert)?;
 
         Ok(())
     }
 }
 
 impl ConfigAwsApp {
-    fn run(&self, settings: &mut AppConfig) -> Result<()> {
-        check_identity(settings, self.idp.as_deref(), &self.username)?;
-        let host = AwsHost::new(
-            self.app_url.clone(),
-            self.username.clone(),
-            self.idp.clone(),
-            self.mfa,
-        )?;
-        settings.add_aws_host(host);
+    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+        let mut input = AwsAppInput::new(self.app_url.clone(), self.idp.clone());
+        input.username = self.username.clone();
+        input.mfa = self.mfa;
+        settings.save_aws_app(input, AwsAppKind::Aws, SaveAs::Upsert)?;
 
         Ok(())
     }
 }
 
 impl ConfigAwsSso {
-    fn run(&self, settings: &mut AppConfig) -> Result<()> {
-        check_identity(settings, self.idp.as_deref(), &self.username)?;
-        let host = AwsSsoHost::new(
-            self.app_url.clone(),
-            self.username.clone(),
-            self.idp.clone(),
-            self.region.clone(),
-            self.mfa,
-        )?;
-        settings.add_aws_sso_host(host);
+    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+        let mut input = AwsAppInput::new(self.app_url.clone(), self.idp.clone());
+        input.username = self.username.clone();
+        input.mfa = self.mfa;
+        let kind = AwsAppKind::AwsSso {
+            region: self.region.clone(),
+        };
+        settings.save_aws_app(input, kind, SaveAs::Upsert)?;
 
         Ok(())
     }
 }
 
 impl ConfigRancher {
-    fn run(&self, settings: &mut AppConfig) -> Result<()> {
-        if settings.resolve_idp(self.idp.as_deref())?.is_none() {
-            return Err(anyhow!(
-                "rancher needs an identity provider, run `c9s config idp`"
-            ));
-        }
-        let host = RancherHost::new(
-            self.url.clone(),
-            self.client_id.clone(),
-            self.idp.clone(),
-            self.username.clone(),
-            self.mfa,
-        )?;
-        settings.add_rancher_host(host);
-
-        Ok(())
-    }
-}
-
-impl ConfigGlobalDefaultIdp {
-    fn run(&self, settings: &mut AppConfig) -> Result<()> {
-        settings.set_default_idp(&self.name)?;
+    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+        let mut input =
+            RancherInput::new(self.url.clone(), self.client_id.clone(), self.idp.clone());
+        input.username = self.username.clone();
+        input.mfa = self.mfa;
+        settings.save_rancher(input, SaveAs::Upsert)?;
 
         Ok(())
     }
 }
 
 impl ConfigGlobalUseKeyRing {
-    fn run(&self, settings: &mut AppConfig) -> Result<()> {
-        settings.set_use_keyring(self.enabled);
+    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+        settings.set_use_keyring(self.enabled)?;
 
         Ok(())
     }
@@ -299,7 +249,7 @@ impl ConfigGlobalUseKeyRing {
 impl ConfigGlobalYubikey {
     async fn run(
         &self,
-        settings: &mut AppConfig,
+        settings: &SettingsService<impl ConfigStore>,
         interaction: Arc<impl UserInteraction + 'static>,
         notifier: Arc<impl Notifier + 'static>,
     ) -> Result<()> {
@@ -317,20 +267,22 @@ impl ConfigGlobalYubikey {
 impl ConfigGlobalYubikeyEnroll {
     async fn run(
         &self,
-        settings: &mut AppConfig,
+        settings: &SettingsService<impl ConfigStore>,
         interaction: Arc<impl UserInteraction + 'static>,
         notifier: Arc<impl Notifier + 'static>,
     ) -> Result<()> {
         #[cfg(target_os = "windows")]
         {
             let _ = (settings, interaction, notifier);
-            Err(anyhow!("YubiKey wrapping is not supported on Windows"))
+            Err(anyhow::anyhow!(
+                "YubiKey wrapping is not supported on Windows"
+            ))
         }
 
         #[cfg(not(target_os = "windows"))]
         {
             let config = c9s::outbound::yubikey::enroll(&self.rp_id, interaction, notifier).await?;
-            settings.set_yubikey(Some(config));
+            settings.set_yubikey(Some(config))?;
             println!("YubiKey successfully enrolled for secret wrapping.");
             Ok(())
         }
@@ -338,15 +290,16 @@ impl ConfigGlobalYubikeyEnroll {
 }
 
 impl ConfigGlobalYubikeyDisable {
-    fn run(&self, settings: &mut AppConfig) -> Result<()> {
-        settings.set_yubikey(None);
+    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+        settings.set_yubikey(None)?;
         println!("YubiKey secret wrapping disabled.");
         Ok(())
     }
 }
 
 impl ConfigGlobalYubikeyStatus {
-    fn run(&self, settings: &AppConfig) -> Result<()> {
+    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+        let settings = settings.load()?;
         match settings.yubikey_config() {
             Some(yk) => {
                 println!("YubiKey status: Enrolled");
@@ -369,8 +322,8 @@ impl ConfigGlobalYubikeyStatus {
 }
 
 impl ConfigGlobalYubikeyWrapCached {
-    fn run(&self, settings: &mut AppConfig) -> Result<()> {
-        settings.set_wrap_cached_secrets(self.enabled);
+    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+        settings.set_wrap_cached_secrets(self.enabled)?;
         println!(
             "Protection for cached secrets (AWS/Rancher) is now {}.",
             if self.enabled { "enabled" } else { "disabled" }
@@ -414,15 +367,26 @@ mod tests {
             panic!("expected app");
         };
         assert_eq!(host.app_url, APP_URL);
-        assert_eq!(host.idp.as_deref(), Some("suse"));
+        assert_eq!(host.idp, "suse");
         assert!(host.username.is_none());
         assert_eq!(host.mfa, Some(MfaSelection::Totp));
     }
 
     #[test]
     fn parses_the_aws_sso_subcommand() {
-        let config =
-            parse(&["aws", "sso", "--app-url", APP_URL, "-u", "user", "-r", "eu"]).unwrap();
+        let config = parse(&[
+            "aws",
+            "sso",
+            "--app-url",
+            APP_URL,
+            "--idp",
+            "suse",
+            "-u",
+            "user",
+            "-r",
+            "eu",
+        ])
+        .unwrap();
 
         let ConfigSubCommand::Aws(aws) = config.sub_command else {
             panic!("expected the aws subcommand");
@@ -444,7 +408,6 @@ mod tests {
             "https://id.example.com",
             "-u",
             "user",
-            "--default",
         ])
         .unwrap();
 
@@ -453,7 +416,6 @@ mod tests {
         };
         assert_eq!(idp.name, "suse");
         assert_eq!(IdpType::from(idp.r#type), IdpType::Authentik);
-        assert!(idp.default);
         assert!(idp.mfa.is_none());
 
         assert!(parse(&["idp", "--name", "x", "--url", "u"]).is_err());
@@ -463,17 +425,16 @@ mod tests {
     }
 
     #[test]
-    fn parses_the_default_idp_subcommand() {
-        let config = parse(&["global", "default-idp", "--name", "suse"]).unwrap();
+    fn the_default_idp_is_gone() {
+        assert!(parse(&["global", "default-idp", "--name", "suse"]).is_err());
+        assert!(parse(&["idp", "--name", "x", "--url", "u", "-u", "u", "--default"]).is_err());
+    }
 
-        let ConfigSubCommand::Global(global) = config.sub_command else {
-            panic!("expected the global subcommand");
-        };
-        let ConfigGlobalSubCommand::DefaultIdp(default) = global.sub_command else {
-            panic!("expected default-idp");
-        };
-        assert_eq!(default.name, "suse");
-        assert!(parse(&["global", "default-idp"]).is_err());
+    #[test]
+    fn an_app_needs_an_idp() {
+        assert!(parse(&["aws", "app", "--app-url", APP_URL]).is_err());
+        assert!(parse(&["aws", "sso", "--app-url", APP_URL, "-r", "eu"]).is_err());
+        assert!(parse(&["rancher", "--url", "u", "--client-id", "c"]).is_err());
     }
 
     #[test]
@@ -484,6 +445,8 @@ mod tests {
             "https://rancher.example.com",
             "--client-id",
             "rancher",
+            "--idp",
+            "suse",
         ])
         .unwrap();
 
@@ -491,7 +454,7 @@ mod tests {
             panic!("expected the rancher subcommand");
         };
         assert_eq!(rancher.client_id, "rancher");
-        assert!(rancher.idp.is_none());
+        assert_eq!(rancher.idp, "suse");
         assert!(rancher.username.is_none());
         assert!(rancher.mfa.is_none());
 
@@ -519,6 +482,8 @@ mod tests {
             "https://r.example.com",
             "--client-id",
             "c",
+            "--idp",
+            "suse",
             "--issuer",
             "https://id.example.com/",
         ])
@@ -528,8 +493,30 @@ mod tests {
 
     #[test]
     fn an_unknown_mfa_is_rejected_while_parsing() {
-        assert!(parse(&["rancher", "--url", "u", "--client-id", "c", "-m", "sms"]).is_err());
-        assert!(parse(&["rancher", "--url", "u", "--client-id", "c", "-m", "TOTP"]).is_ok());
+        assert!(parse(&[
+            "rancher",
+            "--url",
+            "u",
+            "--client-id",
+            "c",
+            "--idp",
+            "s",
+            "-m",
+            "sms"
+        ])
+        .is_err());
+        assert!(parse(&[
+            "rancher",
+            "--url",
+            "u",
+            "--client-id",
+            "c",
+            "--idp",
+            "s",
+            "-m",
+            "TOTP"
+        ])
+        .is_ok());
     }
 
     #[test]
@@ -587,5 +574,29 @@ mod tests {
             panic!("expected wrap-cached");
         };
         assert!(wrap.enabled);
+    }
+
+    #[test]
+    fn a_read_only_command_never_writes_the_settings() {
+        use c9s::outbound::config::config_store::ConfigFileAdapter;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("c9s").join("settings.toml");
+        let service = SettingsService::new(ConfigFileAdapter::at(path.clone()));
+
+        ConfigGlobalYubikeyStatus {}.run(&service).unwrap();
+        assert!(!path.exists());
+
+        // A command that changes something does write.
+        ConfigGlobalUseKeyRing { enabled: false }
+            .run(&service)
+            .unwrap();
+        assert!(path.exists());
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        ConfigGlobalYubikeyStatus {}.run(&service).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            modified
+        );
     }
 }

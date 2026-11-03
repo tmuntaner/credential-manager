@@ -36,7 +36,6 @@ pub struct AppConfig {
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct GlobalSettings {
     pub use_keyring: Option<bool>,
-    pub default_idp: Option<String>,
     pub yubikey: Option<YubikeyConfig>,
     pub wrap_cached_secrets: Option<bool>,
     pub prompt: Option<PromptMode>,
@@ -119,7 +118,7 @@ pub struct Idp {
 pub struct AwsHost {
     app_url: String,
     username: Option<String>,
-    idp: Option<String>,
+    idp: String,
     mfa: Option<MfaSelection>,
 }
 
@@ -127,7 +126,7 @@ pub struct AwsHost {
 pub struct AwsSsoHost {
     app_url: String,
     username: Option<String>,
-    idp: Option<String>,
+    idp: String,
     region: String,
     mfa: Option<MfaSelection>,
 }
@@ -136,7 +135,7 @@ pub struct AwsSsoHost {
 pub struct RancherHost {
     url: String,
     client_id: String,
-    idp: Option<String>,
+    idp: String,
     username: Option<String>,
     mfa: Option<MfaSelection>,
 }
@@ -234,37 +233,10 @@ impl AppConfig {
         self.idps.iter().find(|idp| idp.name == name)
     }
 
-    pub fn set_default_idp(&mut self, name: &str) -> Result<(), SettingsError> {
-        if self.find_idp(name).is_none() {
-            return Err(SettingsError::UnknownIdp(name.to_string()));
-        }
-
-        self.global_settings.default_idp = Some(name.to_string());
-
-        Ok(())
-    }
-
-    /// An explicitly named identity provider must exist. Without a name, the default is used, then the only
-    /// configured one.
-    pub fn resolve_idp(&self, name: Option<&str>) -> Result<Option<&Idp>, SettingsError> {
-        if let Some(name) = name {
-            return self
-                .find_idp(name)
-                .map(Some)
-                .ok_or_else(|| SettingsError::UnknownIdp(name.to_string()));
-        }
-
-        if let Some(name) = self.global_settings.default_idp.as_deref() {
-            return self
-                .find_idp(name)
-                .map(Some)
-                .ok_or_else(|| SettingsError::UnknownIdp(name.to_string()));
-        }
-
-        match self.idps.as_slice() {
-            [only] => Ok(Some(only)),
-            _ => Ok(None),
-        }
+    /// The identity provider called `name`. Every app names one, so it must exist.
+    pub fn resolve_idp(&self, name: &str) -> Result<&Idp, SettingsError> {
+        self.find_idp(name)
+            .ok_or_else(|| SettingsError::UnknownIdp(name.to_string()))
     }
 
     pub fn add_aws_host(&mut self, host: AwsHost) {
@@ -338,10 +310,46 @@ impl AppConfig {
             .iter()
             .find(|host| same_app_url(app_url, &host.app_url))
     }
+
+    /// Removes the identity provider called `name`. Returns whether there was one.
+    pub fn remove_idp(&mut self, name: &str) -> bool {
+        let before = self.idps.len();
+        self.idps.retain(|idp| idp.name != name);
+
+        self.idps.len() != before
+    }
+
+    /// Removes the AWS IAM role app at `app_url`. Returns whether there was one.
+    pub fn remove_aws_host(&mut self, app_url: &str) -> bool {
+        let before = self.aws_hosts.len();
+        self.aws_hosts
+            .retain(|host| !same_app_url(app_url, &host.app_url));
+
+        self.aws_hosts.len() != before
+    }
+
+    /// Removes the AWS IAM Identity Center app at `app_url`. Returns whether there was one.
+    pub fn remove_aws_sso_host(&mut self, app_url: &str) -> bool {
+        let before = self.aws_sso_hosts.len();
+        self.aws_sso_hosts
+            .retain(|host| !same_app_url(app_url, &host.app_url));
+
+        self.aws_sso_hosts.len() != before
+    }
+
+    /// Removes the Rancher at `url`. Returns whether there was one.
+    pub fn remove_rancher_host(&mut self, url: &str) -> bool {
+        let before = self.rancher_hosts.len();
+        self.rancher_hosts
+            .retain(|host| !same_app_url(url, &host.url));
+
+        self.rancher_hosts.len() != before
+    }
 }
 
-/// Compares two app URLs ignoring a trailing slash and the query string.
-fn same_app_url(a: &str, b: &str) -> bool {
+/// Compares two app URLs ignoring a trailing slash and the query string. This is the one way the settings
+/// decide that two URLs name the same app.
+pub fn same_app_url(a: &str, b: &str) -> bool {
     fn normalize(url: &str) -> String {
         let url = url.split('?').next().unwrap_or(url);
         url.trim_end_matches('/').to_string()
@@ -358,7 +366,7 @@ impl AwsHost {
     pub fn new(
         app_url: String,
         username: Option<String>,
-        idp: Option<String>,
+        idp: String,
         mfa: Option<MfaSelection>,
     ) -> Result<Self, SettingsError> {
         let mut app_url = Url::parse(app_url.as_str())?;
@@ -388,8 +396,8 @@ impl AwsHost {
         self.username.as_deref()
     }
 
-    pub fn idp(&self) -> Option<&str> {
-        self.idp.as_deref()
+    pub fn idp(&self) -> &str {
+        &self.idp
     }
 }
 
@@ -401,7 +409,7 @@ impl AwsSsoHost {
     pub fn new(
         app_url: String,
         username: Option<String>,
-        idp: Option<String>,
+        idp: String,
         region: String,
         mfa: Option<MfaSelection>,
     ) -> Result<Self, SettingsError> {
@@ -433,8 +441,8 @@ impl AwsSsoHost {
         self.username.as_deref()
     }
 
-    pub fn idp(&self) -> Option<&str> {
-        self.idp.as_deref()
+    pub fn idp(&self) -> &str {
+        &self.idp
     }
 
     pub fn region(&self) -> &str {
@@ -494,7 +502,7 @@ impl RancherHost {
     pub fn new(
         url: String,
         client_id: String,
-        idp: Option<String>,
+        idp: String,
         username: Option<String>,
         mfa: Option<MfaSelection>,
     ) -> Result<Self, SettingsError> {
@@ -521,8 +529,8 @@ impl RancherHost {
         self.username.as_deref()
     }
 
-    pub fn idp(&self) -> Option<&str> {
-        self.idp.as_deref()
+    pub fn idp(&self) -> &str {
+        &self.idp
     }
 
     pub fn client_id(&self) -> &str {
@@ -539,7 +547,7 @@ mod tests {
         AwsHost::new(
             INIT_URL.to_string(),
             Some("user@example.com".to_string()),
-            None,
+            "suse".to_string(),
             mfa,
         )
         .unwrap()
@@ -549,7 +557,7 @@ mod tests {
         AwsSsoHost::new(
             INIT_URL.to_string(),
             Some("u".to_string()),
-            None,
+            "suse".to_string(),
             region.to_string(),
             mfa,
         )
@@ -582,7 +590,6 @@ mod tests {
             .unwrap(),
         );
         settings.add_idp(idp("other"));
-        settings.set_default_idp("other").unwrap();
 
         let found = settings.find_idp("suse").unwrap();
         assert_eq!(found.url(), "https://new.example.com");
@@ -614,45 +621,27 @@ mod tests {
     }
 
     #[test]
-    fn the_default_idp_must_exist() {
+    fn an_idp_is_resolved_by_name() {
         let mut settings = AppConfig::default();
-        let err = settings.set_default_idp("suse").err().unwrap();
-        assert!(matches!(err, SettingsError::UnknownIdp(name) if name == "suse"));
-
-        settings.add_idp(idp("suse"));
-        settings.set_default_idp("suse").unwrap();
-    }
-
-    #[test]
-    fn idps_resolve_by_name_then_default_then_the_only_one() {
-        let mut settings = AppConfig::default();
-        assert!(settings.resolve_idp(None).unwrap().is_none());
+        let err = settings.resolve_idp("a").err().unwrap();
+        assert!(matches!(err, SettingsError::UnknownIdp(name) if name == "a"));
 
         settings.add_idp(idp("a"));
-        let sole = settings.resolve_idp(None).unwrap().unwrap();
-        assert_eq!(sole.name(), "a");
-
         settings.add_idp(idp("b"));
-        assert!(settings.resolve_idp(None).unwrap().is_none());
+        assert_eq!(settings.resolve_idp("a").unwrap().name(), "a");
+        assert_eq!(settings.resolve_idp("b").unwrap().name(), "b");
 
-        settings.set_default_idp("b").unwrap();
-        assert_eq!(settings.resolve_idp(None).unwrap().unwrap().name(), "b");
-        assert_eq!(
-            settings.resolve_idp(Some("a")).unwrap().unwrap().name(),
-            "a"
-        );
-
-        let err = settings.resolve_idp(Some("missing")).err().unwrap();
+        let err = settings.resolve_idp("missing").err().unwrap();
         assert!(matches!(err, SettingsError::UnknownIdp(name) if name == "missing"));
     }
 
     #[test]
     fn hosts_must_have_a_valid_url() {
-        assert!(AwsHost::new("not a url".to_string(), None, None, None).is_err());
+        assert!(AwsHost::new("not a url".to_string(), None, "suse".to_string(), None).is_err());
         assert!(AwsSsoHost::new(
             "mailto:someone@example.com".to_string(),
             None,
-            None,
+            "suse".to_string(),
             "r".to_string(),
             None
         )
@@ -662,7 +651,13 @@ mod tests {
     #[test]
     fn the_stored_url_loses_its_query_and_trailing_slash() {
         // The authentik client adds the slash again when it builds the entry url.
-        let host = AwsHost::new(format!("{INIT_URL}?foo=bar"), None, None, None).unwrap();
+        let host = AwsHost::new(
+            format!("{INIT_URL}?foo=bar"),
+            None,
+            "suse".to_string(),
+            None,
+        )
+        .unwrap();
 
         assert_eq!(
             host.app_url(),
@@ -691,7 +686,7 @@ mod tests {
             AwsHost::new(
                 INIT_URL.to_string(),
                 Some("other@example.com".to_string()),
-                Some("suse".to_string()),
+                "other".to_string(),
                 Some(MfaSelection::Totp),
             )
             .unwrap(),
@@ -699,7 +694,7 @@ mod tests {
 
         let host = settings.first_aws_host().unwrap();
         assert_eq!(host.username(), Some("other@example.com"));
-        assert_eq!(host.idp(), Some("suse"));
+        assert_eq!(host.idp(), "other");
         assert!(matches!(host.mfa(), Some(MfaSelection::Totp)));
         assert_eq!(settings.aws_hosts().len(), 1);
     }
@@ -743,7 +738,7 @@ mod tests {
         RancherHost::new(
             "https://rancher.example.com/".to_string(),
             "rancher".to_string(),
-            Some("suse".to_string()),
+            "suse".to_string(),
             Some(username.to_string()),
             Some(MfaSelection::Totp),
         )
@@ -752,7 +747,15 @@ mod tests {
 
     #[test]
     fn a_rancher_host_needs_a_valid_url() {
-        let new = |url: &str| RancherHost::new(url.to_string(), "c".to_string(), None, None, None);
+        let new = |url: &str| {
+            RancherHost::new(
+                url.to_string(),
+                "c".to_string(),
+                "suse".to_string(),
+                None,
+                None,
+            )
+        };
 
         assert!(new("not a url").is_err());
         assert!(new("https://rancher.example.com").is_ok());
@@ -778,13 +781,33 @@ mod tests {
     }
 
     #[test]
-    fn a_default_idp_that_vanished_is_an_error() {
+    fn an_idp_is_removed_by_name() {
         let mut settings = AppConfig::default();
-        settings.set_global_settings(GlobalSettings {
-            default_idp: Some("gone".to_string()),
-            ..Default::default()
-        });
+        settings.add_idp(idp("a"));
+        settings.add_idp(idp("b"));
 
-        assert!(settings.resolve_idp(None).is_err());
+        assert!(settings.remove_idp("b"));
+        assert!(settings.find_idp("a").is_some());
+        assert!(settings.remove_idp("a"));
+        assert!(!settings.remove_idp("a"));
+        assert!(settings.idps().is_empty());
+    }
+
+    #[test]
+    fn hosts_are_removed_by_url_with_or_without_a_trailing_slash() {
+        let mut settings = AppConfig::default();
+        settings.add_aws_host(aws_host(None));
+        settings.add_aws_sso_host(sso_host("eu-west-1", None));
+        settings.add_rancher_host(rancher_host("u"));
+
+        assert!(settings.remove_aws_host(INIT_URL));
+        assert!(!settings.remove_aws_host(INIT_URL));
+        // Removing one app type keeps the other.
+        assert_eq!(settings.aws_sso_hosts().len(), 1);
+        assert!(settings.remove_aws_sso_host(INIT_URL.trim_end_matches('/')));
+        assert!(settings.remove_rancher_host("https://rancher.example.com/"));
+        assert!(!settings.remove_rancher_host("https://rancher.example.com"));
+        assert!(settings.aws_hosts().is_empty() && settings.aws_sso_hosts().is_empty());
+        assert!(settings.rancher_hosts().is_empty());
     }
 }

@@ -161,7 +161,7 @@ mod tests {
     fn login(app_type: AwsAppType, region: Option<&str>) -> AwsLogin {
         AwsLogin {
             app_url: "https://id.example.com/app".to_string(),
-            idp_url: None,
+            idp_url: "https://id.example.com".to_string(),
             username: "user".to_string(),
             region: region.map(str::to_string),
             mfa: Some(MfaSelection::Totp),

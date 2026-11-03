@@ -15,7 +15,7 @@ runs:
       shell: bash
       run: |
         sudo apt-get update -y
-        sudo apt-get install -y libudev-dev libdbus-1-dev gnome-keyring dbus-x11
+        sudo apt-get install -y libudev-dev libdbus-1-dev gnome-keyring dbus-x11 ${{ inputs.extra-system-packages }}
 
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable

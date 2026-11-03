@@ -26,7 +26,6 @@ pub(super) struct FileConfig {
 #[derive(Serialize, Deserialize, Default)]
 struct FileGlobalSettings {
     use_keyring: Option<bool>,
-    default_idp: Option<String>,
     yubikey: Option<FileYubikey>,
     wrap_cached_secrets: Option<bool>,
     prompt: Option<FilePromptMode>,
@@ -85,7 +84,7 @@ struct FileIdp {
 struct FileAwsHost {
     app_url: String,
     username: Option<String>,
-    idp: Option<String>,
+    idp: String,
     mfa: Option<FileMfa>,
 }
 
@@ -93,7 +92,7 @@ struct FileAwsHost {
 struct FileAwsSsoHost {
     app_url: String,
     username: Option<String>,
-    idp: Option<String>,
+    idp: String,
     region: String,
     mfa: Option<FileMfa>,
 }
@@ -102,7 +101,7 @@ struct FileAwsSsoHost {
 struct FileRancherHost {
     url: String,
     client_id: String,
-    idp: Option<String>,
+    idp: String,
     username: Option<String>,
     mfa: Option<FileMfa>,
 }
@@ -161,7 +160,6 @@ impl From<&GlobalSettings> for FileGlobalSettings {
     fn from(settings: &GlobalSettings) -> Self {
         Self {
             use_keyring: settings.use_keyring,
-            default_idp: settings.default_idp.clone(),
             yubikey: settings.yubikey.as_ref().map(Into::into),
             wrap_cached_secrets: settings.wrap_cached_secrets,
             prompt: settings.prompt.map(Into::into),
@@ -198,7 +196,7 @@ impl From<&AwsHost> for FileAwsHost {
         Self {
             app_url: host.app_url().to_string(),
             username: host.username().map(str::to_string),
-            idp: host.idp().map(str::to_string),
+            idp: host.idp().to_string(),
             mfa: host.mfa().map(FileMfa),
         }
     }
@@ -209,7 +207,7 @@ impl From<&AwsSsoHost> for FileAwsSsoHost {
         Self {
             app_url: host.app_url().to_string(),
             username: host.username().map(str::to_string),
-            idp: host.idp().map(str::to_string),
+            idp: host.idp().to_string(),
             region: host.region().to_string(),
             mfa: host.mfa().map(FileMfa),
         }
@@ -221,7 +219,7 @@ impl From<&RancherHost> for FileRancherHost {
         Self {
             url: host.url().to_string(),
             client_id: host.client_id().to_string(),
-            idp: host.idp().map(str::to_string),
+            idp: host.idp().to_string(),
             username: host.username().map(str::to_string),
             mfa: host.mfa().map(FileMfa),
         }
@@ -296,7 +294,6 @@ impl TryFrom<FileGlobalSettings> for GlobalSettings {
     fn try_from(file: FileGlobalSettings) -> Result<Self, Self::Error> {
         Ok(Self {
             use_keyring: file.use_keyring,
-            default_idp: file.default_idp,
             yubikey: file.yubikey.map(YubikeyConfig::try_from).transpose()?,
             wrap_cached_secrets: file.wrap_cached_secrets,
             prompt: file.prompt.map(Into::into),
@@ -396,7 +393,7 @@ mod tests {
             AwsHost::new(
                 INIT_URL.to_string(),
                 Some("user@example.com".to_string()),
-                None,
+                "suse".to_string(),
                 Some(MfaSelection::Totp),
             )
             .unwrap(),
@@ -405,7 +402,7 @@ mod tests {
             AwsSsoHost::new(
                 INIT_URL.to_string(),
                 None,
-                None,
+                "suse".to_string(),
                 "eu-central-1".to_string(),
                 None,
             )
@@ -415,6 +412,7 @@ mod tests {
         let toml = save(&settings);
         assert!(toml.contains("[[aws_hosts]]"), "{toml}");
         assert!(toml.contains("[[aws_sso_hosts]]"), "{toml}");
+        assert_eq!(toml.matches(r#"idp = "suse""#).count(), 2, "{toml}");
 
         let settings = load(&toml);
         let host = settings.first_aws_host().unwrap();
@@ -427,20 +425,24 @@ mod tests {
     }
 
     #[test]
-    fn an_aws_host_without_an_idp_resolves_to_none() {
+    fn an_app_without_an_idp_fails_to_load() {
+        for toml in [
+            format!("[[aws_hosts]]\napp_url = \"{INIT_URL}\"\n"),
+            format!("[[aws_sso_hosts]]\napp_url = \"{INIT_URL}\"\nregion = \"eu-west-1\"\n"),
+            "[[rancher_hosts]]\nurl = \"https://r.example.com\"\nclient_id = \"c\"\n".to_string(),
+        ] {
+            assert!(toml::from_str::<FileConfig>(&toml).is_err(), "{toml}");
+        }
+    }
+
+    #[test]
+    fn an_old_default_idp_key_is_ignored() {
         let settings = load(&format!(
-            r#"
-            [[aws_hosts]]
-            app_url = "{INIT_URL}"
-            username = "user@example.com"
-            mfa = "totp"
-            "#
+            "[global_settings]\ndefault_idp = \"suse\"\n[[aws_hosts]]\napp_url = \"{INIT_URL}\"\nidp = \"suse\"\n"
         ));
 
-        let host = settings.first_aws_host().unwrap();
-        assert_eq!(host.username(), Some("user@example.com"));
-        assert!(host.idp().is_none());
-        assert!(settings.resolve_idp(host.idp()).unwrap().is_none());
+        assert_eq!(settings.first_aws_host().unwrap().idp(), "suse");
+        assert!(!save(&settings).contains("default_idp"));
     }
 
     #[test]
@@ -456,12 +458,11 @@ mod tests {
             )
             .unwrap(),
         );
-        settings.set_default_idp("suse").unwrap();
 
         let toml = save(&settings);
         assert!(toml.contains("[[idps]]"), "{toml}");
         assert!(toml.contains(r#"type = "authentik""#), "{toml}");
-        assert!(toml.contains(r#"default_idp = "suse""#), "{toml}");
+        assert!(!toml.contains("default_idp"), "{toml}");
 
         let found = load(&toml);
         let found = found.find_idp("suse").unwrap();
@@ -478,7 +479,7 @@ mod tests {
             RancherHost::new(
                 "https://rancher.example.com/".to_string(),
                 "rancher".to_string(),
-                Some("suse".to_string()),
+                "suse".to_string(),
                 Some("me@example.com".to_string()),
                 Some(MfaSelection::Totp),
             )
@@ -494,7 +495,7 @@ mod tests {
         assert_eq!(host.url(), "https://rancher.example.com");
         assert_eq!(host.username(), Some("me@example.com"));
         assert_eq!(host.client_id(), "rancher");
-        assert_eq!(host.idp(), Some("suse"));
+        assert_eq!(host.idp(), "suse");
         assert_eq!(host.mfa(), Some(MfaSelection::Totp));
     }
 
@@ -570,7 +571,6 @@ mod tests {
             r#"
             [global_settings]
             use_keyring = true
-            default_idp = "suse"
             "#,
         );
 
@@ -616,6 +616,7 @@ mod tests {
             [[rancher_hosts]]
             url = "not a url"
             client_id = "c"
+            idp = "suse"
             "#,
         )
         .unwrap();

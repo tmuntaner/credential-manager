@@ -13,9 +13,6 @@ pub enum ResolveError {
     #[error("please supply an app-url")]
     NoAppUrl,
 
-    #[error("please supply a username")]
-    NoUsername,
-
     #[error("please supply a region")]
     NoRegion,
 
@@ -30,9 +27,6 @@ pub enum ResolveError {
 
     #[error("rancher is not configured, run `c9s config rancher`")]
     RancherNotConfigured,
-
-    #[error("rancher needs an identity provider, run `c9s config idp`")]
-    RancherNeedsIdp,
 }
 
 /// What the user gave on the command line for AWS.
@@ -49,8 +43,8 @@ pub struct AwsOverrides {
 #[derive(Debug)]
 pub struct AwsLogin {
     pub app_url: String,
-    /// The identity provider the entry logs in with, if it has one.
-    pub idp_url: Option<String>,
+    /// The identity provider the entry logs in with.
+    pub idp_url: String,
     pub username: String,
     /// Only for the IAM Identity Center application.
     pub region: Option<String>,
@@ -59,9 +53,9 @@ pub struct AwsLogin {
 }
 
 impl AwsLogin {
-    /// The url whose domain a saved password belongs to: the identity provider, or without one the app.
+    /// The url whose domain a saved password belongs to: the identity provider.
     pub fn password_url(&self) -> &str {
-        self.idp_url.as_deref().unwrap_or(&self.app_url)
+        &self.idp_url
     }
 }
 

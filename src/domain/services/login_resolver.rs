@@ -67,17 +67,17 @@ impl LoginResolver for LoginResolverService {
             (None, None) => return Err(ResolveError::NoAppUrl),
         };
 
-        let idp = self
-            .settings
-            .resolve_idp(entry.as_ref().and_then(|entry| entry.idp))?;
+        // The app url names the app, the entry names its identity provider. Without an entry there is
+        // nothing to say which identity provider to log in with.
+        let entry = entry.ok_or(ResolveError::AppUrlNotConfigured)?;
+        let idp = self.settings.resolve_idp(entry.idp)?;
         let identity = Identity::resolve(
             overrides.username.as_deref(),
             overrides.mfa,
-            entry.as_ref().and_then(|entry| entry.username),
-            entry.as_ref().and_then(|entry| entry.mfa),
+            entry.username,
+            entry.mfa,
             idp,
         );
-        let username = identity.username.ok_or(ResolveError::NoUsername)?;
 
         let region = match app_type {
             AwsAppType::Aws => None,
@@ -85,7 +85,7 @@ impl LoginResolver for LoginResolverService {
                 overrides
                     .region
                     .as_deref()
-                    .or_else(|| entry.as_ref().and_then(|entry| entry.region))
+                    .or(entry.region)
                     .ok_or(ResolveError::NoRegion)?
                     .to_string(),
             ),
@@ -93,8 +93,8 @@ impl LoginResolver for LoginResolverService {
 
         Ok(AwsLogin {
             app_url,
-            idp_url: idp.map(|idp| idp.url().to_string()),
-            username,
+            idp_url: idp.url().to_string(),
+            username: identity.username,
             region,
             mfa: identity.mfa,
             app_type,
@@ -108,21 +108,18 @@ impl LoginResolver for LoginResolverService {
         }
         .ok_or(ResolveError::RancherNotConfigured)?;
 
-        let idp = self
-            .settings
-            .resolve_idp(host.idp())?
-            .ok_or(ResolveError::RancherNeedsIdp)?;
+        let idp = self.settings.resolve_idp(host.idp())?;
         let identity = Identity::resolve(
             overrides.username.as_deref(),
             overrides.mfa,
             host.username(),
             host.mfa(),
-            Some(idp),
+            idp,
         );
 
         Ok(RancherLogin {
             url: host.url().to_string(),
-            username: identity.username.ok_or(ResolveError::NoUsername)?,
+            username: identity.username,
             mfa: identity.mfa,
             idp_type: idp.idp_type(),
             idp_url: idp.url().to_string(),
@@ -134,7 +131,7 @@ impl LoginResolver for LoginResolverService {
 /// The username and MFA selection to log in with.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Identity {
-    username: Option<String>,
+    username: String,
     mfa: Option<MfaSelection>,
 }
 
@@ -145,14 +142,14 @@ impl Identity {
         flag_mfa: Option<MfaSelection>,
         app_username: Option<&str>,
         app_mfa: Option<MfaSelection>,
-        idp: Option<&Idp>,
+        idp: &Idp,
     ) -> Self {
         Identity {
             username: flag_username
                 .or(app_username)
-                .or_else(|| idp.map(Idp::username))
-                .map(str::to_string),
-            mfa: flag_mfa.or(app_mfa).or_else(|| idp.and_then(Idp::mfa)),
+                .unwrap_or_else(|| idp.username())
+                .to_string(),
+            mfa: flag_mfa.or(app_mfa).or_else(|| idp.mfa()),
         }
     }
 }
@@ -161,7 +158,7 @@ impl Identity {
 struct AwsEntry<'a> {
     app_url: &'a str,
     username: Option<&'a str>,
-    idp: Option<&'a str>,
+    idp: &'a str,
     mfa: Option<MfaSelection>,
     region: Option<&'a str>,
 }
@@ -203,13 +200,13 @@ mod tests {
     fn aws_host(
         url: &str,
         username: Option<&str>,
-        idp: Option<&str>,
+        idp: &str,
         mfa: Option<MfaSelection>,
     ) -> AwsHost {
         AwsHost::new(
             url.to_string(),
             username.map(str::to_string),
-            idp.map(str::to_string),
+            idp.to_string(),
             mfa,
         )
         .unwrap()
@@ -218,13 +215,13 @@ mod tests {
     fn sso_host(
         url: &str,
         username: Option<&str>,
-        idp: Option<&str>,
+        idp: &str,
         mfa: Option<MfaSelection>,
     ) -> AwsSsoHost {
         AwsSsoHost::new(
             url.to_string(),
             username.map(str::to_string),
-            idp.map(str::to_string),
+            idp.to_string(),
             "eu-central-1".to_string(),
             mfa,
         )
@@ -233,14 +230,14 @@ mod tests {
 
     fn rancher_host(
         url: &str,
-        idp: Option<&str>,
+        idp: &str,
         username: Option<&str>,
         mfa: Option<MfaSelection>,
     ) -> RancherHost {
         RancherHost::new(
             url.to_string(),
             "rancher".to_string(),
-            idp.map(str::to_string),
+            idp.to_string(),
             username.map(str::to_string),
             mfa,
         )
@@ -258,18 +255,30 @@ mod tests {
         .unwrap()
     }
 
-    fn settings() -> AppConfig {
+    /// Settings with one identity provider and no apps.
+    fn base() -> AppConfig {
         let mut settings = AppConfig::default();
+        settings.add_idp(idp(
+            "suse",
+            "https://suse.example.com",
+            "idp-user@example.com",
+            None,
+        ));
+        settings
+    }
+
+    fn settings() -> AppConfig {
+        let mut settings = base();
         settings.add_aws_host(aws_host(
             AWS_URL,
             Some("aws-user@example.com"),
-            None,
+            "suse",
             Some(MfaSelection::Totp),
         ));
         settings.add_aws_sso_host(sso_host(
             SSO_URL,
             Some("sso-user@example.com"),
-            None,
+            "suse",
             Some(MfaSelection::WebAuthn),
         ));
         settings
@@ -289,23 +298,22 @@ mod tests {
             "other-user@example.com",
             None,
         ));
-        settings.set_default_idp("suse").unwrap();
-        settings.add_aws_host(aws_host(AWS_URL, None, None, None));
+        settings.add_aws_host(aws_host(AWS_URL, None, "suse", None));
         settings.add_aws_sso_host(sso_host(
             SSO_URL,
             Some("app-user@example.com"),
-            Some("other"),
+            "other",
             Some(MfaSelection::WebAuthn),
         ));
         settings.add_rancher_host(rancher_host(
             "https://rancher.example.com",
-            None,
+            "suse",
             None,
             None,
         ));
         settings.add_rancher_host(rancher_host(
             "https://rancher2.example.com",
-            Some("other"),
+            "other",
             Some("app-user@example.com"),
             Some(MfaSelection::WebAuthn),
         ));
@@ -375,21 +383,20 @@ mod tests {
             .unwrap();
         assert_eq!(found.app_type, AwsAppType::Aws);
 
-        let overrides = AwsOverrides {
-            username: Some("u".to_string()),
-            region: Some("eu-central-1".to_string()),
-            ..aws(Some(AwsAppType::AwsSso), Some(AWS_URL))
-        };
-        let found = LoginResolverService::new(settings())
-            .resolve_aws(&overrides)
-            .unwrap();
-        assert_eq!(found.app_type, AwsAppType::AwsSso);
+        // An app type the url is not configured for has no entry, so no identity provider to log in with.
+        assert_eq!(
+            error(
+                LoginResolverService::new(settings())
+                    .resolve_aws(&aws(Some(AwsAppType::AwsSso), Some(AWS_URL)))
+            ),
+            "the app-url is not configured, please supply an app-type"
+        );
     }
 
     #[test]
     fn the_only_configured_app_type_is_used_without_an_app_url() {
-        let mut settings = AppConfig::default();
-        settings.add_aws_sso_host(sso_host(SSO_URL, Some("u"), None, None));
+        let mut settings = base();
+        settings.add_aws_sso_host(sso_host(SSO_URL, Some("u"), "suse", None));
 
         let found = LoginResolverService::new(settings)
             .resolve_aws(&aws(None, None))
@@ -408,9 +415,9 @@ mod tests {
             "the app-url is not configured, please supply an app-type"
         );
 
-        let mut both = AppConfig::default();
-        both.add_aws_host(aws_host(AWS_URL, Some("u"), None, None));
-        both.add_aws_sso_host(sso_host(AWS_URL, Some("u"), None, None));
+        let mut both = base();
+        both.add_aws_host(aws_host(AWS_URL, Some("u"), "suse", None));
+        both.add_aws_sso_host(sso_host(AWS_URL, Some("u"), "suse", None));
         assert_eq!(
             error(LoginResolverService::new(both).resolve_aws(&aws(None, Some(AWS_URL)))),
             "the app-url is configured as both app types, please supply an app-type"
@@ -437,38 +444,31 @@ mod tests {
                 LoginResolverService::new(empty)
                     .resolve_aws(&aws(Some(AwsAppType::AwsSso), Some(OTHER_URL)))
             ),
-            "please supply a username"
+            "the app-url is not configured, please supply an app-type"
         );
     }
 
     #[test]
-    fn a_url_that_is_not_stored_needs_a_username_and_for_sso_a_region() {
-        assert_eq!(
-            error(
-                LoginResolverService::new(settings())
-                    .resolve_aws(&aws(Some(AwsAppType::Aws), Some(OTHER_URL)))
-            ),
-            "please supply a username"
-        );
-
+    fn a_url_that_is_not_stored_cannot_log_in_because_no_idp_is_named() {
         let overrides = AwsOverrides {
             username: Some("u".to_string()),
+            region: Some("eu-central-1".to_string()),
             ..aws(Some(AwsAppType::AwsSso), Some(OTHER_URL))
         };
         assert_eq!(
             error(LoginResolverService::new(settings()).resolve_aws(&overrides)),
-            "please supply a region"
+            "the app-url is not configured, please supply an app-type"
         );
     }
 
     #[test]
-    fn aws_falls_back_to_the_default_idp_and_the_password_follows_it() {
+    fn aws_takes_its_username_from_its_idp_and_the_password_follows_it() {
         let found = LoginResolverService::new(idp_settings())
             .resolve_aws(&aws(Some(AwsAppType::Aws), None))
             .unwrap();
         assert_eq!(found.username, "idp-user@example.com");
         assert_eq!(found.mfa, Some(MfaSelection::Totp));
-        assert_eq!(found.idp_url.as_deref(), Some("https://suse.example.com"));
+        assert_eq!(found.idp_url, "https://suse.example.com");
         assert_eq!(found.password_url(), "https://suse.example.com");
         assert_eq!(found.app_url, AWS_URL);
     }
@@ -495,18 +495,9 @@ mod tests {
     }
 
     #[test]
-    fn aws_without_an_idp_keeps_the_app_domain_for_the_password() {
-        let found = LoginResolverService::new(settings())
-            .resolve_aws(&aws(Some(AwsAppType::Aws), None))
-            .unwrap();
-        assert!(found.idp_url.is_none());
-        assert_eq!(found.password_url(), AWS_URL);
-    }
-
-    #[test]
     fn aws_with_an_unknown_idp_is_an_error() {
         let mut settings = AppConfig::default();
-        settings.add_aws_host(aws_host(AWS_URL, None, Some("missing"), None));
+        settings.add_aws_host(aws_host(AWS_URL, None, "missing", None));
 
         let message = error(
             LoginResolverService::new(settings).resolve_aws(&aws(Some(AwsAppType::Aws), None)),
@@ -517,14 +508,14 @@ mod tests {
     #[test]
     fn the_identity_is_resolved_flag_then_app_then_idp() {
         let settings = idp_settings();
-        let idp = settings.find_idp("suse");
+        let idp = settings.find_idp("suse").unwrap();
 
         let found = Identity::resolve(None, None, None, None, idp);
-        assert_eq!(found.username.as_deref(), Some("idp-user@example.com"));
+        assert_eq!(found.username, "idp-user@example.com");
         assert_eq!(found.mfa, Some(MfaSelection::Totp));
 
         let found = Identity::resolve(None, None, Some("app"), Some(MfaSelection::WebAuthn), idp);
-        assert_eq!(found.username.as_deref(), Some("app"));
+        assert_eq!(found.username, "app");
         assert_eq!(found.mfa, Some(MfaSelection::WebAuthn));
 
         let found = Identity::resolve(
@@ -534,17 +525,12 @@ mod tests {
             Some(MfaSelection::WebAuthn),
             idp,
         );
-        assert_eq!(found.username.as_deref(), Some("flag"));
+        assert_eq!(found.username, "flag");
         assert_eq!(found.mfa, Some(MfaSelection::Totp));
-
-        assert_eq!(
-            Identity::resolve(None, None, None, None, None),
-            Identity::default()
-        );
     }
 
     #[test]
-    fn rancher_uses_the_default_idp_and_flags_override_it() {
+    fn rancher_takes_its_username_from_its_idp_and_flags_override_it() {
         let found = LoginResolverService::new(idp_settings())
             .resolve_rancher(&RancherOverrides::default())
             .unwrap();
@@ -591,11 +577,11 @@ mod tests {
     }
 
     #[test]
-    fn rancher_needs_an_idp() {
+    fn rancher_with_an_unknown_idp_is_an_error() {
         let mut settings = AppConfig::default();
         settings.add_rancher_host(rancher_host(
             "https://rancher.example.com",
-            None,
+            "missing",
             Some("user@example.com"),
             None,
         ));
@@ -603,7 +589,7 @@ mod tests {
         let message = error(
             LoginResolverService::new(settings).resolve_rancher(&RancherOverrides::default()),
         );
-        assert!(message.contains("c9s config idp"), "{message}");
+        assert!(message.contains("missing"), "{message}");
     }
 
     #[test]

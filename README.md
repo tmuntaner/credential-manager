@@ -78,24 +78,15 @@ Without it enabled, it will not store the user's session.
 c9s config global yubikey disable
 ```
 
-#### Default Identity Provider
-
-Set the default identity provider for targets that do not explicitly specify `--idp`:
-
-```bash
-c9s config global default-idp --name work
-```
-
 ### Identity Providers
 
-To make it easier to manage multiple targets, you can set a shared identity provider.
+Every target (Rancher, AWS) logs in through an identity provider.
+Add one first to the config and use `--idp` to target it when you configure a target.
 The identity provider takes all the information you need to authenticate to your idp: username, url, and mfa type.
 
 ```bash
-c9s config idp --name work --url https://id.example.com --username username@example.com --mfa totp --default
+c9s config idp --name work --url https://id.example.com --username username@example.com --mfa totp
 ```
-
-If you add `--default`, it becomes the default idp for all targets.
 
 #### Authentik
 
@@ -119,7 +110,7 @@ Rancher logs in through an identity provider (see above); `--client-id` is the c
 authentik that Rancher is configured with. `--username` and `--mfa` are optional overrides of the identity provider's.
 
 ```bash
-c9s config rancher --url https://rancher.example.com --client-id rancher [--idp work] [--username username@example.com]
+c9s config rancher --url https://rancher.example.com --client-id rancher --idp work [--username username@example.com]
 ```
 
 ### AWS Application (IAM roles)
@@ -129,7 +120,7 @@ The username comes from the identity provider.
 If you wish to provide an override, set `--username` as well.
 
 ```bash
-c9s config aws app --app-url https://id.example.com/application/saml/my-aws-app/sso/binding/init/ [--idp work] [--username username@example.com]
+c9s config aws app --app-url https://id.example.com/application/saml/my-aws-app/sso/binding/init/ --idp work [--username username@example.com]
 ```
 
 ### AWS IAM Identity Center Application
@@ -139,7 +130,7 @@ The username comes from the identity provider.
 If you wish to provide an override, set `--username` as well.
 
 ```bash
-c9s config aws sso --app-url https://id.example.com/application/saml/my-aws-sso-app/sso/binding/init/ --region eu-central-1 [--idp work] [--username username@example.com]
+c9s config aws sso --app-url https://id.example.com/application/saml/my-aws-sso-app/sso/binding/init/ --region eu-central-1 --idp work [--username username@example.com]
 ```
 
 ## Retrieve Credentials

@@ -3,7 +3,8 @@ use crate::domain::ports::secret_wrapper::WrapError;
 impl From<webauthn::WebauthnError> for WrapError {
     fn from(err: webauthn::WebauthnError) -> Self {
         match err {
-            webauthn::WebauthnError::ReceiveSignResult
+            webauthn::WebauthnError::Cancelled
+            | webauthn::WebauthnError::ReceiveSignResult
             | webauthn::WebauthnError::ReceiveRegisterResult => WrapError::Cancelled,
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             webauthn::WebauthnError::StartSigning(e)
@@ -34,6 +35,13 @@ impl From<webauthn::WebauthnError> for WrapError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn giving_up_is_a_cancelled_wrap() {
+        let err = WrapError::from(webauthn::WebauthnError::Cancelled);
+
+        assert!(matches!(err, WrapError::Cancelled));
+    }
 
     #[test]
     fn converts_receive_sign_result_to_cancelled() {

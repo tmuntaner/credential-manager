@@ -1,0 +1,120 @@
+//! Identity providers: the list, with Edit and Remove, and the keyring choice.
+
+use super::dialogs::{Removal, RemoveDialog};
+use super::SettingsAction;
+use crate::app::{Focus, FocusTarget, Route};
+use crate::ui::card::{card, card_button, card_header};
+use crate::ui::heading;
+use crate::ui::select::mfa_label;
+use c9s::app::settings::{IdpSummary, SettingsView};
+use eframe::egui::{RichText, Ui};
+
+pub fn ui(ui: &mut Ui, view: &SettingsView, focus: &mut Focus) -> Option<SettingsAction> {
+    card_header(
+        ui,
+        "Identity providers",
+        "The services you sign in with, for example authentik.",
+    );
+    let mut action = None;
+
+    if view.idps.is_empty() {
+        ui.label("No identity provider yet.");
+    }
+
+    for idp in &view.idps {
+        if let Some(a) = idp_entry(ui, idp, focus) {
+            action = Some(a);
+        }
+        ui.add_space(8.0);
+    }
+
+    let add = ui.button("Add identity provider");
+    focus.apply(FocusTarget::Add(Route::SettingsIdp), &add);
+    if add.clicked() {
+        action = Some(SettingsAction::AddIdp);
+    }
+
+    ui.add_space(16.0);
+    heading(ui, "Passwords");
+    let mut use_keyring = view.use_keyring;
+    if ui
+        .checkbox(
+            &mut use_keyring,
+            "Remember my password in the system keyring (recommended)",
+        )
+        .changed()
+    {
+        action = Some(SettingsAction::SetKeyring(use_keyring));
+    }
+
+    ui.label(
+        RichText::new(
+            "c9s asks for your password the first time and offers to keep it in your computer's secure storage. It is never saved in the settings file.",
+        )
+        .weak(),
+    );
+    action
+}
+
+fn used_by(idp: &IdpSummary) -> String {
+    match idp.used_by.len() {
+        0 => "Not used by any application yet.".to_string(),
+        1 => "Used by 1 application.".to_string(),
+        n => format!("Used by {n} applications."),
+    }
+}
+
+fn idp_entry(ui: &mut Ui, idp: &IdpSummary, focus: &mut Focus) -> Option<SettingsAction> {
+    let details = [
+        idp.url.clone(),
+        format!(
+            "User name: {}. Second step: {}.",
+            idp.username,
+            mfa_label(idp.mfa)
+        ),
+        used_by(idp),
+    ];
+
+    card(ui, &idp.name, &[], &details, |ui| {
+        let edit = card_button(ui, "Edit", &idp.name);
+        focus.apply(FocusTarget::Idp(idp.name.clone()), &edit);
+        if edit.clicked() {
+            return Some(SettingsAction::EditIdp(idp.clone()));
+        }
+
+        if card_button(ui, "Remove", &idp.name).clicked() {
+            return Some(SettingsAction::Remove(RemoveDialog::new(
+                Removal::Idp(idp.name.clone()),
+                format!("Remove {}?", idp.name),
+                format!(
+                    "c9s will no longer use the identity provider {} ({}). A password kept in the system keyring is not deleted.",
+                    idp.name, idp.url
+                ),
+                format!("{} removed.", idp.name),
+            )));
+        }
+        None
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use c9s::app::settings::MfaChoice;
+
+    #[test]
+    fn the_use_of_an_idp_is_counted_in_words() {
+        let mut idp = IdpSummary {
+            name: "work".into(),
+            url: "https://id".into(),
+            username: "me".into(),
+            mfa: MfaChoice::Ask,
+            used_by: vec![],
+        };
+        assert_eq!(used_by(&idp), "Not used by any application yet.");
+        idp.used_by = vec!["a".into()];
+        assert_eq!(used_by(&idp), "Used by 1 application.");
+        idp.used_by = vec!["a".into(), "b".into()];
+        assert_eq!(used_by(&idp), "Used by 2 applications.");
+    }
+}
