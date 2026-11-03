@@ -103,7 +103,8 @@ allow = [
     "BSD-2-Clause",
     "CC0-1.0",
     "Unlicense",
-    "BSL-1.0"
+    "BSL-1.0",
+    "EUPL-1.2"
 ]
 
 # The confidence threshold for detecting a license from license text.

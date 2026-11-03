@@ -16,10 +16,7 @@ use c9s::outbound::config::config_store::ConfigFileAdapter;
 use clap::Parser;
 
 #[derive(Parser)]
-#[clap(
-    version = "1.0",
-    author = "Thomas Muntaner <thomas.muntaner@gmail.com>"
-)]
+#[clap(version, author = "Thomas Muntaner <thomas.muntaner@gmail.com>")]
 struct Opts {
     /// How to ask for secrets: a popup when available, or only the terminal
     #[clap(long, global = true, value_enum, env = "C9S_PROMPT")]
