@@ -5,8 +5,8 @@ use crate::domain::models::idp::IdpType;
 use crate::domain::models::mfa::{MfaSelection, MfaSelectionError};
 use crate::domain::models::prompt_mode::PromptMode;
 use crate::domain::models::settings::{
-    AppConfig, AwsHost, AwsSsoHost, DaemonConfig, GlobalSettings, Idp, RancherHost, SettingsError,
-    YubikeyConfig,
+    AppConfig, AwsHost, AwsSsoHost, DaemonConfig, GlobalSettings, Idp, RancherHost, SettingsBundle,
+    SettingsError, YubikeyConfig,
 };
 use crate::domain::ports::config::ConfigError;
 use base64::engine::general_purpose::STANDARD;
@@ -21,6 +21,87 @@ pub(super) struct FileConfig {
     aws_hosts: Option<Vec<FileAwsHost>>,
     aws_sso_hosts: Option<Vec<FileAwsSsoHost>>,
     rancher_hosts: Option<Vec<FileRancherHost>>,
+}
+
+/// The onboarding bundle version.
+pub(super) const BUNDLE_VERSION: u32 = 1;
+
+/// The onboarding file bundle.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FileBundle {
+    pub(super) version: u32,
+    idps: Option<Vec<FileBundleIdp>>,
+    aws_hosts: Option<Vec<FileAwsHost>>,
+    aws_sso_hosts: Option<Vec<FileAwsSsoHost>>,
+    rancher_hosts: Option<Vec<FileRancherHost>>,
+}
+
+/// The idp for an onboarding bundle.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileBundleIdp {
+    name: String,
+    #[serde(rename = "type", default)]
+    idp_type: FileIdpType,
+    url: String,
+    mfa: Option<FileMfa>,
+}
+
+impl From<&Idp> for FileBundleIdp {
+    fn from(idp: &Idp) -> Self {
+        Self {
+            name: idp.name().to_string(),
+            idp_type: idp.idp_type().into(),
+            url: idp.url().to_string(),
+            mfa: idp.mfa().map(FileMfa),
+        }
+    }
+}
+
+impl TryFrom<FileBundleIdp> for Idp {
+    type Error = SettingsError;
+
+    fn try_from(file: FileBundleIdp) -> Result<Self, Self::Error> {
+        Idp::new(
+            file.name,
+            file.idp_type.into(),
+            file.url,
+            String::new(),
+            file.mfa.map(|m| m.0),
+        )
+    }
+}
+
+impl From<&SettingsBundle> for FileBundle {
+    fn from(bundle: &SettingsBundle) -> Self {
+        Self {
+            version: BUNDLE_VERSION,
+            idps: some_if_any(bundle.idps().iter().map(Into::into).collect()),
+            aws_hosts: some_if_any(bundle.aws_hosts().iter().map(Into::into).collect()),
+            aws_sso_hosts: some_if_any(bundle.aws_sso_hosts().iter().map(Into::into).collect()),
+            rancher_hosts: some_if_any(bundle.rancher_hosts().iter().map(Into::into).collect()),
+        }
+    }
+}
+
+impl TryFrom<FileBundle> for SettingsBundle {
+    type Error = SettingsError;
+
+    fn try_from(file: FileBundle) -> Result<Self, Self::Error> {
+        fn all<F, T: TryFrom<F, Error = SettingsError>>(
+            items: Option<Vec<F>>,
+        ) -> Result<Vec<T>, SettingsError> {
+            items.into_iter().flatten().map(T::try_from).collect()
+        }
+
+        Ok(SettingsBundle::new(
+            all(file.idps)?,
+            all(file.aws_hosts)?,
+            all(file.aws_sso_hosts)?,
+            all(file.rancher_hosts)?,
+        ))
+    }
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -320,16 +401,16 @@ impl TryFrom<FileYubikey> for YubikeyConfig {
 }
 
 impl TryFrom<FileIdp> for Idp {
-    type Error = ConfigError;
+    type Error = SettingsError;
 
     fn try_from(file: FileIdp) -> Result<Self, Self::Error> {
-        Ok(Idp::new(
+        Idp::new(
             file.name,
             file.idp_type.into(),
             file.url,
             file.username,
             file.mfa.map(|m| m.0),
-        )?)
+        )
     }
 }
 

@@ -25,6 +25,11 @@ impl<'a> Shell<'a> {
         }
     }
 
+    /// The route the user is on.
+    pub fn route(&self) -> Route {
+        *self.route
+    }
+
     /// Adds a message to the status line.
     pub fn say(&mut self, message: impl Into<String>) {
         self.status.say(message);

@@ -9,15 +9,17 @@ pub enum Section {
     Idp,
     Aws,
     Rancher,
+    Share,
     Security,
 }
 
 impl Section {
-    pub const ALL: [Section; 4] = [
+    pub const ALL: [Section; 5] = [
         Section::Idp,
         Section::Aws,
         Section::Rancher,
         Section::Security,
+        Section::Share,
     ];
 
     pub fn name(self) -> &'static str {
@@ -25,6 +27,7 @@ impl Section {
             Section::Idp => "Identity providers",
             Section::Aws => "AWS accounts",
             Section::Rancher => "Rancher",
+            Section::Share => "Import / Export",
             Section::Security => "Security",
         }
     }

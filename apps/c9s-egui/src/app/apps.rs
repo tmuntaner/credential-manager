@@ -49,6 +49,11 @@ impl C9sApp {
     }
 
     /// Replaces how a security key is enrolled (for tests).
+    /// Replaces how the user chooses a file to export to or import from.
+    pub fn set_chooser(&mut self, chooser: settings::FilePicker) {
+        self.settings.set_file_picker(chooser);
+    }
+
     pub fn set_enroller(&mut self, enroller: settings::Enroller) {
         self.settings.set_enroller(enroller);
     }

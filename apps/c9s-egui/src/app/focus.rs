@@ -7,6 +7,8 @@ use eframe::egui::Response;
 pub enum FocusTarget {
     /// A navigation bar button.
     Nav(Route),
+    /// A button for finishing the onboarding process.
+    FinishOnBoarding,
     /// A button to add something
     Add(Section),
     /// The Edit button for an identity provider with the name of the provider.

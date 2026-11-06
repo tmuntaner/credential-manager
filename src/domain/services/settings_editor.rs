@@ -8,8 +8,8 @@ use crate::domain::models::idp::IdpType;
 use crate::domain::models::login::ResolveError;
 use crate::domain::models::mfa::MfaSelection;
 use crate::domain::models::settings::{
-    same_app_url, AppConfig, AwsAppType, AwsHost, AwsSsoHost, Idp, RancherHost, SettingsError,
-    YubikeyConfig,
+    same_app_url, AppConfig, AwsAppType, AwsHost, AwsSsoHost, Idp, RancherHost, SettingsBundle,
+    SettingsError, YubikeyConfig,
 };
 use crate::domain::ports::config::{ConfigError, ConfigStore};
 use crate::domain::services::settings_check::{resolve, still_resolves, Entry};
@@ -17,6 +17,7 @@ use crate::domain::services::settings_validation::{
     allow_insecure_localhost, check_client_id, check_name, check_optional_username, check_region,
     check_url, check_username,
 };
+use std::collections::BTreeMap;
 use thiserror::Error;
 
 /// The value of a change that failed the checks of `settings_validation`.
@@ -55,6 +56,10 @@ pub enum SettingsEditError {
     /// There is no app or Rancher at this url.
     #[error("nothing is configured at {0}")]
     UnknownApp(String),
+
+    /// A username is necessary for an idp.
+    #[error("enter the user name for the identity provider \"{0}\"")]
+    UsernameNeeded(String),
 
     /// What was meant as new is there already, at this name or url.
     #[error("{key} is set up already")]
@@ -404,6 +409,87 @@ fn has_aws(settings: &AppConfig, url: &str, app_type: AwsAppType) -> bool {
     }
 }
 
+/// What an import does with an entry that is in the settings already.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum ImportMode {
+    /// Keep what is there, add only what is new.
+    #[default]
+    SkipExisting,
+    /// Update what is there to what the bundle says.
+    Overwrite,
+}
+
+#[derive(Clone, Copy)]
+enum Kind {
+    Idp,
+    Aws,
+    AwsSso,
+    Rancher,
+}
+
+/// How many entries of one kind an import added, updated and left alone.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ImportCounts {
+    pub added: usize,
+    pub overwritten: usize,
+    pub skipped: usize,
+}
+
+/// What an import did, by kind of entry.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ImportReport {
+    pub idps: ImportCounts,
+    pub aws_apps: ImportCounts,
+    pub aws_sso_apps: ImportCounts,
+    pub rancher_apps: ImportCounts,
+}
+
+impl ImportReport {
+    fn tally(&mut self, kind: Kind, exists: bool, overwrite: bool) -> bool {
+        let counts = match kind {
+            Kind::Idp => &mut self.idps,
+            Kind::Aws => &mut self.aws_apps,
+            Kind::AwsSso => &mut self.aws_sso_apps,
+            Kind::Rancher => &mut self.rancher_apps,
+        };
+        match (exists, overwrite) {
+            (false, _) => counts.added += 1,
+            (true, true) => counts.overwritten += 1,
+            (true, false) => {
+                counts.skipped += 1;
+                return false;
+            }
+        }
+
+        true
+    }
+
+    pub fn added(&self) -> usize {
+        self.each().map(|c| c.added).sum()
+    }
+
+    pub fn overwritten(&self) -> usize {
+        self.each().map(|c| c.overwritten).sum()
+    }
+
+    pub fn skipped(&self) -> usize {
+        self.each().map(|c| c.skipped).sum()
+    }
+
+    fn each(&self) -> impl Iterator<Item = &ImportCounts> {
+        [
+            &self.idps,
+            &self.aws_apps,
+            &self.aws_sso_apps,
+            &self.rancher_apps,
+        ]
+        .into_iter()
+    }
+}
+
 /// Edits the settings kept in a [`ConfigStore`]: every change is loaded, applied and saved here, and nothing is
 /// saved when a change is refused.
 pub struct SettingsService<S: ConfigStore> {
@@ -573,6 +659,113 @@ impl<S: ConfigStore> SettingsService<S> {
 
     pub fn remove_rancher(&self, url: &str) -> Result<AppConfig, SettingsEditError> {
         self.edit(|_, config| apply_remove_rancher(config, url))
+    }
+
+    /// The identity providers called `names` and the apps that log in with them. Never saves.
+    pub fn export(&self, names: &[String]) -> Result<SettingsBundle, SettingsEditError> {
+        Ok(self.store.load()?.export(names)?)
+    }
+
+    /// The identity providers of `bundle` that are not set up yet, so an import needs a user name for each.
+    pub fn usernames_needed(
+        &self,
+        bundle: &SettingsBundle,
+    ) -> Result<Vec<String>, SettingsEditError> {
+        let config = self.store.load()?;
+
+        Ok(bundle
+            .idps()
+            .iter()
+            .filter(|idp| config.find_idp(idp.name()).is_none())
+            .map(|idp| idp.name().to_string())
+            .collect())
+    }
+
+    /// Adds what `bundle` holds. All or nothing: one entry that is refused (an `http` url, an app of an
+    /// identity provider that is in neither the bundle nor the settings, ...) saves nothing. The global settings
+    /// are never touched.
+    ///
+    /// A bundle holds no user names. `usernames` gives, by name, the one to sign in with at each identity
+    /// provider that is new (see [`usernames_needed`](Self::usernames_needed)); one that is set up already keeps its own.
+    pub fn import(
+        &self,
+        bundle: &SettingsBundle,
+        mode: ImportMode,
+        usernames: &BTreeMap<String, String>,
+    ) -> Result<(AppConfig, ImportReport), SettingsEditError> {
+        let mut report = ImportReport::default();
+        let config = self.edit(|before, config| {
+            let overwrite = mode == ImportMode::Overwrite;
+
+            for idp in bundle.idps() {
+                let exists = before.find_idp(idp.name()).is_some();
+                if !report.tally(Kind::Idp, exists, overwrite) {
+                    continue;
+                }
+                let username = match (usernames.get(idp.name()), before.find_idp(idp.name())) {
+                    (Some(username), _) => username.clone(),
+                    (None, Some(mine)) => mine.username().to_string(),
+                    (None, None) => {
+                        return Err(SettingsEditError::UsernameNeeded(idp.name().to_string()))
+                    }
+                };
+                let mut input = IdpInput::new(idp.name(), idp.idp_type(), idp.url(), username);
+                input.mfa = idp.mfa();
+                apply_idp(config, input)?;
+            }
+
+            for host in bundle.aws_hosts() {
+                let exists = before.find_aws_host(host.app_url()).is_some();
+                if !report.tally(Kind::Aws, exists, overwrite) {
+                    continue;
+                }
+                let mut input = AwsAppInput::new(host.app_url(), host.idp());
+                input.username = host.username().map(str::to_string);
+                input.mfa = host.mfa();
+                apply_aws_app(config, input)?;
+                if self.login_checks {
+                    resolve(
+                        config,
+                        &Entry::Aws(host.app_url().to_string(), AwsAppType::Aws),
+                    )?;
+                }
+            }
+
+            for host in bundle.aws_sso_hosts() {
+                let exists = before.find_aws_sso_host(host.app_url()).is_some();
+                if !report.tally(Kind::AwsSso, exists, overwrite) {
+                    continue;
+                }
+                let mut input = AwsAppInput::new(host.app_url(), host.idp());
+                input.username = host.username().map(str::to_string);
+                input.mfa = host.mfa();
+                apply_aws_sso_app(config, input, host.region())?;
+                if self.login_checks {
+                    resolve(
+                        config,
+                        &Entry::Aws(host.app_url().to_string(), AwsAppType::AwsSso),
+                    )?;
+                }
+            }
+
+            for host in bundle.rancher_hosts() {
+                let exists = before.find_rancher_host(host.url()).is_some();
+                if !report.tally(Kind::Rancher, exists, overwrite) {
+                    continue;
+                }
+                let mut input = RancherInput::new(host.url(), host.client_id(), host.idp());
+                input.username = host.username().map(str::to_string);
+                input.mfa = host.mfa();
+                apply_rancher(config, input)?;
+                if self.login_checks {
+                    resolve(config, &Entry::Rancher(host.url().to_string()))?;
+                }
+            }
+
+            Ok(())
+        })?;
+
+        Ok((config, report))
     }
 
     pub fn set_use_keyring(&self, enabled: bool) -> Result<AppConfig, SettingsEditError> {
@@ -1310,5 +1503,206 @@ mod tests {
         service.remove_aws_app(APP_URL, AwsAppType::Aws).unwrap();
         service.remove_idp("suse").unwrap();
         assert!(service.load().unwrap().idps().is_empty());
+    }
+
+    /// A store with the `suse` and `other` idps, an AWS app of each, and a Rancher of `suse`.
+    fn seeded() -> MemoryStore {
+        let store = MemoryStore::default();
+        let service = SettingsService::new(&store);
+        service.save_idp(idp_input(), SaveAs::Upsert).unwrap();
+        let mut other = idp_input();
+        other.name = "other".into();
+        other.url = "https://other.example.com".into();
+        service.save_idp(other, SaveAs::Upsert).unwrap();
+        service
+            .save_aws_app(
+                AwsAppInput::new(APP_URL, "suse"),
+                AwsAppKind::Aws,
+                SaveAs::Upsert,
+            )
+            .unwrap();
+        service
+            .save_aws_app(
+                AwsAppInput::new("https://other.example.com/app/", "other"),
+                AwsAppKind::Aws,
+                SaveAs::Upsert,
+            )
+            .unwrap();
+        service
+            .save_rancher(
+                RancherInput::new("https://rancher.example.com", "client", "suse"),
+                SaveAs::Upsert,
+            )
+            .unwrap();
+
+        store
+    }
+
+    /// The user name the importer gives to `suse`.
+    fn names() -> BTreeMap<String, String> {
+        BTreeMap::from([("suse".to_string(), "newcomer".to_string())])
+    }
+
+    #[test]
+    fn an_export_holds_no_user_names() {
+        let store = seeded();
+        let service = SettingsService::new(&store);
+        let mut input = AwsAppInput::new("https://id.example.com/personal/", "suse");
+        input.username = Some("me-too".into());
+        service
+            .save_aws_app(input, AwsAppKind::Aws, SaveAs::Upsert)
+            .unwrap();
+
+        let bundle = service.export(&["suse".to_string()]).unwrap();
+
+        assert_eq!(bundle.idps()[0].username(), "");
+        assert!(bundle.aws_hosts().iter().all(|h| h.username().is_none()));
+    }
+
+    #[test]
+    fn an_import_needs_a_user_name_for_each_new_idp() {
+        let bundle = SettingsService::new(&seeded())
+            .export(&["suse".to_string()])
+            .unwrap();
+        let target = MemoryStore::default();
+        let service = SettingsService::new(&target);
+
+        assert_eq!(service.usernames_needed(&bundle).unwrap(), ["suse"]);
+        assert!(matches!(
+            service.import(&bundle, ImportMode::SkipExisting, &BTreeMap::new()),
+            Err(SettingsEditError::UsernameNeeded(name)) if name == "suse"
+        ));
+        assert_eq!(target.saves(), 0);
+
+        let (config, _) = service
+            .import(&bundle, ImportMode::SkipExisting, &names())
+            .unwrap();
+        assert_eq!(config.resolve_idp("suse").unwrap().username(), "newcomer");
+        // Set up now, so nothing is asked a second time and the user name stays.
+        assert!(service.usernames_needed(&bundle).unwrap().is_empty());
+        let (config, _) = service
+            .import(&bundle, ImportMode::Overwrite, &BTreeMap::new())
+            .unwrap();
+        assert_eq!(config.resolve_idp("suse").unwrap().username(), "newcomer");
+    }
+
+    #[test]
+    fn an_export_holds_the_idp_and_only_its_apps() {
+        let store = seeded();
+        let bundle = SettingsService::new(&store)
+            .export(&["suse".to_string()])
+            .unwrap();
+
+        assert_eq!(bundle.idps().len(), 1);
+        assert_eq!(bundle.aws_hosts().len(), 1);
+        assert_eq!(bundle.aws_hosts()[0].idp(), "suse");
+        assert_eq!(bundle.rancher_hosts().len(), 1);
+        assert!(bundle.aws_sso_hosts().is_empty());
+    }
+
+    #[test]
+    fn exporting_an_unknown_idp_is_refused() {
+        let store = seeded();
+
+        assert!(matches!(
+            SettingsService::new(&store).export(&["nope".to_string()]),
+            Err(SettingsEditError::Invalid(SettingsError::UnknownIdp(_)))
+        ));
+    }
+
+    #[test]
+    fn an_import_adds_everything_and_keeps_the_global_settings() {
+        let bundle = SettingsService::new(&seeded())
+            .export(&["suse".to_string()])
+            .unwrap();
+        let target = MemoryStore::default();
+        let service = SettingsService::new(&target);
+        service.set_use_keyring(false).unwrap();
+        service.set_wrap_cached_secrets(true).unwrap();
+
+        let (config, report) = service
+            .import(&bundle, ImportMode::SkipExisting, &names())
+            .unwrap();
+
+        assert_eq!(report.added(), 3);
+        assert_eq!(report.skipped(), 0);
+        assert_eq!(config.idps().len(), 1);
+        assert_eq!(config.aws_hosts().len(), 1);
+        assert_eq!(config.rancher_hosts().len(), 1);
+        assert!(!config.keyring_enabled());
+        assert!(config.wrap_cached_secrets_enabled());
+    }
+
+    #[test]
+    fn an_import_skips_what_exists_unless_told_to_overwrite() {
+        let bundle = SettingsService::new(&seeded())
+            .export(&["suse".to_string()])
+            .unwrap();
+        let target = MemoryStore::default();
+        let service = SettingsService::new(&target);
+        let mut mine = idp_input();
+        mine.username = "mine".into();
+        service.save_idp(mine, SaveAs::Upsert).unwrap();
+
+        let (config, report) = service
+            .import(&bundle, ImportMode::SkipExisting, &names())
+            .unwrap();
+        assert_eq!(report.idps.skipped, 1);
+        assert_eq!(report.added(), 2);
+        assert_eq!(config.resolve_idp("suse").unwrap().username(), "mine");
+
+        let (config, report) = service
+            .import(&bundle, ImportMode::Overwrite, &names())
+            .unwrap();
+        assert_eq!(report.idps.overwritten, 1);
+        assert_eq!(report.overwritten(), 3);
+        assert_eq!(config.resolve_idp("suse").unwrap().username(), "newcomer");
+    }
+
+    #[test]
+    fn an_import_of_an_app_without_its_idp_saves_nothing() {
+        let bundle = SettingsService::new(&seeded())
+            .export(&["suse".to_string()])
+            .unwrap();
+        let only_apps = SettingsBundle::new(
+            Vec::new(),
+            bundle.aws_hosts().to_vec(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let target = MemoryStore::default();
+
+        assert!(matches!(
+            SettingsService::new(&target).import(&only_apps, ImportMode::SkipExisting, &names()),
+            Err(SettingsEditError::Invalid(SettingsError::UnknownIdp(_)))
+        ));
+        assert_eq!(target.saves(), 0);
+    }
+
+    #[test]
+    fn an_import_with_an_insecure_url_saves_nothing() {
+        let http = Idp::new(
+            "bad".into(),
+            IdpType::Authentik,
+            "http://id.example.com".into(),
+            "user".into(),
+            None,
+        )
+        .unwrap();
+        let bundle = SettingsBundle::new(vec![http], Vec::new(), Vec::new(), Vec::new());
+        let target = MemoryStore::default();
+
+        assert!(matches!(
+            SettingsService::new(&target).import(
+                &bundle,
+                ImportMode::SkipExisting,
+                &BTreeMap::from([("bad".to_string(), "user".to_string())])
+            ),
+            Err(SettingsEditError::InvalidField {
+                field: InvalidField::Url,
+                ..
+            })
+        ));
+        assert_eq!(target.saves(), 0);
     }
 }

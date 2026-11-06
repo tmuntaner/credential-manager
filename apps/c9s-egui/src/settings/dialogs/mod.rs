@@ -1,11 +1,15 @@
 mod aws;
+mod export;
 mod idp;
 mod rancher;
 mod remove;
 mod sign_in;
+mod usernames;
 
 pub use crate::ui::dialog::DialogOutcome;
+pub use export::ExportDialog;
 pub use remove::{Removal, RemoveDialog};
+pub use usernames::UsernamesDialog;
 
 use crate::app::FocusTarget;
 use aws::AwsDialog;
@@ -49,6 +53,8 @@ pub enum Dialog {
     Aws(AwsDialog),
     Rancher(RancherDialog),
     Remove(RemoveDialog),
+    Export(ExportDialog),
+    Usernames(UsernamesDialog),
 }
 
 impl Dialog {
@@ -89,6 +95,8 @@ impl Dialog {
             Dialog::Aws(d) => d.ui(ctx),
             Dialog::Rancher(d) => d.ui(ctx),
             Dialog::Remove(d) => d.ui(ctx),
+            Dialog::Export(d) => d.ui(ctx),
+            Dialog::Usernames(d) => d.ui(ctx),
         }
     }
 
@@ -99,6 +107,10 @@ impl Dialog {
             Dialog::Aws(d) => d.submit(page),
             Dialog::Rancher(d) => d.submit(page),
             Dialog::Remove(d) => d.submit(page),
+            // Exporting writes a file the user chooses next, the state takes it from there.
+            Dialog::Export(_) | Dialog::Usernames(_) => {
+                Err("Choose a file to export to.".to_string())
+            }
         }
     }
 }
