@@ -32,10 +32,17 @@ jobs:
 
       - name: Build
         run: |
-          cargo build --all --release
+          cargo build --all --exclude c9s-egui --release
           strip target/release/c9s
           mv target/release/c9s target/release/c9s_amd64
           cd target/release && sha256sum c9s_amd64 > c9s_amd64.SHA256SUM
+
+      - name: Build GUI
+        run: |
+          cargo build -p c9s-egui --release
+          strip target/release/c9s-egui
+          mv target/release/c9s-egui target/release/c9s-egui_amd64
+          cd target/release && sha256sum c9s-egui_amd64 > c9s-egui_amd64.SHA256SUM
 
       - name: Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -43,6 +50,8 @@ jobs:
           files: |
             target/release/c9s_amd64
             target/release/c9s_amd64.SHA256SUM
+            target/release/c9s-egui_amd64
+            target/release/c9s-egui_amd64.SHA256SUM
 
   release-mac:
     name: Release for Mac
@@ -64,10 +73,17 @@ jobs:
 
       - name: Build
         run: |
-          cargo build --all --release
+          cargo build --all --exclude c9s-egui --release
           strip target/release/c9s
           mv target/release/c9s target/release/c9s_darwin
           cd target/release && shasum -a 256 c9s_darwin > c9s_darwin.SHA256SUM
+
+      - name: Build GUI
+        run: |
+          cargo build -p c9s-egui --release
+          strip target/release/c9s-egui
+          mv target/release/c9s-egui target/release/c9s-egui_darwin
+          cd target/release && shasum -a 256 c9s-egui_darwin > c9s-egui_darwin.SHA256SUM
 
       - name: Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -75,6 +91,8 @@ jobs:
           files: |
             target/release/c9s_darwin
             target/release/c9s_darwin.SHA256SUM
+            target/release/c9s-egui_darwin
+            target/release/c9s-egui_darwin.SHA256SUM
 
   release-windows:
     name: Release for Windows
@@ -97,10 +115,18 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          cargo build --all --release
+          cargo build --all --exclude c9s-egui --release
           cd target\release
           $sum = (CertUtil -hashFile .\c9s.exe SHA256)[1] -replace " ",""
           "$sum c9s.exe" | Out-File .\c9s.exe.SHA256SUM
+
+      - name: Build GUI
+        shell: pwsh
+        run: |
+          cargo build -p c9s-egui --release
+          cd target\release
+          $sum = (CertUtil -hashFile .\c9s-egui.exe SHA256)[1] -replace " ",""
+          "$sum c9s-egui.exe" | Out-File .\c9s-egui.exe.SHA256SUM
 
       - name: Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -108,3 +134,5 @@ jobs:
           files: |
             target/release/c9s.exe
             target/release/c9s.exe.SHA256SUM
+            target/release/c9s-egui.exe
+            target/release/c9s-egui.exe.SHA256SUM

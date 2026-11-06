@@ -1,4 +1,4 @@
-use crate::domain::models::user_interaction::{NoticeLevel, SecretPrompt, UserNotice};
+use crate::domain::models::user_interaction::{NoticeLevel, SecretKind, SecretPrompt, UserNotice};
 use crate::domain::ports::notifier::Notifier;
 use crate::domain::ports::user_interaction::UserInteraction;
 use async_trait::async_trait;
@@ -24,9 +24,11 @@ impl<U, N> UserInteractionKeyUi<U, N> {
 #[async_trait(?Send)]
 impl<U: UserInteraction, N: Notifier> SecurityKeyUi for UserInteractionKeyUi<U, N> {
     async fn request_pin(&self, request: &PinRequest) -> Result<SecurityKeyPin, PinError> {
-        let mut prompt = SecretPrompt::new(TITLE, "Security key PIN").with_description(
-            "Enter the PIN of your security key. Then touch the key when it blinks.",
-        );
+        let mut prompt = SecretPrompt::new(TITLE, "Security key PIN")
+            .with_description(
+                "Enter the PIN of your security key. Then touch the key when it blinks.",
+            )
+            .with_kind(SecretKind::Pin);
         if let Some(message) = request.retry_message() {
             prompt = prompt.with_error(message);
         }
@@ -43,11 +45,17 @@ impl<U: UserInteraction, N: Notifier> SecurityKeyUi for UserInteractionKeyUi<U, 
             NoticeLevel::Info
         };
 
+        let mut notice = UserNotice::new(level, event.to_string());
+        if event.awaits_user() {
+            notice = notice.awaiting_action();
+        }
+
         // Nothing to do when the notice cannot be shown.
-        let _ = self
-            .notifier
-            .notify(&UserNotice::new(level, event.to_string()))
-            .await;
+        let _ = self.notifier.notify(&notice).await;
+    }
+
+    async fn cancelled(&self) {
+        self.notifier.dismissed().await
     }
 }
 
@@ -132,5 +140,29 @@ mod tests {
         let ui = key_ui(MockUserInteraction::new(), notifier);
         ui.notify(KeyEvent::TouchRequired).await;
         ui.notify(KeyEvent::PinBlocked).await;
+    }
+
+    #[tokio::test]
+    async fn only_waits_for_the_user_can_be_cancelled() {
+        let mut notifier = MockNotifier::new();
+        notifier
+            .expect_notify()
+            .times(2)
+            .withf(|notice| notice.awaiting_action == notice.message.contains("Touch"))
+            .returning(|_| Ok(()));
+
+        let ui = key_ui(MockUserInteraction::new(), notifier);
+        ui.notify(KeyEvent::TouchRequired).await;
+        ui.notify(KeyEvent::PinBlocked).await;
+    }
+
+    #[tokio::test]
+    async fn the_user_giving_up_on_the_notice_cancels_the_key() {
+        let mut notifier = MockNotifier::new();
+        notifier.expect_dismissed().times(1).returning(|| ());
+
+        key_ui(MockUserInteraction::new(), notifier)
+            .cancelled()
+            .await;
     }
 }

@@ -71,7 +71,8 @@ pub async fn sign_assertion(
         .sign(TIMEOUT_MS, args, status_tx, callback)
         .map_err(WebauthnError::StartSigning)?;
 
-    let sign_result = answer_status_updates(status_rx, sign_rx, ui.as_ref()).await;
+    let sign_result =
+        answer_status_updates(status_rx, sign_rx, ui.as_ref(), || cancel(&mut manager)).await;
     drop(manager);
 
     for notifier in &notifiers {
@@ -79,7 +80,7 @@ pub async fn sign_assertion(
     }
 
     let result = sign_result
-        .map_err(|_| WebauthnError::ReceiveSignResult)?
+        .map_err(|e| e.into_sign_error())?
         .map_err(WebauthnError::SecurityKey)?;
 
     let assertion = result.assertion;
@@ -156,12 +157,13 @@ pub async fn enroll_hmac_secret(
         .register(TIMEOUT_MS, args, status_tx, callback)
         .map_err(WebauthnError::StartRegistering)?;
 
-    let register_result = answer_status_updates(status_rx, register_rx, ui.as_ref()).await;
+    let register_result =
+        answer_status_updates(status_rx, register_rx, ui.as_ref(), || cancel(&mut manager)).await;
     drop(manager);
 
     // handle the registration result
     let result = register_result
-        .map_err(|_| WebauthnError::ReceiveRegisterResult)?
+        .map_err(|e| e.into_register_error())?
         .map_err(WebauthnError::SecurityKey)?;
 
     // if the hmac-secret extension is not supported, return an error
@@ -235,12 +237,13 @@ pub async fn derive_hmac_secret(
         .sign(TIMEOUT_MS, args, status_tx, callback)
         .map_err(WebauthnError::StartSigning)?;
 
-    let sign_result = answer_status_updates(status_rx, sign_rx, ui.as_ref()).await;
+    let sign_result =
+        answer_status_updates(status_rx, sign_rx, ui.as_ref(), || cancel(&mut manager)).await;
     drop(manager);
 
     // handle the result
     let result = sign_result
-        .map_err(|_| WebauthnError::ReceiveSignResult)?
+        .map_err(|e| e.into_sign_error())?
         .map_err(WebauthnError::SecurityKey)?;
 
     // get the hmac secret
@@ -276,17 +279,60 @@ fn forward(from: Receiver<StatusUpdate>, to: tokio_mpsc::UnboundedSender<StatusU
     }
 }
 
-/// Answers the key's status updates until the key has a result.
+/// Why waiting for the key ended without its result.
+#[derive(Debug, PartialEq, Eq)]
+enum Interrupted {
+    /// The user gave up. The operation was cancelled on the key.
+    Cancelled,
+    /// The key's side hung up without a result.
+    NoResult,
+}
+
+impl Interrupted {
+    fn into_sign_error(self) -> WebauthnError {
+        match self {
+            Interrupted::Cancelled => WebauthnError::Cancelled,
+            Interrupted::NoResult => WebauthnError::ReceiveSignResult,
+        }
+    }
+
+    fn into_register_error(self) -> WebauthnError {
+        match self {
+            Interrupted::Cancelled => WebauthnError::Cancelled,
+            Interrupted::NoResult => WebauthnError::ReceiveRegisterResult,
+        }
+    }
+}
+
+/// Stops the key from waiting. Dropping the service does not: the key keeps blinking until its timeout.
+fn cancel(manager: &mut AuthenticatorService) {
+    // Nothing else to do when it fails: the operation is abandoned either way.
+    if let Err(e) = manager.cancel() {
+        log::debug!("could not cancel the authenticator operation: {e:?}");
+    }
+}
+
+/// Answers the key's status updates until the key has a result, or the user gives up. Then `cancel` is called to
+/// stop the key.
 async fn answer_status_updates<T>(
     mut status_rx: tokio_mpsc::UnboundedReceiver<StatusUpdate>,
     mut result_rx: oneshot::Receiver<T>,
     ui: &dyn SecurityKeyUi,
-) -> Result<T, oneshot::error::RecvError> {
+    cancel: impl FnOnce(),
+) -> Result<T, Interrupted> {
     let mut touch_prompted = false;
+    // Made once, so a cancel between two updates is not missed.
+    let cancelled = ui.cancelled();
+    tokio::pin!(cancelled);
+
     loop {
         tokio::select! {
             Some(update) = status_rx.recv() => on_status(update, ui, &mut touch_prompted).await,
-            result = &mut result_rx => return result,
+            result = &mut result_rx => return result.map_err(|_| Interrupted::NoResult),
+            _ = &mut cancelled => {
+                cancel();
+                return Err(Interrupted::Cancelled);
+            }
         }
     }
 }
@@ -487,6 +533,68 @@ mod tests {
         on_status(StatusUpdate::PresenceRequired, &ui, &mut touched).await;
 
         assert_eq!(*ui.events.lock().unwrap(), vec![KeyEvent::TouchRequired]);
+    }
+
+    /// Cancels when told to, and never otherwise.
+    struct CancellableUi(std::sync::Arc<tokio::sync::Notify>);
+
+    #[async_trait(?Send)]
+    impl SecurityKeyUi for CancellableUi {
+        async fn request_pin(&self, _request: &PinRequest) -> Result<SecurityKeyPin, PinError> {
+            unreachable!("no PIN is asked for")
+        }
+
+        async fn notify(&self, _event: KeyEvent) {}
+
+        async fn cancelled(&self) {
+            self.0.notified().await
+        }
+    }
+
+    #[tokio::test]
+    async fn giving_up_cancels_the_key() {
+        let notify = std::sync::Arc::new(tokio::sync::Notify::new());
+        let ui = CancellableUi(notify.clone());
+        let (_status_tx, status_rx) = tokio_mpsc::unbounded_channel();
+        let (_result_tx, result_rx) = oneshot::channel::<()>();
+        let cancelled_on_key = std::cell::Cell::new(false);
+
+        let (result, _) = tokio::join!(
+            answer_status_updates(status_rx, result_rx, &ui, || cancelled_on_key.set(true)),
+            async {
+                tokio::task::yield_now().await;
+                notify.notify_waiters();
+            }
+        );
+
+        assert_eq!(result, Err(Interrupted::Cancelled));
+        assert!(cancelled_on_key.get());
+    }
+
+    #[tokio::test]
+    async fn a_result_does_not_cancel_the_key() {
+        let (_status_tx, status_rx) = tokio_mpsc::unbounded_channel();
+        let (result_tx, result_rx) = oneshot::channel();
+        result_tx.send(7).unwrap();
+        let cancelled_on_key = std::cell::Cell::new(false);
+
+        // `NoUi` can never be cancelled.
+        let result =
+            answer_status_updates(status_rx, result_rx, &NoUi, || cancelled_on_key.set(true)).await;
+
+        assert_eq!(result, Ok(7));
+        assert!(!cancelled_on_key.get());
+    }
+
+    #[tokio::test]
+    async fn a_hung_up_key_is_no_result() {
+        let (_status_tx, status_rx) = tokio_mpsc::unbounded_channel();
+        let (result_tx, result_rx) = oneshot::channel::<()>();
+        drop(result_tx);
+
+        let result = answer_status_updates(status_rx, result_rx, &NoUi, || {}).await;
+
+        assert_eq!(result, Err(Interrupted::NoResult));
     }
 
     #[test]

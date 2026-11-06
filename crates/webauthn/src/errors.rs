@@ -48,6 +48,10 @@ pub enum WebauthnError {
     #[error("the security key does not support the hmac-secret extension")]
     HmacSecretNotSupported,
 
+    /// The user gave up waiting for the key.
+    #[error("cancelled by the user")]
+    Cancelled,
+
     #[error("WebAuthn operations are not supported on Windows yet")]
     UnsupportedPlatform,
 }

@@ -29,6 +29,15 @@ impl Notifier for FallbackNotifier {
         }
         Err(NotifyError::Unavailable)
     }
+
+    /// The user can give up through any of the notifiers.
+    async fn dismissed(&self) {
+        if self.notifiers.is_empty() {
+            return std::future::pending().await;
+        }
+
+        futures::future::select_all(self.notifiers.iter().map(|n| n.dismissed())).await;
+    }
 }
 
 #[cfg(test)]
@@ -90,5 +99,27 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, NotifyError::Unavailable));
+    }
+
+    #[tokio::test]
+    async fn the_user_can_give_up_through_any_notifier() {
+        let mut first = MockNotifier::new();
+        first.expect_dismissed().times(1).returning(|| ());
+        let mut second = MockNotifier::new();
+        // The first to resolve wins; the others may never be polled.
+        second.expect_dismissed().times(0..=1).returning(|| ());
+
+        chain(vec![first, second]).dismissed().await;
+    }
+
+    #[tokio::test]
+    async fn without_notifiers_nobody_can_give_up() {
+        let waited = tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            chain(vec![]).dismissed(),
+        )
+        .await;
+
+        assert!(waited.is_err());
     }
 }

@@ -54,10 +54,10 @@ jobs:
         run: cargo about generate about.txt.hbs -o license.txt
 
       - name: Run build
-        run: cargo build --workspace --all-features
+        run: cargo build --workspace --exclude c9s-egui --all-features
 
       - name: Run Rust tests
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude c9s-egui
 
       - name: Run keyring example
         run: cargo run -p keyring --example example
@@ -69,4 +69,34 @@ jobs:
         run: cargo deny check licenses
 
       - name: Run cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude c9s-egui --all-targets -- -D warnings
+
+  # The GUI (egui) is checked on its own, on every OS; the CLI checks above leave it out.
+  gui:
+    name: GUI checks for ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+          - name: Mac
+            os: macos-latest
+          - name: Windows
+            os: windows-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        uses: ./.github/actions/install-dependencies
+
+      - name: Run GUI tests
+        run: cargo test -p c9s-egui
+
+      - name: Run cargo clippy
+        run: cargo clippy -p c9s-egui --all-targets -- -D warnings

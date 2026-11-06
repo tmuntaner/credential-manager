@@ -75,6 +75,12 @@ impl KeyEvent {
     pub fn is_error(&self) -> bool {
         matches!(self, KeyEvent::PinAuthBlocked | KeyEvent::PinBlocked)
     }
+
+    /// The flow waits for the user to act on the key, and the user may give up instead (see
+    /// [`SecurityKeyUi::cancelled`]).
+    pub fn awaits_user(&self) -> bool {
+        matches!(self, KeyEvent::TouchRequired | KeyEvent::SelectDevice)
+    }
 }
 
 impl fmt::Display for KeyEvent {
@@ -114,6 +120,17 @@ pub trait SecurityKeyUi: Send + Sync {
 
     /// Gives a message to the user from the security key.
     async fn notify(&self, event: KeyEvent);
+
+    /// Resolves when the user gives up waiting for the key, e.g., by cancelling the touch message. The
+    /// operation is then canceled on the key and fails with [`WebauthnError::Cancelled`](crate::WebauthnError).
+    ///
+    /// It must resolve only after the user acts on a notice shown for this operation, and never for earlier or
+    /// unrelated notices. It may be polled before any notice is shown.
+    ///
+    /// The default never resolves: the user cannot cancel, and the operation ends with the key's own timeout.
+    async fn cancelled(&self) {
+        std::future::pending::<()>().await
+    }
 }
 
 /// Default `SecurityKeyUi` implementation.
@@ -177,5 +194,13 @@ mod tests {
         assert!(KeyEvent::PinAuthBlocked.is_error());
         assert!(!KeyEvent::TouchRequired.is_error());
         assert!(!KeyEvent::SelectDevice.is_error());
+    }
+
+    #[test]
+    fn only_the_waits_can_be_cancelled() {
+        assert!(KeyEvent::TouchRequired.awaits_user());
+        assert!(KeyEvent::SelectDevice.awaits_user());
+        assert!(!KeyEvent::PinBlocked.awaits_user());
+        assert!(!KeyEvent::PinAuthBlocked.awaits_user());
     }
 }

@@ -16,9 +16,50 @@ pub enum ConfigError {
 }
 
 /// Where the settings are kept.
+#[cfg_attr(test, mockall::automock)]
 pub trait ConfigStore {
     /// Nothing stored yet is the same as empty settings.
     fn load(&self) -> Result<AppConfig, ConfigError>;
 
     fn save(&self, config: &AppConfig) -> Result<(), ConfigError>;
+}
+
+/// An in-memory store for tests: counts the saves and can refuse them.
+#[cfg(test)]
+pub(crate) mod memory {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+
+    #[derive(Default)]
+    pub(crate) struct MemoryStore {
+        saved: RefCell<Option<AppConfig>>,
+        saves: Cell<usize>,
+        fail_save: Cell<bool>,
+    }
+
+    impl MemoryStore {
+        pub(crate) fn saves(&self) -> usize {
+            self.saves.get()
+        }
+
+        /// Makes every following save fail.
+        pub(crate) fn fail_saves(&self) {
+            self.fail_save.set(true);
+        }
+    }
+
+    impl ConfigStore for &MemoryStore {
+        fn load(&self) -> Result<AppConfig, ConfigError> {
+            Ok(self.saved.borrow().clone().unwrap_or_default())
+        }
+
+        fn save(&self, config: &AppConfig) -> Result<(), ConfigError> {
+            if self.fail_save.get() {
+                return Err(ConfigError::Failed("disk full".into()));
+            }
+            *self.saved.borrow_mut() = Some(config.clone());
+            self.saves.set(self.saves.get() + 1);
+            Ok(())
+        }
+    }
 }
