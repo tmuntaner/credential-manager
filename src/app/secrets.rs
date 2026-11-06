@@ -22,8 +22,7 @@ pub struct SecretStores {
     pub idp: OptionalStore,
     /// Holds the issued credentials.
     pub cache: OptionalStore,
-    /// Holds the authentik sessions. Only set when they are encrypted: with YubiKey wrapping and
-    /// `wrap-cached` enabled.
+    /// Holds the idp sessions. Only set when a security key is enrolled.
     pub session: OptionalStore,
 }
 
@@ -104,15 +103,13 @@ pub fn create_secret_stores<U: UserInteraction + 'static, N: Notifier + 'static>
             };
 
             // creates the session store to cache the user's session in the idp.
-            let session_store: OptionalStore = wrap_cached.then(|| {
-                Box::new(
-                    crate::domain::services::wrapping_secret_store::WrappingSecretStore::with_policy(
-                        KeyringSecretStore::new(),
-                        wrapper,
-                        crate::domain::services::wrapping_secret_store::WrappingPolicy::Strict,
-                    ),
-                ) as Box<dyn SecretStore>
-            });
+            let session_store: OptionalStore = Some(Box::new(
+                crate::domain::services::wrapping_secret_store::WrappingSecretStore::with_policy(
+                    KeyringSecretStore::new(),
+                    wrapper,
+                    crate::domain::services::wrapping_secret_store::WrappingPolicy::Strict,
+                ),
+            ));
 
             return Ok(SecretStores {
                 idp: Some(Box::new(idp_store)),
@@ -217,7 +214,8 @@ mod tests {
             .unwrap();
         assert!(idp_store.is_some());
         assert!(cache_store.is_some());
-        assert!(session_store.is_none());
+        // Sessions are always cached (encrypted) when a YubiKey is enrolled.
+        assert!(session_store.is_some());
 
         // Configured: wrap_cached_secrets = true
         settings.set_wrap_cached_secrets(true);

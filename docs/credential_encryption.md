@@ -13,6 +13,12 @@ This means that secrets backed by this encryption can only be used with the enro
 If the security key is not present, `c9s` will not be able to decrypt the secret,
 and the user will need to enter the credentials again.
 
+## What is encrypted
+
+- Once a security key is enrolled, it will always encrypt the IdP password and session.
+- If there is no security key enrolled, sessions will not be persisted.
+- Users can opt-in to encrypt c9s issued credentials via `c9s config global yubikey wrap-cached --enabled true`.
+
 ## Security Key Loss
 
 `c9s` considers credentials saved to the OS keychain to be a convenience and not essential.
