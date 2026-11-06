@@ -2,7 +2,7 @@
 //! "Optional" in words.
 
 use super::SettingsAction;
-use crate::app::Route;
+use crate::app::{Route, Section};
 use crate::ui::card::card_header;
 use c9s::app::settings::SettingsView;
 use eframe::egui::{RichText, Ui};
@@ -23,13 +23,23 @@ pub fn ui(ui: &mut Ui, view: &SettingsView) -> Option<SettingsAction> {
 
     let steps = [
         (
-            Route::SettingsIdp,
+            Route::Settings(Section::Idp),
             "Add your identity provider",
             c.idp,
             false,
         ),
-        (Route::SettingsAws, "Add an AWS account", c.aws, false),
-        (Route::SettingsRancher, "Add a Rancher", c.rancher, true),
+        (
+            Route::Settings(Section::Aws),
+            "Add an AWS account",
+            c.aws,
+            false,
+        ),
+        (
+            Route::Settings(Section::Rancher),
+            "Add a Rancher",
+            c.rancher,
+            true,
+        ),
     ];
     let mut action = None;
 

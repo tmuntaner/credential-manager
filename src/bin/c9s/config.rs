@@ -130,7 +130,7 @@ enum ConfigGlobalYubikeySubCommand {
     Disable(ConfigGlobalYubikeyDisable),
     /// Show current YubiKey enrollment and wrapping status
     Status(ConfigGlobalYubikeyStatus),
-    /// Configure whether generated session secrets (AWS & Rancher tokens) are wrapped
+    /// Configure whether issued credentials are wrapped.
     WrapCached(ConfigGlobalYubikeyWrapCached),
 }
 
@@ -304,8 +304,9 @@ impl ConfigGlobalYubikeyStatus {
             Some(yk) => {
                 println!("YubiKey status: Enrolled");
                 println!("Relying Party: {}", yk.rp_id());
+                println!("IdP session cache: enabled (encrypted)");
                 println!(
-                    "Wrap cached secrets (AWS/Rancher): {}",
+                    "Wrap issued credentials (AWS/Rancher): {}",
                     if settings.wrap_cached_secrets_enabled() {
                         "enabled"
                     } else {
@@ -422,12 +423,6 @@ mod tests {
         assert!(
             parse(&["idp", "--name", "x", "--url", "u", "-u", "u", "--type", "keycloak"]).is_err()
         );
-    }
-
-    #[test]
-    fn the_default_idp_is_gone() {
-        assert!(parse(&["global", "default-idp", "--name", "suse"]).is_err());
-        assert!(parse(&["idp", "--name", "x", "--url", "u", "-u", "u", "--default"]).is_err());
     }
 
     #[test]

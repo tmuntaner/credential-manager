@@ -213,7 +213,7 @@ mod tests {
         assert_eq!(saved.message, "work removed.");
         assert_eq!(
             saved.focus,
-            Some(FocusTarget::Add(crate::app::Route::SettingsIdp))
+            Some(FocusTarget::Add(crate::app::Section::Idp))
         );
     }
 

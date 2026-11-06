@@ -2,7 +2,7 @@
 
 use super::dialogs::{Removal, RemoveDialog};
 use super::{signs_in_with, SettingsAction};
-use crate::app::{Focus, FocusTarget, Route};
+use crate::app::{Focus, FocusTarget, Section};
 use crate::ui::card::{card, card_button, card_header};
 use c9s::app::settings::{RancherSummary, SettingsView};
 use eframe::egui::Ui;
@@ -27,7 +27,7 @@ pub fn ui(ui: &mut Ui, view: &SettingsView, focus: &mut Focus) -> Option<Setting
     }
 
     let add = ui.button("Add Rancher");
-    focus.apply(FocusTarget::Add(Route::SettingsRancher), &add);
+    focus.apply(FocusTarget::Add(Section::Rancher), &add);
     if add.clicked() {
         action = Some(SettingsAction::AddRancher);
     }

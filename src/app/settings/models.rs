@@ -140,6 +140,12 @@ pub struct SettingsView {
     pub rancher_hosts: Vec<RancherSummary>,
     pub use_keyring: bool,
     pub security_key_supported: bool,
+    /// Whether a security key is enrolled to encrypt secrets.
+    pub security_key_enrolled: bool,
+    /// The relying party id of the enrolled security key.
+    pub security_key_rp_id: Option<String>,
+    /// Whether issued credentials (AWS/Rancher) are encrypted too, not only the IdP password and session.
+    pub wrap_cached: bool,
     /// Plain `http://localhost` is accepted (debug builds only).
     pub insecure_localhost_allowed: bool, // todo: don't add this setting to production builds?
     pub checklist: Checklist,

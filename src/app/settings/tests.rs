@@ -3,8 +3,11 @@
 use super::*;
 use crate::domain::models::login::{AwsOverrides, RancherOverrides};
 use crate::domain::models::settings::AwsAppType;
+use crate::domain::models::settings::YubikeyConfig;
 use crate::domain::ports::login::LoginResolver;
+use crate::domain::ports::secret_wrapper::WrapError;
 use crate::domain::services::login_resolver::LoginResolverService;
+use crate::domain::services::settings_editor::SettingsService;
 use crate::outbound::config::config_store::ConfigFileAdapter;
 
 const APP_URL: &str = "https://id.example.com/application/saml/aws/sso/binding/init/";
@@ -474,4 +477,74 @@ fn the_kind_of_error_picks_the_field() {
     assert!(gone.fields.is_empty() && gone.message.is_some());
     let broken = edit_error(E::WouldBreak { urls: vec![key()] }, Form::Idp);
     assert!(broken.message.unwrap().contains("Nothing was saved"));
+}
+
+fn yubikey() -> YubikeyConfig {
+    YubikeyConfig::new(&[1, 2, 3], "example.test", &[7; 32])
+}
+
+#[test]
+fn no_security_key_is_enrolled_at_first() {
+    let (_dir, page) = page();
+
+    let view = page.view().unwrap();
+    assert!(!view.security_key_enrolled);
+    assert_eq!(view.security_key_rp_id, None);
+    assert!(!view.wrap_cached);
+}
+
+#[test]
+fn a_security_key_is_saved_shown_and_removed() {
+    let (dir, page) = page();
+
+    let view = page.set_security_key(Some(yubikey())).unwrap();
+    assert!(view.security_key_enrolled);
+    assert_eq!(view.security_key_rp_id.as_deref(), Some("example.test"));
+    assert_eq!(page.view().unwrap(), view);
+
+    // The CLI reads what the page wrote.
+    let settings = SettingsService::new(store(&dir)).load().unwrap();
+    assert_eq!(settings.yubikey_config(), Some(&yubikey()));
+
+    let view = page.set_security_key(None).unwrap();
+    assert!(!view.security_key_enrolled);
+    assert_eq!(view.security_key_rp_id, None);
+    assert!(SettingsService::new(store(&dir))
+        .load()
+        .unwrap()
+        .yubikey_config()
+        .is_none());
+}
+
+#[test]
+fn wrapping_issued_credentials_is_saved_and_found_by_the_cli() {
+    let (dir, page) = page();
+
+    assert!(page.set_wrap_cached(true).unwrap().wrap_cached);
+    assert!(SettingsService::new(store(&dir))
+        .load()
+        .unwrap()
+        .wrap_cached_secrets_enabled());
+
+    assert!(!page.set_wrap_cached(false).unwrap().wrap_cached);
+}
+
+#[test]
+fn a_failed_save_of_the_security_key_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    // The settings file's folder is a file, so nothing can be written.
+    let blocker = dir.path().join("c9s");
+    std::fs::write(&blocker, "x").unwrap();
+    let page = SettingsPage::new(store(&dir));
+
+    assert!(page.set_security_key(Some(yubikey())).is_err());
+    assert!(page.set_wrap_cached(true).is_err());
+}
+
+#[test]
+fn a_missing_security_key_is_explained() {
+    let error = security_key::wrap_error(WrapError::DeviceNotPresent);
+    assert!(error.sentence().contains("Plug it in"));
+    let error = security_key::wrap_error(WrapError::Cancelled);
+    assert!(error.sentence().contains("cancelled"));
 }

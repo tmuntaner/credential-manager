@@ -1,13 +1,12 @@
-//! Identity providers: the list, with Edit and Remove, and the keyring choice.
+//! Identity providers: the list, with Edit and Remove.
 
 use super::dialogs::{Removal, RemoveDialog};
 use super::SettingsAction;
-use crate::app::{Focus, FocusTarget, Route};
+use crate::app::{Focus, FocusTarget, Section};
 use crate::ui::card::{card, card_button, card_header};
-use crate::ui::heading;
 use crate::ui::select::mfa_label;
 use c9s::app::settings::{IdpSummary, SettingsView};
-use eframe::egui::{RichText, Ui};
+use eframe::egui::Ui;
 
 pub fn ui(ui: &mut Ui, view: &SettingsView, focus: &mut Focus) -> Option<SettingsAction> {
     card_header(
@@ -29,30 +28,11 @@ pub fn ui(ui: &mut Ui, view: &SettingsView, focus: &mut Focus) -> Option<Setting
     }
 
     let add = ui.button("Add identity provider");
-    focus.apply(FocusTarget::Add(Route::SettingsIdp), &add);
+    focus.apply(FocusTarget::Add(Section::Idp), &add);
     if add.clicked() {
         action = Some(SettingsAction::AddIdp);
     }
 
-    ui.add_space(16.0);
-    heading(ui, "Passwords");
-    let mut use_keyring = view.use_keyring;
-    if ui
-        .checkbox(
-            &mut use_keyring,
-            "Remember my password in the system keyring (recommended)",
-        )
-        .changed()
-    {
-        action = Some(SettingsAction::SetKeyring(use_keyring));
-    }
-
-    ui.label(
-        RichText::new(
-            "c9s asks for your password the first time and offers to keep it in your computer's secure storage. It is never saved in the settings file.",
-        )
-        .weak(),
-    );
     action
 }
 

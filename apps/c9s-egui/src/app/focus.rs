@@ -1,4 +1,4 @@
-use super::nav::Route;
+use super::nav::{Route, Section};
 use c9s::app::settings::AwsAppKey;
 use eframe::egui::Response;
 
@@ -8,7 +8,7 @@ pub enum FocusTarget {
     /// A navigation bar button.
     Nav(Route),
     /// A button to add something
-    Add(Route),
+    Add(Section),
     /// The Edit button for an identity provider with the name of the provider.
     Idp(String),
     /// The Edit button for an AWS app with the name of the app.
@@ -55,7 +55,7 @@ mod tests {
         focus.set(FocusTarget::Idp("work".into()));
 
         assert!(!focus.take(&FocusTarget::Idp("lab".into())));
-        assert!(!focus.take(&FocusTarget::Add(Route::SettingsIdp)));
+        assert!(!focus.take(&FocusTarget::Add(Section::Idp)));
         assert!(focus.take(&FocusTarget::Idp("work".into())));
         assert!(!focus.take(&FocusTarget::Idp("work".into())));
     }
@@ -63,13 +63,13 @@ mod tests {
     #[test]
     fn a_later_target_replaces_the_earlier() {
         let mut focus = Focus::default();
-        focus.set(FocusTarget::Nav(Route::Home));
+        focus.set(FocusTarget::Nav(Route::Setup));
         focus.set(FocusTarget::AwsApp(AwsAppKey {
             app_url: "https://a".into(),
             kind: AwsAppKind::Aws,
         }));
 
-        assert!(!focus.take(&FocusTarget::Nav(Route::Home)));
+        assert!(!focus.take(&FocusTarget::Nav(Route::Setup)));
         assert!(focus.take(&FocusTarget::AwsApp(AwsAppKey {
             app_url: "https://a".into(),
             kind: AwsAppKind::Aws,

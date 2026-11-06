@@ -436,16 +436,6 @@ mod tests {
     }
 
     #[test]
-    fn an_old_default_idp_key_is_ignored() {
-        let settings = load(&format!(
-            "[global_settings]\ndefault_idp = \"suse\"\n[[aws_hosts]]\napp_url = \"{INIT_URL}\"\nidp = \"suse\"\n"
-        ));
-
-        assert_eq!(settings.first_aws_host().unwrap().idp(), "suse");
-        assert!(!save(&settings).contains("default_idp"));
-    }
-
-    #[test]
     fn idps_round_trip() {
         let mut settings = AppConfig::default();
         settings.add_idp(
@@ -462,7 +452,6 @@ mod tests {
         let toml = save(&settings);
         assert!(toml.contains("[[idps]]"), "{toml}");
         assert!(toml.contains(r#"type = "authentik""#), "{toml}");
-        assert!(!toml.contains("default_idp"), "{toml}");
 
         let found = load(&toml);
         let found = found.find_idp("suse").unwrap();

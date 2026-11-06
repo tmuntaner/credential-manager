@@ -33,8 +33,8 @@ This is not supported on Windows.
 
 - By default, the derived key is cached in the background daemon (see [Background Daemon](docs/daemon.md)) for 15 minutes of activity, reducing physical touch fatigue while maintaining strict local process isolation.
 - When the daemon is disabled or unreachable, `c9s` falls back to per-process derivation, requiring a physical touch per invocation.
-- Once a YubiKey is enrolled, it will always wrap IdP credentials.
-- If you want to wrap other secrets, you can. It will just require one physical touch per invocation.
+- Once a YubiKey is enrolled, it will always wrap the IdP password and the IdP session.
+- Optionally, you can also wrap issued credentials (AWS/Rancher). It will just require one physical touch per invocation.
 
 **Daemon Management Commands:**
 
@@ -61,22 +61,21 @@ c9s config global yubikey enroll [--rp-id localhost]
 c9s config global yubikey status
 ```
 
-**Configure Protection for Cached Session Secrets (non IdP secrets):**
+**Configure Protection for Issued Credentials (AWS/Rancher):**
 
 ```bash
 c9s config global yubikey wrap-cached --enabled true
 ```
 
-With this enabled, c9s will also keep the authentik session (its cookies) in the keyring.
-It's encrypted like any other cached secret.
-When you log in within 8 hours, `c9s` will reuse it and skip the second factor.
-Without it enabled, it will not store the user's session.
+With this enabled, c9s encrypts its issued AWS/Rancher credentials in the keyring.
 
 **Disable YubiKey Wrapping:**
 
 ```bash
 c9s config global yubikey disable
 ```
+
+The desktop app's Security page offers the same options: enroll, disable, and encrypting issued credentials.
 
 ### Identity Providers
 
