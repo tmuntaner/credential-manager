@@ -1,5 +1,5 @@
 use super::{DialogOutcome, Saved};
-use crate::app::{FocusTarget, Route};
+use crate::app::{FocusTarget, Section};
 use crate::ui::a11y;
 use crate::ui::dialog::modal;
 use crate::ui::errors::error_label;
@@ -14,12 +14,16 @@ pub enum Removal {
     Idp(String),
     AwsApp(AwsAppKey),
     Rancher(String),
+    /// Stops using the enrolled security key.
+    SecurityKey,
 }
 
 pub struct RemoveDialog {
     removal: Removal,
     title: String,
     description: String,
+    /// The label of the button that confirms.
+    confirm: String,
     /// A description of what was removed.
     done_description: String,
     error: Option<String>,
@@ -37,10 +41,17 @@ impl RemoveDialog {
             removal,
             title: title.into(),
             description: description.into(),
+            confirm: "Remove".to_string(),
             done_description: done.into(),
             error: None,
             first_frame: true,
         }
+    }
+
+    /// Names the confirming button after what it does (default "Remove").
+    pub fn confirm_with(mut self, label: impl Into<String>) -> Self {
+        self.confirm = label.into();
+        self
     }
 
     pub fn error(&self) -> Option<&str> {
@@ -50,9 +61,10 @@ impl RemoveDialog {
     /// Remove the entry and gives focus to the add button of its add section.
     pub fn submit<S: ConfigStore>(&mut self, page: &SettingsPage<S>) -> Result<Saved, String> {
         let (result, section) = match &self.removal {
-            Removal::Idp(name) => (page.remove_idp(name), Route::SettingsIdp),
-            Removal::AwsApp(key) => (page.remove_aws_app(key.clone()), Route::SettingsAws),
-            Removal::Rancher(url) => (page.remove_rancher(url), Route::SettingsRancher),
+            Removal::Idp(name) => (page.remove_idp(name), Section::Idp),
+            Removal::AwsApp(key) => (page.remove_aws_app(key.clone()), Section::Aws),
+            Removal::Rancher(url) => (page.remove_rancher(url), Section::Rancher),
+            Removal::SecurityKey => (page.set_security_key(None), Section::Security),
         };
 
         match result {
@@ -86,8 +98,10 @@ impl RemoveDialog {
             ui.separator();
 
             ui.horizontal_wrapped(|ui| {
-                // if the "Remove" button was clicked, set the outcome as submit.
-                if self.error.is_none() && ui.button(RichText::new("Remove").strong()).clicked() {
+                // if the confirming button was clicked, set the outcome as submit.
+                if self.error.is_none()
+                    && ui.button(RichText::new(&self.confirm).strong()).clicked()
+                {
                     outcome = DialogOutcome::Submit;
                 }
 

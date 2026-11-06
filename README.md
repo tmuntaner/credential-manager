@@ -75,6 +75,8 @@ With this enabled, c9s encrypts its issued AWS/Rancher credentials in the keyrin
 c9s config global yubikey disable
 ```
 
+The desktop app's Security page offers the same options: enroll, disable, and encrypting issued credentials.
+
 ### Identity Providers
 
 Every target (Rancher, AWS) logs in through an identity provider.

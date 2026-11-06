@@ -3,8 +3,11 @@
 //! Each test uses its own settings file, and checks the file the way the CLI reads it.
 
 use c9s::app::prompts::WindowInteraction;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use c9s::app::settings::SetupError;
 use c9s::app::settings::{AwsAppForm, AwsAppKind, IdpForm, MfaChoice, SettingsPage};
 use c9s::domain::models::login::{AwsOverrides, RancherOverrides};
+use c9s::domain::models::settings::YubikeyConfig;
 use c9s::domain::models::user_interaction::SecretPrompt;
 use c9s::domain::ports::config::ConfigStore;
 use c9s::domain::ports::login::LoginResolver;
@@ -12,10 +15,14 @@ use c9s::domain::ports::user_interaction::UserInteraction;
 use c9s::domain::services::login_resolver::LoginResolverService;
 use c9s::outbound::config::config_store::ConfigFileAdapter;
 use c9s_egui::app::C9sApp;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use c9s_egui::Enroller;
 use eframe::egui::accesskit::Role;
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use std::path::PathBuf;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const APP_URL: &str = "https://id.example.com/application/saml/aws/sso/binding/init";
@@ -341,5 +348,151 @@ fn a_cancelled_question_ends_the_flow_with_an_error() {
     });
     assert!(harness
         .query_by_label("Credentials are not available yet")
+        .is_none());
+}
+
+const WRAP_LABEL: &str = "Encrypt issued credentials (AWS/Rancher)";
+
+fn yubikey() -> YubikeyConfig {
+    YubikeyConfig::new(&[1, 2, 3], "example.test", &[7; 32])
+}
+
+/// The enroller of a test: no key is touched.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn enroller(result: Result<YubikeyConfig, SetupError>) -> Enroller {
+    Arc::new(move |_rp_id, _bridge| result.clone())
+}
+
+fn wrap_checkbox<'a>(harness: &'a Harness<'_, Option<C9sApp>>) -> egui_kittest::Node<'a> {
+    harness.get_by_role_and_label(Role::CheckBox, WRAP_LABEL)
+}
+
+#[test]
+fn the_keyring_choice_is_on_the_security_page() {
+    let window = Window::new();
+    let mut harness = window.open();
+
+    click_button(&mut harness, "Security");
+    harness
+        .get_by_role_and_label(
+            Role::CheckBox,
+            "Remember my password in the system keyring (recommended)",
+        )
+        .click();
+    harness.run();
+
+    assert!(!window.store().load().unwrap().keyring_enabled());
+}
+
+#[test]
+fn issued_credentials_can_only_be_encrypted_with_a_key_enrolled() {
+    let window = Window::new();
+    let mut harness = window.open();
+
+    click_button(&mut harness, "Security");
+    harness.get_by_label("Status: Not enrolled");
+    assert!(wrap_checkbox(&harness).accesskit_node().is_disabled());
+    assert!(harness
+        .query_by_role_and_label(Role::Button, "Disable security key")
+        .is_none());
+}
+
+#[test]
+fn issued_credentials_are_encrypted_when_chosen() {
+    let window = Window::new();
+    SettingsPage::new(window.store())
+        .set_security_key(Some(yubikey()))
+        .unwrap();
+    let mut harness = window.open();
+
+    click_button(&mut harness, "Security");
+    harness.get_by_label("Status: Enrolled (example.test)");
+    assert!(!wrap_checkbox(&harness).accesskit_node().is_disabled());
+    wrap_checkbox(&harness).click();
+    harness.run();
+
+    assert!(window.store().load().unwrap().wrap_cached_secrets_enabled());
+}
+
+#[test]
+fn a_security_key_is_disabled_after_asking() {
+    let window = Window::new();
+    SettingsPage::new(window.store())
+        .set_security_key(Some(yubikey()))
+        .unwrap();
+    let mut harness = window.open();
+
+    click_button(&mut harness, "Security");
+    click_button(&mut harness, "Disable security key");
+    harness.get_by_label("Disable the security key?");
+    // Cancel leaves it as it was.
+    click_button(&mut harness, "Cancel");
+    assert!(window.store().load().unwrap().yubikey_config().is_some());
+
+    click_button(&mut harness, "Disable security key");
+    click_button(&mut harness, "Disable");
+    harness.get_by_label("Security key disabled.");
+    harness.get_by_label("Status: Not enrolled");
+    assert!(window.store().load().unwrap().yubikey_config().is_none());
+}
+
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_security_key_is_enrolled_and_found_by_the_cli() {
+    let window = Window::new();
+    let mut harness = window.open();
+    harness
+        .state_mut()
+        .as_mut()
+        .unwrap()
+        .set_enroller(enroller(Ok(yubikey())));
+
+    click_button(&mut harness, "Security");
+    click_button(&mut harness, "Enroll security key");
+    wait_until(&mut harness, "the end of the enrolling", |h| {
+        h.query_by_label("Security key enrolled.").is_some()
+    });
+
+    harness.get_by_label("Status: Enrolled (example.test)");
+    assert_eq!(
+        window.store().load().unwrap().yubikey_config(),
+        Some(&yubikey())
+    );
+}
+
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_failed_enrolling_is_shown_and_nothing_is_written() {
+    let window = Window::new();
+    let mut harness = window.open();
+    harness
+        .state_mut()
+        .as_mut()
+        .unwrap()
+        .set_enroller(enroller(Err(SetupError::general(
+            "No security key was found. Plug it in and try again.",
+        ))));
+
+    click_button(&mut harness, "Security");
+    click_button(&mut harness, "Enroll security key");
+    wait_until(&mut harness, "the end of the enrolling", |h| {
+        h.query_by_label_contains("No security key was found")
+            .is_some()
+    });
+
+    harness.get_by_label("Status: Not enrolled");
+    assert!(!window.path().exists());
+}
+
+#[test]
+fn a_set_up_window_starts_on_credentials_without_the_checklist() {
+    let window = Window::new();
+    window.with_idp_and_aws();
+    let harness = window.open();
+
+    harness.get_by_label("Nothing here yet.");
+    assert!(harness.query_by_label("Get started").is_none());
+    assert!(harness
+        .query_by_role_and_label(Role::Button, "Setup")
         .is_none());
 }

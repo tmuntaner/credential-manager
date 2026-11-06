@@ -1,5 +1,5 @@
 use crate::app::status::Status;
-use crate::app::{nav, style, Focus, Route, Shell};
+use crate::app::{nav, style, Focus, Route, Shell, SidebarState};
 use crate::prompts::{self, Bridge, Prompts};
 use crate::settings;
 use c9s::outbound::config::config_store::ConfigFileAdapter;
@@ -29,13 +29,13 @@ impl C9sApp {
         let (bridge, prompts) = prompts::connect(ctx);
 
         // create the settings state
-        let settings = settings::SettingsState::new(store);
+        let settings = settings::SettingsState::new(store, bridge.clone());
 
         let route = if settings.is_set_up() {
-            Route::SettingsIdp
+            Route::Credentials
         } else {
             // A first run starts on the checklist.
-            Route::Home
+            Route::Setup
         };
 
         Self {
@@ -46,6 +46,11 @@ impl C9sApp {
             bridge,
             prompts,
         }
+    }
+
+    /// Replaces how a security key is enrolled (for tests).
+    pub fn set_enroller(&mut self, enroller: settings::Enroller) {
+        self.settings.set_enroller(enroller);
     }
 
     /// The prompt bridge which asks the user questions.
@@ -69,15 +74,24 @@ impl C9sApp {
             ui.add_space(6.0);
             ui.label(RichText::new("Credential Manager").size(24.0).strong());
             ui.add_space(6.0);
-
-            // build the navigation bar
-            if let Some(route) = nav::bar(ui, self.route, &mut self.focus) {
-                event = Some(Event::Go(route));
-            }
-
-            // bottom padding
             ui.add_space(6.0);
         });
+
+        // build the navigation sidebar
+        let pending = self.settings.pending_sections();
+        let sidebar = SidebarState {
+            setup: !self.settings.is_set_up(),
+            pending: &pending,
+        };
+        Panel::left("nav")
+            .resizable(false)
+            .default_size(200.0)
+            .show(ui, |ui| {
+                ui.add_space(6.0);
+                if let Some(route) = nav::sidebar(ui, self.route, &mut self.focus, sidebar) {
+                    event = Some(Event::Go(route));
+                }
+            });
 
         Panel::bottom("footer").show(ui, |ui| self.footer(ui));
 
@@ -96,6 +110,8 @@ impl C9sApp {
         }
 
         let mut shell = Shell::new(&ctx, &mut self.route, &mut self.focus, &mut self.status);
+
+        self.settings.poll(&mut shell);
 
         // don't open a dialog if a prompt is showing.
         if !self.prompts.is_showing() {

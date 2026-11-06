@@ -72,6 +72,9 @@ pub(super) fn summarize(settings: &AppConfig) -> SettingsView {
         rancher_hosts,
         use_keyring: settings.keyring_enabled(),
         security_key_supported: SECURITY_KEY_SUPPORTED,
+        security_key_enrolled: settings.yubikey_config().is_some(),
+        security_key_rp_id: settings.yubikey_config().map(|yk| yk.rp_id().to_string()),
+        wrap_cached: settings.wrap_cached_secrets_enabled(),
         insecure_localhost_allowed: allow_insecure_localhost(),
     }
 }

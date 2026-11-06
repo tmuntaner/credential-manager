@@ -12,6 +12,7 @@ mod errors;
 mod idp;
 mod models;
 mod rancher;
+mod security_key;
 mod summary;
 #[cfg(test)]
 mod tests;
@@ -22,11 +23,17 @@ pub use models::{
 };
 
 use crate::domain::models::mfa::MfaSelection;
+use crate::domain::models::settings::YubikeyConfig;
 use crate::domain::ports::config::ConfigStore;
+use crate::domain::ports::notifier::Notifier;
+use crate::domain::ports::user_interaction::UserInteraction;
 use crate::domain::services::settings_editor::SettingsService;
 use crate::domain::services::settings_validation::check_name;
 use errors::{edit_error, Form};
+use std::sync::Arc;
 use summary::summarize;
+
+pub use security_key::{enroll_security_key, DEFAULT_RP_ID};
 
 /// Whether security keys can be used on this machine.
 const SECURITY_KEY_SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos"));
@@ -58,6 +65,39 @@ impl<S: ConfigStore> SettingsPage<S> {
             .map_err(|e| edit_error(e, Form::Action))?;
 
         Ok(summarize(&settings))
+    }
+}
+
+impl<S: ConfigStore> SettingsPage<S> {
+    /// Chooses whether issued credentials (AWS/Rancher) are encrypted with the security key.
+    pub fn set_wrap_cached(&self, enabled: bool) -> Result<SettingsView, SetupError> {
+        let settings = self
+            .settings
+            .set_wrap_cached_secrets(enabled)
+            .map_err(|e| edit_error(e, Form::Action))?;
+
+        Ok(summarize(&settings))
+    }
+
+    /// Saves the enrolled security key, or `None` to stop using it.
+    pub fn set_security_key(&self, key: Option<YubikeyConfig>) -> Result<SettingsView, SetupError> {
+        let settings = self
+            .settings
+            .set_yubikey(key)
+            .map_err(|e| edit_error(e, Form::Action))?;
+
+        Ok(summarize(&settings))
+    }
+
+    /// Enrolls a security key for `rp_id` and saves it.
+    pub async fn enroll_security_key<U: UserInteraction + 'static, N: Notifier + 'static>(
+        &self,
+        rp_id: &str,
+        interaction: Arc<U>,
+        notifier: Arc<N>,
+    ) -> Result<SettingsView, SetupError> {
+        let key = enroll_security_key(rp_id, interaction, notifier).await?;
+        self.set_security_key(Some(key))
     }
 }
 
