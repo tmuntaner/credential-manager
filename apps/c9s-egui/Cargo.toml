@@ -9,6 +9,7 @@ description = "Desktop app to get temporary credentials without the command line
 c9s = { path = "../.." }
 eframe = { version = "0.37", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "wayland", "x11"] }
 log = { workspace = true }
+rfd = "0.17.2"
 tokio = { workspace = true }
 zeroize = { workspace = true }
 

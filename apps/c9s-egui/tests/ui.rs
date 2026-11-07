@@ -5,7 +5,7 @@
 use c9s::app::prompts::WindowInteraction;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use c9s::app::settings::SetupError;
-use c9s::app::settings::{AwsAppForm, AwsAppKind, IdpForm, MfaChoice, SettingsPage};
+use c9s::app::settings::{AwsAppForm, AwsAppKind, ExportChoice, IdpForm, MfaChoice, SettingsPage};
 use c9s::domain::models::login::{AwsOverrides, RancherOverrides};
 use c9s::domain::models::settings::YubikeyConfig;
 use c9s::domain::models::user_interaction::SecretPrompt;
@@ -13,15 +13,16 @@ use c9s::domain::ports::config::ConfigStore;
 use c9s::domain::ports::login::LoginResolver;
 use c9s::domain::ports::user_interaction::UserInteraction;
 use c9s::domain::services::login_resolver::LoginResolverService;
+use c9s::outbound::config::bundle::TomlBundleCodec;
 use c9s::outbound::config::config_store::ConfigFileAdapter;
 use c9s_egui::app::C9sApp;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use c9s_egui::Enroller;
+use c9s_egui::FilePicker;
 use eframe::egui::accesskit::Role;
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use std::path::PathBuf;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -127,8 +128,9 @@ fn a_first_run_starts_on_the_checklist() {
 
     harness.get_by_label("Get started");
     harness.get_by_label("Add your identity provider");
-    assert_eq!(harness.get_all_by_label("(To do)").count(), 2);
-    harness.get_by_label("(Optional)");
+    // Only the identity provider is needed, the apps can come later.
+    assert_eq!(harness.get_all_by_label("(To do)").count(), 1);
+    assert_eq!(harness.get_all_by_label("(Optional)").count(), 2);
 }
 
 #[test]
@@ -495,4 +497,261 @@ fn a_set_up_window_starts_on_credentials_without_the_checklist() {
     assert!(harness
         .query_by_role_and_label(Role::Button, "Setup")
         .is_none());
+}
+
+/// The chooser of a test: the user always picks `path`, no dialog opens.
+fn chooser(path: Option<PathBuf>) -> FilePicker {
+    Arc::new(move |_pick| path.clone())
+}
+
+#[test]
+fn export_and_import_live_on_their_own_page() {
+    let window = Window::new();
+    window.with_idp_and_aws();
+    let mut harness = window.open();
+
+    click_button(&mut harness, "Identity providers");
+    assert!(harness.query_by_label("Export…").is_none());
+    assert!(harness.query_by_label("Import…").is_none());
+
+    click_button(&mut harness, "Import / Export");
+    harness.get_by_label("Export…");
+    harness.get_by_label("Import…");
+}
+
+#[test]
+fn identity_providers_are_exported_to_a_file_without_security_settings() {
+    let window = Window::new();
+    window.with_idp_and_aws();
+    SettingsPage::new(window.store())
+        .set_security_key(Some(yubikey()))
+        .unwrap();
+    let file = window.dir.path().join("share.toml");
+    let mut harness = window.open();
+    harness
+        .state_mut()
+        .as_mut()
+        .unwrap()
+        .set_chooser(chooser(Some(file.clone())));
+
+    click_button(&mut harness, "Import / Export");
+    click_button(&mut harness, "Export…");
+    harness.get_by_label("Export onboarding file");
+    click_button(&mut harness, "Choose file…");
+    wait_until(&mut harness, "the export", |h| {
+        h.query_by_label_contains("Exported to").is_some()
+    });
+
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("name = \"work\"") && text.contains("[[aws_hosts]]"));
+    assert!(!text.contains("yubikey") && !text.contains("global_settings"));
+    assert!(!text.contains("username") && !text.contains("me@example.com"));
+}
+
+#[test]
+fn an_app_that_is_unchecked_is_left_out_of_the_export() {
+    let window = Window::new();
+    window.with_idp_and_aws();
+    let file = window.dir.path().join("share.toml");
+    let mut harness = window.open();
+    harness
+        .state_mut()
+        .as_mut()
+        .unwrap()
+        .set_chooser(chooser(Some(file.clone())));
+
+    click_button(&mut harness, "Import / Export");
+    click_button(&mut harness, "Export…");
+    // Every app starts checked.
+    let app = format!("AWS: {APP_URL}");
+    harness.get_by_label_contains(&app).click();
+    harness.run();
+    click_button(&mut harness, "Choose file…");
+    wait_until(&mut harness, "the export", |h| {
+        h.query_by_label_contains("Exported to").is_some()
+    });
+
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("name = \"work\""));
+    assert!(!text.contains("[[aws_hosts]]"), "{text}");
+}
+
+#[test]
+fn an_export_needs_an_identity_provider_chosen() {
+    let window = Window::new();
+    window.with_idp_and_aws();
+    let file = window.dir.path().join("share.toml");
+    let mut harness = window.open();
+    harness
+        .state_mut()
+        .as_mut()
+        .unwrap()
+        .set_chooser(chooser(Some(file.clone())));
+
+    click_button(&mut harness, "Import / Export");
+    click_button(&mut harness, "Export…");
+    harness
+        .get_by_role_and_label(Role::CheckBox, "work")
+        .click();
+    harness.run();
+    click_button(&mut harness, "Choose file…");
+
+    // The dialog stays, and nothing is written.
+    harness.get_by_label("Export onboarding file");
+    assert!(!file.exists());
+}
+
+#[test]
+fn a_file_is_imported_and_found_by_the_cli() {
+    let sharer = Window::new();
+    sharer.with_idp_and_aws();
+    let file = sharer.dir.path().join("share.toml");
+    SettingsPage::new(sharer.store())
+        .export_choice_to_file(
+            &TomlBundleCodec,
+            &ExportChoice::new(vec!["work".into()], vec![APP_URL.into()], vec![]),
+            &file,
+        )
+        .unwrap();
+
+    let window = Window::new();
+    let mut harness = window.open();
+    harness
+        .state_mut()
+        .as_mut()
+        .unwrap()
+        .set_chooser(chooser(Some(file)));
+
+    click_button(&mut harness, "Import / Export");
+    click_button(&mut harness, "Import…");
+    // The file holds no user name: it is asked for.
+    wait_until(&mut harness, "the question for the user name", |h| {
+        h.query_by_label("Import onboarding file").is_some()
+    });
+    click_button(&mut harness, "Import");
+    harness.get_by_label_contains("Enter your user name.");
+    assert!(!window.path().exists());
+
+    type_into(&mut harness, "User name for work", "newcomer@example.com");
+    click_button(&mut harness, "Import");
+    harness.get_by_label("Imported: 2 added.");
+
+    let settings = window.store().load().unwrap();
+    let login = LoginResolverService::new(settings)
+        .resolve_aws(&AwsOverrides::default())
+        .unwrap();
+    // The user name is the importer's, not the one of the exporter.
+    assert_eq!(login.username, "newcomer@example.com");
+}
+
+#[test]
+fn a_file_that_is_not_an_export_is_refused_and_nothing_is_written() {
+    let window = Window::new();
+    let file = window.dir.path().join("junk.toml");
+    std::fs::write(&file, "[global_settings]\nuse_keyring = false\n").unwrap();
+    let mut harness = window.open();
+    harness
+        .state_mut()
+        .as_mut()
+        .unwrap()
+        .set_chooser(chooser(Some(file)));
+
+    click_button(&mut harness, "Import / Export");
+    click_button(&mut harness, "Import…");
+    wait_until(&mut harness, "the refusal", |h| {
+        h.query_by_label_contains("cannot be imported").is_some()
+    });
+
+    assert!(!window.path().exists());
+}
+
+#[test]
+fn closing_the_file_dialog_changes_nothing() {
+    let window = Window::new();
+    let mut harness = window.open();
+    harness
+        .state_mut()
+        .as_mut()
+        .unwrap()
+        .set_chooser(chooser(None));
+
+    click_button(&mut harness, "Import / Export");
+    click_button(&mut harness, "Import…");
+    for _ in 0..5 {
+        harness.run();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    assert!(!window.path().exists());
+    assert!(harness.query_by_label_contains("Imported").is_none());
+}
+
+#[test]
+fn a_first_run_is_set_up_by_importing_a_file() {
+    let sharer = Window::new();
+    sharer.with_idp_and_aws();
+    let file = sharer.dir.path().join("share.toml");
+    SettingsPage::new(sharer.store())
+        .export_choice_to_file(
+            &TomlBundleCodec,
+            &ExportChoice::new(vec!["work".into()], vec![APP_URL.into()], vec![]),
+            &file,
+        )
+        .unwrap();
+
+    let window = Window::new();
+    let mut harness = window.open();
+    harness
+        .state_mut()
+        .as_mut()
+        .unwrap()
+        .set_chooser(chooser(Some(file)));
+
+    harness.get_by_label("Get started");
+    click_button(&mut harness, "Import an onboarding file…");
+    wait_until(&mut harness, "the question for the user name", |h| {
+        h.query_by_label("Import onboarding file").is_some()
+    });
+    type_into(&mut harness, "User name for work", "newcomer@example.com");
+    click_button(&mut harness, "Import");
+
+    // Both steps are done, with no manual set up.
+    harness.get_by_label("You are set up");
+    assert_eq!(harness.get_all_by_label("(Done)").count(), 2);
+    assert!(harness
+        .query_by_role_and_label(Role::Button, "Import an onboarding file…")
+        .is_none());
+
+    // The way out is next, and leaves the checklist.
+    assert!(harness
+        .get_by_role_and_label(Role::Button, "Finish setup")
+        .is_focused());
+    click_button(&mut harness, "Finish setup");
+    harness.get_by_label("Nothing here yet.");
+    assert!(harness
+        .query_by_role_and_label(Role::Button, "Setup")
+        .is_none());
+}
+
+#[test]
+fn an_identity_provider_alone_is_enough_to_be_set_up() {
+    let window = Window::new();
+    SettingsPage::new(window.store())
+        .save_idp(IdpForm {
+            editing: false,
+            name: "work".into(),
+            url: "https://id.example.com".into(),
+            username: "me@example.com".into(),
+            mfa: MfaChoice::Totp,
+        })
+        .unwrap();
+    let harness = window.open();
+
+    // It starts on credentials, with no checklist in the way.
+    harness.get_by_label("Nothing here yet.");
+    assert!(harness
+        .query_by_role_and_label(Role::Button, "Setup")
+        .is_none());
+    // Nothing is marked as still to do in the sidebar: the apps are added when they are wanted.
+    assert!(harness.query_by_label("!").is_none());
 }

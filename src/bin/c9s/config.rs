@@ -1,14 +1,20 @@
 use crate::args::IdpTypeArg;
 use crate::utils::true_or_false;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use c9s::app::settings::{export_text, import_text, usernames_needed};
 use c9s::domain::models::mfa::MfaSelection;
 use c9s::domain::ports::config::ConfigStore;
 use c9s::domain::ports::notifier::Notifier;
 use c9s::domain::ports::user_interaction::UserInteraction;
 use c9s::domain::services::settings_editor::{
-    AwsAppInput, AwsAppKind, IdpInput, RancherInput, SaveAs, SettingsService,
+    AwsAppInput, AwsAppKind, IdpInput, ImportMode, ImportReport, RancherInput, SaveAs,
+    SettingsService,
 };
+use c9s::outbound::config::bundle::TomlBundleCodec;
 use clap::Parser;
+use std::collections::BTreeMap;
+use std::io::Read;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Parser)]
@@ -23,6 +29,36 @@ enum ConfigSubCommand {
     Aws(ConfigAws),
     Rancher(ConfigRancher),
     Global(ConfigGlobal),
+    Export(ConfigExport),
+    Import(ConfigImport),
+}
+
+#[derive(Parser)]
+/// Writes an onboarding file.
+struct ConfigExport {
+    /// The identity provider to export.
+    #[clap(long = "idp", required_unless_present = "all", conflicts_with = "all")]
+    idps: Vec<String>,
+    /// Exports every identity provider
+    #[clap(long)]
+    all: bool,
+    /// The file to write, the standard output when not given
+    #[clap(short, long)]
+    output: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+/// Imports an onboarding file.
+struct ConfigImport {
+    /// The onboarding file to read, `-` for the standard input
+    file: PathBuf,
+    /// Updates entries that are set up already, instead of keeping them
+    #[clap(long)]
+    overwrite: bool,
+    /// Your username at the new identity providers (an onboarding file holds none).
+    /// `--username me` for all of them or `--username corp=me` for one, repeat for more
+    #[clap(short, long = "username")]
+    usernames: Vec<String>,
 }
 
 #[derive(Parser)]
@@ -176,6 +212,8 @@ impl Config {
                 ConfigAwsSubCommand::Sso(val) => val.run(settings),
             },
             ConfigSubCommand::Rancher(val) => val.run(settings),
+            ConfigSubCommand::Export(val) => val.run(settings),
+            ConfigSubCommand::Import(val) => val.run(settings),
             ConfigSubCommand::Global(val) => match &val.sub_command {
                 ConfigGlobalSubCommand::UseKeyring(val) => val.run(settings),
                 ConfigGlobalSubCommand::Yubikey(val) => {
@@ -184,6 +222,91 @@ impl Config {
             },
         }
     }
+}
+
+impl ConfigExport {
+    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+        let names = if self.all {
+            settings
+                .load()?
+                .idps()
+                .iter()
+                .map(|idp| idp.name().to_string())
+                .collect()
+        } else {
+            self.idps.clone()
+        };
+
+        let text = export_text(settings, &TomlBundleCodec, &names)?;
+
+        match &self.output {
+            Some(path) => std::fs::write(path, text)
+                .with_context(|| format!("could not write {}", path.display()))?,
+            None => print!("{text}"),
+        }
+
+        Ok(())
+    }
+}
+
+impl ConfigImport {
+    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+        let text = if self.file.as_os_str() == "-" {
+            let mut text = String::new();
+            std::io::stdin().read_to_string(&mut text)?;
+            text
+        } else {
+            std::fs::read_to_string(&self.file)
+                .with_context(|| format!("could not read {}", self.file.display()))?
+        };
+
+        let mode = if self.overwrite {
+            ImportMode::Overwrite
+        } else {
+            ImportMode::SkipExisting
+        };
+
+        let usernames = self.usernames(&usernames_needed(settings, &TomlBundleCodec, &text)?);
+        let report = import_text(settings, &TomlBundleCodec, &text, mode, &usernames)?;
+        println!("{}", describe(&report));
+
+        Ok(())
+    }
+}
+
+impl ConfigImport {
+    /// The username for each of the `needed` identity providers.
+    /// The one named for it or the generic one for all.
+    fn usernames(&self, needed: &[String]) -> BTreeMap<String, String> {
+        let mut named = BTreeMap::new();
+        let mut for_all = None;
+
+        for given in &self.usernames {
+            match given.split_once('=') {
+                Some((idp, username)) => {
+                    named.insert(idp.to_string(), username.to_string());
+                }
+                None => for_all = Some(given.clone()),
+            }
+        }
+
+        needed
+            .iter()
+            .filter_map(|idp| {
+                let username = named.get(idp).cloned().or_else(|| for_all.clone())?;
+                Some((idp.clone(), username))
+            })
+            .collect()
+    }
+}
+
+fn describe(report: &ImportReport) -> String {
+    format!(
+        "Added {}, updated {}, kept {} that were set up already.",
+        report.added(),
+        report.overwritten(),
+        report.skipped()
+    )
 }
 
 impl ConfigIdp {

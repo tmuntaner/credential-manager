@@ -126,8 +126,10 @@ pub struct RancherSummary {
 /// The first run steps and whether each step is done.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Checklist {
+    /// Required: setting up at least one idp.
     pub idp: bool,
-    pub aws: bool, // todo: is aws optional here, it should be
+    /// Optional.
+    pub aws: bool,
     /// Optional.
     pub rancher: bool,
 }

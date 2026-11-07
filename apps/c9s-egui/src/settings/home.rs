@@ -1,15 +1,12 @@
-//! Home: the "Get started" checklist, with a link to each section. Each step says "Done", "To do" or
-//! "Optional" in words.
-
 use super::SettingsAction;
-use crate::app::{Route, Section};
+use crate::app::{Focus, FocusTarget, Route, Section};
 use crate::ui::card::card_header;
 use c9s::app::settings::SettingsView;
 use eframe::egui::{RichText, Ui};
 
-pub fn ui(ui: &mut Ui, view: &SettingsView) -> Option<SettingsAction> {
+pub fn ui(ui: &mut Ui, view: &SettingsView, focus: &mut Focus) -> Option<SettingsAction> {
     let c = view.checklist;
-    let title = if c.idp && c.aws {
+    let title = if c.idp {
         "You are set up"
     } else {
         "Get started"
@@ -18,7 +15,7 @@ pub fn ui(ui: &mut Ui, view: &SettingsView) -> Option<SettingsAction> {
     card_header(
         ui,
         title,
-        "Set up these steps once. Your settings are saved in the same file the c9s command uses.",
+        "Start by setting your identity provider, the rest can wait until you need it.",
     );
 
     let steps = [
@@ -32,7 +29,7 @@ pub fn ui(ui: &mut Ui, view: &SettingsView) -> Option<SettingsAction> {
             Route::Settings(Section::Aws),
             "Add an AWS account",
             c.aws,
-            false,
+            true,
         ),
         (
             Route::Settings(Section::Rancher),
@@ -56,6 +53,25 @@ pub fn ui(ui: &mut Ui, view: &SettingsView) -> Option<SettingsAction> {
             };
             ui.label(state);
         });
+    }
+
+    // the idp is required. If the user set that up, we can skip the rest.
+    if c.idp {
+        ui.add_space(12.0);
+        let finish = ui.button(RichText::new("Finish setup").strong());
+        focus.apply(FocusTarget::FinishOnBoarding, &finish);
+        if finish.clicked() {
+            action = Some(SettingsAction::Go(Route::Credentials));
+        }
+    }
+
+    // if there is no idp yet, allow the user to upload an onboarding file.
+    if !c.idp {
+        ui.add_space(12.0);
+        ui.label("Has a colleague sent you an onboarding file?");
+        if ui.button("Import an onboarding file…").clicked() {
+            action = Some(SettingsAction::Import);
+        }
     }
 
     action

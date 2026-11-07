@@ -1,0 +1,12 @@
+version = 1
+
+[[idps]]
+name = "corp"
+type = "authentik"
+url = "https://id.example.com"
+mfa = "totp"
+
+[[aws_sso_hosts]]
+app_url = "https://id.example.com/application/saml/aws-sso/sso/binding/init/"
+idp = "corp"
+region = "eu-west-1"

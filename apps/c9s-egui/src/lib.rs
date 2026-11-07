@@ -11,7 +11,7 @@ mod prompts;
 mod settings;
 mod ui;
 
-pub use settings::Enroller;
+pub use settings::{Enroller, FilePicker, Pick};
 
 use app::C9sApp;
 use c9s::outbound::config::config_store::ConfigFileAdapter;

@@ -16,6 +16,7 @@ mod security_key;
 mod summary;
 #[cfg(test)]
 mod tests;
+mod transfer;
 
 pub use models::{
     same_url, AwsAppForm, AwsAppKey, AwsAppKind, AwsAppSummary, Checklist, Field, FieldError,
@@ -34,6 +35,7 @@ use std::sync::Arc;
 use summary::summarize;
 
 pub use security_key::{enroll_security_key, DEFAULT_RP_ID};
+pub use transfer::{export_text, import_text, usernames_needed, ExportChoice, TransferError};
 
 /// Whether security keys can be used on this machine.
 const SECURITY_KEY_SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos"));

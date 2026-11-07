@@ -150,6 +150,9 @@ pub(super) fn edit_error(error: SettingsEditError, form: Form) -> SetupError {
             if used_by.len() == 1 { "it" } else { "them" },
             if used_by.len() == 1 { "it" } else { "them" },
         )),
+        SettingsEditError::UsernameNeeded(idp) => SetupError::general(format!(
+            "Enter the username to sign in with at {idp}."
+        )),
         SettingsEditError::UnknownApp(_) | SettingsEditError::Gone => gone(),
         SettingsEditError::AlreadyExists { key } => already_exists(form, &key),
         SettingsEditError::WouldBreak { urls } => SetupError::general(format!(

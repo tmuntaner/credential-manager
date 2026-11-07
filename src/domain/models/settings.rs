@@ -347,6 +347,97 @@ impl AppConfig {
     }
 }
 
+/// The onboarding bundle which can users can use to share settings.
+#[derive(Default, Clone)]
+pub struct SettingsBundle {
+    idps: Vec<Idp>,
+    aws_hosts: Vec<AwsHost>,
+    aws_sso_hosts: Vec<AwsSsoHost>,
+    rancher_hosts: Vec<RancherHost>,
+}
+
+impl SettingsBundle {
+    pub fn new(
+        idps: Vec<Idp>,
+        aws_hosts: Vec<AwsHost>,
+        aws_sso_hosts: Vec<AwsSsoHost>,
+        rancher_hosts: Vec<RancherHost>,
+    ) -> Self {
+        Self {
+            idps,
+            aws_hosts,
+            aws_sso_hosts,
+            rancher_hosts,
+        }
+    }
+
+    pub fn idps(&self) -> &[Idp] {
+        &self.idps
+    }
+
+    pub fn aws_hosts(&self) -> &[AwsHost] {
+        &self.aws_hosts
+    }
+
+    pub fn aws_sso_hosts(&self) -> &[AwsSsoHost] {
+        &self.aws_sso_hosts
+    }
+
+    pub fn rancher_hosts(&self) -> &[RancherHost] {
+        &self.rancher_hosts
+    }
+
+    /// Drops any apps that the user did not ask for.
+    pub fn retain_apps(&mut self, aws: &[String], rancher: &[String]) {
+        self.aws_hosts.retain(|h| aws.contains(&h.app_url));
+        self.aws_sso_hosts.retain(|h| aws.contains(&h.app_url));
+        self.rancher_hosts.retain(|h| rancher.contains(&h.url));
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.idps.is_empty()
+            && self.aws_hosts.is_empty()
+            && self.aws_sso_hosts.is_empty()
+            && self.rancher_hosts.is_empty()
+    }
+}
+
+impl AppConfig {
+    /// Exports the config as an onboarding bundle.
+    pub fn export(&self, names: &[String]) -> Result<SettingsBundle, SettingsError> {
+        let mut idps = Vec::new();
+        for name in names {
+            let idp = self.resolve_idp(name)?;
+            if !idps.iter().any(|i: &Idp| i.name == idp.name) {
+                idps.push(idp.with_username(String::new()));
+            }
+        }
+        let uses = |idp: &str| idps.iter().any(|i| i.name == idp);
+
+        Ok(SettingsBundle {
+            aws_hosts: self
+                .aws_hosts
+                .iter()
+                .filter(|h| uses(&h.idp))
+                .map(|h| h.without_username())
+                .collect(),
+            aws_sso_hosts: self
+                .aws_sso_hosts
+                .iter()
+                .filter(|h| uses(&h.idp))
+                .map(|h| h.without_username())
+                .collect(),
+            rancher_hosts: self
+                .rancher_hosts
+                .iter()
+                .filter(|h| uses(&h.idp))
+                .map(|h| h.without_username())
+                .collect(),
+            idps,
+        })
+    }
+}
+
 /// Compares two app URLs ignoring a trailing slash and the query string. This is the one way the settings
 /// decide that two URLs name the same app.
 pub fn same_app_url(a: &str, b: &str) -> bool {
@@ -359,6 +450,14 @@ pub fn same_app_url(a: &str, b: &str) -> bool {
 }
 
 impl AwsHost {
+    /// Returns the AWS without the username (personal info).
+    pub(crate) fn without_username(&self) -> Self {
+        Self {
+            username: None,
+            ..self.clone()
+        }
+    }
+
     pub fn mfa(&self) -> Option<MfaSelection> {
         self.mfa
     }
@@ -402,6 +501,14 @@ impl AwsHost {
 }
 
 impl AwsSsoHost {
+    /// Returns the AwsSsoHost without the username (personal info).
+    pub(crate) fn without_username(&self) -> Self {
+        Self {
+            username: None,
+            ..self.clone()
+        }
+    }
+
     pub fn mfa(&self) -> Option<MfaSelection> {
         self.mfa
     }
@@ -451,6 +558,14 @@ impl AwsSsoHost {
 }
 
 impl Idp {
+    /// Returns an idp without the username (personal info).
+    pub(crate) fn with_username(&self, username: impl Into<String>) -> Self {
+        Self {
+            username: username.into(),
+            ..self.clone()
+        }
+    }
+
     pub fn mfa(&self) -> Option<MfaSelection> {
         self.mfa
     }
@@ -495,6 +610,14 @@ impl Idp {
 }
 
 impl RancherHost {
+    /// Returns the rancher host without the username (personal info).
+    pub(crate) fn without_username(&self) -> Self {
+        Self {
+            username: None,
+            ..self.clone()
+        }
+    }
+
     pub fn mfa(&self) -> Option<MfaSelection> {
         self.mfa
     }
