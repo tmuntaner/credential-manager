@@ -5,7 +5,6 @@ use crate::ui::errors::{general_error, FormErrors};
 use crate::ui::field::{fixed_field, submitted, text_field, TextOptions};
 use crate::ui::select::{mfa_options, select};
 use c9s::app::settings::{Field, IdpForm, IdpSummary, MfaChoice, SettingsPage};
-use c9s::domain::ports::config::ConfigStore;
 use eframe::egui::Context;
 
 const FIELDS: [Field; 4] = [
@@ -65,7 +64,7 @@ impl IdpDialog {
         }
     }
 
-    pub fn submit<S: ConfigStore>(&mut self, page: &SettingsPage<S>) -> Result<Saved, String> {
+    pub fn submit(&mut self, page: &SettingsPage) -> Result<Saved, String> {
         let name = self.name.trim().to_string();
         match page.save_idp(self.form()) {
             Ok(view) => Ok(Saved {

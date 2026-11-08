@@ -1,13 +1,12 @@
 use super::errors::{edit_error, Errors, Form};
 use super::models::{AwsAppForm, AwsAppKey, AwsAppKind, Field, SettingsView, SetupError};
 use super::{check_idp, mfa_override, SettingsPage};
-use crate::domain::ports::config::ConfigStore;
 use crate::domain::services::settings_editor::{self, AwsAppInput, SaveAs};
 use crate::domain::services::settings_validation::{
     allow_insecure_localhost, check_optional_username, check_region, check_url,
 };
 
-impl<S: ConfigStore> SettingsPage<S> {
+impl SettingsPage {
     /// Adds or edits an AWS app.
     pub fn save_aws_app(&self, form: AwsAppForm) -> Result<SettingsView, SetupError> {
         let mut errors = Errors::default();

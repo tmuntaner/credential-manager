@@ -7,7 +7,6 @@ use crate::ui::field::{submitted, text_field, TextOptions};
 use c9s::app::settings::{
     same_url, AwsAppForm, AwsAppKey, AwsAppKind, AwsAppSummary, Field, SettingsPage, SettingsView,
 };
-use c9s::domain::ports::config::ConfigStore;
 use eframe::egui::{Context, RichText};
 
 const FIELDS: [Field; 5] = [
@@ -68,7 +67,7 @@ impl AwsDialog {
     }
 
     /// Takes the changes and generates a `Saved` result.
-    pub fn submit<S: ConfigStore>(&mut self, page: &SettingsPage<S>) -> Result<Saved, String> {
+    pub fn submit(&mut self, page: &SettingsPage) -> Result<Saved, String> {
         let form = self.form();
 
         match page.save_aws_app(form.clone()) {

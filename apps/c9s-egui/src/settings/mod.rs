@@ -15,7 +15,7 @@ use c9s::app::settings::{
     SettingsView, SetupError, DEFAULT_RP_ID,
 };
 use c9s::domain::models::settings::YubikeyConfig;
-use c9s::domain::services::settings_editor::{ImportMode, ImportReport};
+use c9s::domain::services::settings_editor::{ImportMode, ImportReport, SettingsService};
 use c9s::outbound::config::bundle::TomlBundleCodec;
 use c9s::outbound::config::config_store::ConfigFileAdapter;
 use dialogs::{
@@ -85,7 +85,7 @@ pub struct SettingsState {
     import_overwrite: bool,
     /// The file being imported while the user enters their user names.
     importing: Option<(PathBuf, ImportMode)>,
-    page: SettingsPage<ConfigFileAdapter>,
+    page: SettingsPage,
     /// The settings view, or error message
     view: Result<SettingsView, String>,
     dialog: Option<Dialog>,
@@ -95,7 +95,8 @@ pub struct SettingsState {
 
 impl SettingsState {
     pub fn new(store: ConfigFileAdapter, bridge: Bridge) -> Self {
-        let page = SettingsPage::new(store);
+        let settings = SettingsService::new(Arc::new(store));
+        let page = SettingsPage::new(settings);
         let view = page.view().map_err(|e| e.sentence());
         Self {
             bridge,

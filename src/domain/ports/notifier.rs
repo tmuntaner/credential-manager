@@ -42,3 +42,15 @@ pub trait Notifier: Send + Sync {
         std::future::pending::<()>().await
     }
 }
+
+/// Lets a shared `Arc<dyn Notifier>` be used wherever a sized port is expected.
+#[async_trait(?Send)]
+impl<T: Notifier + ?Sized> Notifier for std::sync::Arc<T> {
+    async fn notify(&self, notice: &UserNotice) -> Result<(), NotifyError> {
+        (**self).notify(notice).await
+    }
+
+    async fn dismissed(&self) {
+        (**self).dismissed().await
+    }
+}

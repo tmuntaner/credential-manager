@@ -47,9 +47,10 @@ fn rancher() -> RancherForm {
     }
 }
 
-fn page() -> (tempfile::TempDir, SettingsPage<ConfigFileAdapter>) {
+fn page() -> (tempfile::TempDir, SettingsPage) {
     let dir = tempfile::tempdir().unwrap();
-    let page = SettingsPage::new(store(&dir));
+    let settings = SettingsService::new(Arc::new(store(&dir)));
+    let page = SettingsPage::new(settings);
 
     (dir, page)
 }
@@ -98,7 +99,8 @@ fn what_is_set_up_here_is_found_by_the_cli() {
     assert_eq!(view.idps[0].used_by.len(), 2);
 
     // The CLI reads the same file: `c9s creds aws` and `c9s creds rancher` without flags.
-    let resolver = LoginResolverService::new(store(&dir).load().unwrap());
+    let resolver =
+        LoginResolverService::new(SettingsService::new(Arc::new(store(&dir))).load().unwrap());
     let login = resolver.resolve_aws(&AwsOverrides::default()).unwrap();
     assert_eq!(login.username, "me@work.example.com");
     assert_eq!(login.app_type, AwsAppType::Aws);
@@ -127,9 +129,10 @@ fn the_overrides_of_an_app_win_over_its_idp() {
     // "Ask" as an override is no override.
     assert_eq!(view.aws_apps[0].mfa, None);
 
-    let login = LoginResolverService::new(store(&dir).load().unwrap())
-        .resolve_aws(&AwsOverrides::default())
-        .unwrap();
+    let login =
+        LoginResolverService::new(SettingsService::new(Arc::new(store(&dir))).load().unwrap())
+            .resolve_aws(&AwsOverrides::default())
+            .unwrap();
     assert_eq!(login.username, "other");
     assert_eq!(login.idp_url, "https://lab.example.com");
 }
@@ -383,7 +386,8 @@ fn a_broken_settings_file_is_a_readable_error() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.toml");
     std::fs::write(&path, "this is [not toml").unwrap();
-    let page = SettingsPage::new(ConfigFileAdapter::at(path));
+    let settings = SettingsService::new(Arc::new(ConfigFileAdapter::at(path)));
+    let page = SettingsPage::new(settings);
 
     let error = page.save_idp(idp("work")).unwrap_err();
     assert!(error.message.unwrap().contains("settings file"));
@@ -405,8 +409,9 @@ fn removing_what_is_not_there_says_so() {
 fn a_failed_save_is_a_readable_error_with_its_cause() {
     use crate::domain::ports::config::memory::MemoryStore;
 
-    let store = MemoryStore::default();
-    let page = SettingsPage::new(&store);
+    let store = Arc::new(MemoryStore::default());
+    let settings = SettingsService::new(store.clone());
+    let page = SettingsPage::new(settings);
     page.save_idp(idp("work")).unwrap();
     store.fail_saves();
 
@@ -422,10 +427,8 @@ fn a_failed_save_is_a_readable_error_with_its_cause() {
 #[test]
 fn a_change_that_would_break_an_app_is_refused_and_not_saved() {
     use crate::domain::ports::config::memory::MemoryStore;
-    use crate::domain::services::settings_editor::SettingsService;
-
-    let store = MemoryStore::default();
-    let page = SettingsPage::new(&store);
+    let store = Arc::new(MemoryStore::default());
+    let page = SettingsPage::new(SettingsService::new(store.clone()));
     page.save_idp(idp("work")).unwrap();
     page.save_aws_app(aws()).unwrap();
     let saves = store.saves();
@@ -436,7 +439,7 @@ fn a_change_that_would_break_an_app_is_refused_and_not_saved() {
     assert_eq!(store.saves(), saves);
 
     // The service itself refuses a breaking edit made behind the page's back.
-    let service = SettingsService::new(&store).with_login_checks();
+    let service = SettingsService::new(store.clone()).with_login_checks();
     let broken = service.update_checked(|_, config| {
         config.remove_idp("work");
         Ok(())
@@ -503,13 +506,13 @@ fn a_security_key_is_saved_shown_and_removed() {
     assert_eq!(page.view().unwrap(), view);
 
     // The CLI reads what the page wrote.
-    let settings = SettingsService::new(store(&dir)).load().unwrap();
+    let settings = SettingsService::new(Arc::new(store(&dir))).load().unwrap();
     assert_eq!(settings.yubikey_config(), Some(&yubikey()));
 
     let view = page.set_security_key(None).unwrap();
     assert!(!view.security_key_enrolled);
     assert_eq!(view.security_key_rp_id, None);
-    assert!(SettingsService::new(store(&dir))
+    assert!(SettingsService::new(Arc::new(store(&dir)))
         .load()
         .unwrap()
         .yubikey_config()
@@ -521,7 +524,7 @@ fn wrapping_issued_credentials_is_saved_and_found_by_the_cli() {
     let (dir, page) = page();
 
     assert!(page.set_wrap_cached(true).unwrap().wrap_cached);
-    assert!(SettingsService::new(store(&dir))
+    assert!(SettingsService::new(Arc::new(store(&dir)))
         .load()
         .unwrap()
         .wrap_cached_secrets_enabled());
@@ -535,7 +538,7 @@ fn a_failed_save_of_the_security_key_is_an_error() {
     // The settings file's folder is a file, so nothing can be written.
     let blocker = dir.path().join("c9s");
     std::fs::write(&blocker, "x").unwrap();
-    let page = SettingsPage::new(store(&dir));
+    let page = SettingsPage::new(SettingsService::new(Arc::new(store(&dir))));
 
     assert!(page.set_security_key(Some(yubikey())).is_err());
     assert!(page.set_wrap_cached(true).is_err());

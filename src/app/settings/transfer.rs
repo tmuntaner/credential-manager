@@ -2,7 +2,6 @@ use super::errors::{edit_error, Form};
 use super::models::{SettingsView, SetupError};
 use super::SettingsPage;
 use crate::domain::ports::bundle::{BundleCodec, BundleError};
-use crate::domain::ports::config::ConfigStore;
 use crate::domain::services::settings_editor::{
     ImportMode, ImportReport, SettingsEditError, SettingsService,
 };
@@ -24,8 +23,8 @@ pub enum TransferError {
 }
 
 /// Renders the settings export text (does not save) for an onboarding bundle.
-pub fn export_text<S: ConfigStore, C: BundleCodec>(
-    settings: &SettingsService<S>,
+pub fn export_text<C: BundleCodec>(
+    settings: &SettingsService,
     codec: &C,
     names: &[String],
 ) -> Result<String, TransferError> {
@@ -35,8 +34,8 @@ pub fn export_text<S: ConfigStore, C: BundleCodec>(
 }
 
 /// Imports settings from an onboarding bundle.
-pub fn import_text<S: ConfigStore, C: BundleCodec>(
-    settings: &SettingsService<S>,
+pub fn import_text<C: BundleCodec>(
+    settings: &SettingsService,
     codec: &C,
     text: &str,
     mode: ImportMode,
@@ -49,8 +48,8 @@ pub fn import_text<S: ConfigStore, C: BundleCodec>(
 }
 
 /// Returns which usernames are needed for this onboarding bundle.
-pub fn usernames_needed<S: ConfigStore, C: BundleCodec>(
-    settings: &SettingsService<S>,
+pub fn usernames_needed<C: BundleCodec>(
+    settings: &SettingsService,
     codec: &C,
     text: &str,
 ) -> Result<Vec<String>, TransferError> {
@@ -92,7 +91,7 @@ impl ExportChoice {
     }
 }
 
-impl<S: ConfigStore> SettingsPage<S> {
+impl SettingsPage {
     /// Export onboarding choices to a file at a specific `path`.
     pub fn export_choice_to_file<C: BundleCodec>(
         &self,
@@ -157,9 +156,10 @@ mod tests {
     use crate::domain::services::settings_editor::{AwsAppInput, AwsAppKind, IdpInput, SaveAs};
     use crate::outbound::config::bundle::TomlBundleCodec;
     use crate::outbound::config::config_store::ConfigFileAdapter;
+    use std::sync::Arc;
 
-    fn store(dir: &Path) -> ConfigFileAdapter {
-        ConfigFileAdapter::at(dir.join("c9s").join("settings.toml"))
+    fn store(dir: &Path) -> Arc<ConfigFileAdapter> {
+        Arc::new(ConfigFileAdapter::at(dir.join("c9s").join("settings.toml")))
     }
 
     #[test]
@@ -187,7 +187,7 @@ mod tests {
         service.set_use_keyring(false).unwrap();
 
         let file = dir.path().join("bundle.toml");
-        SettingsPage::new(store(&mine))
+        SettingsPage::new(SettingsService::new(store(&mine)))
             .export_choice_to_file(
                 &TomlBundleCodec,
                 &ExportChoice::new(
@@ -202,7 +202,7 @@ mod tests {
         assert!(!text.contains("yubikey") && !text.contains("keyring"));
         assert!(!text.contains("username"));
 
-        let page = SettingsPage::new(store(&theirs));
+        let page = SettingsPage::new(SettingsService::new(store(&theirs)));
         let (view, report) = page
             .import_from_file(
                 &TomlBundleCodec,
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn exporting_nothing_or_importing_junk_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
-        let page = SettingsPage::new(store(dir.path()));
+        let page = SettingsPage::new(SettingsService::new(store(dir.path())));
         let file = dir.path().join("x.toml");
 
         assert!(page

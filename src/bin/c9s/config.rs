@@ -1,14 +1,11 @@
+use crate::app::CliApplication;
 use crate::args::IdpTypeArg;
 use crate::utils::true_or_false;
 use anyhow::{Context, Result};
 use c9s::app::settings::{export_text, import_text, usernames_needed};
 use c9s::domain::models::mfa::MfaSelection;
-use c9s::domain::ports::config::ConfigStore;
-use c9s::domain::ports::notifier::Notifier;
-use c9s::domain::ports::user_interaction::UserInteraction;
 use c9s::domain::services::settings_editor::{
     AwsAppInput, AwsAppKind, IdpInput, ImportMode, ImportReport, RancherInput, SaveAs,
-    SettingsService,
 };
 use c9s::outbound::config::bundle::TomlBundleCodec;
 use clap::Parser;
@@ -199,35 +196,29 @@ struct ConfigGlobalUseKeyRing {
 }
 
 impl Config {
-    pub async fn run(
-        &self,
-        settings: &SettingsService<impl ConfigStore>,
-        interaction: Arc<impl UserInteraction + 'static>,
-        notifier: Arc<impl Notifier + 'static>,
-    ) -> Result<()> {
+    pub async fn run(&self, application: &CliApplication) -> Result<()> {
         match &self.sub_command {
-            ConfigSubCommand::Idp(val) => val.run(settings),
+            ConfigSubCommand::Idp(val) => val.run(application),
             ConfigSubCommand::Aws(val) => match &val.sub_command {
-                ConfigAwsSubCommand::App(val) => val.run(settings),
-                ConfigAwsSubCommand::Sso(val) => val.run(settings),
+                ConfigAwsSubCommand::App(val) => val.run(application),
+                ConfigAwsSubCommand::Sso(val) => val.run(application),
             },
-            ConfigSubCommand::Rancher(val) => val.run(settings),
-            ConfigSubCommand::Export(val) => val.run(settings),
-            ConfigSubCommand::Import(val) => val.run(settings),
+            ConfigSubCommand::Rancher(val) => val.run(application),
+            ConfigSubCommand::Export(val) => val.run(application),
+            ConfigSubCommand::Import(val) => val.run(application),
             ConfigSubCommand::Global(val) => match &val.sub_command {
-                ConfigGlobalSubCommand::UseKeyring(val) => val.run(settings),
-                ConfigGlobalSubCommand::Yubikey(val) => {
-                    val.run(settings, interaction, notifier).await
-                }
+                ConfigGlobalSubCommand::UseKeyring(val) => val.run(application),
+                ConfigGlobalSubCommand::Yubikey(val) => val.run(application).await,
             },
         }
     }
 }
 
 impl ConfigExport {
-    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+    fn run(&self, application: &CliApplication) -> Result<()> {
         let names = if self.all {
-            settings
+            application
+                .settings_service()
                 .load()?
                 .idps()
                 .iter()
@@ -237,7 +228,7 @@ impl ConfigExport {
             self.idps.clone()
         };
 
-        let text = export_text(settings, &TomlBundleCodec, &names)?;
+        let text = export_text(application.settings_service(), &TomlBundleCodec, &names)?;
 
         match &self.output {
             Some(path) => std::fs::write(path, text)
@@ -250,7 +241,7 @@ impl ConfigExport {
 }
 
 impl ConfigImport {
-    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+    fn run(&self, application: &CliApplication) -> Result<()> {
         let text = if self.file.as_os_str() == "-" {
             let mut text = String::new();
             std::io::stdin().read_to_string(&mut text)?;
@@ -266,8 +257,18 @@ impl ConfigImport {
             ImportMode::SkipExisting
         };
 
-        let usernames = self.usernames(&usernames_needed(settings, &TomlBundleCodec, &text)?);
-        let report = import_text(settings, &TomlBundleCodec, &text, mode, &usernames)?;
+        let usernames = self.usernames(&usernames_needed(
+            application.settings_service(),
+            &TomlBundleCodec,
+            &text,
+        )?);
+        let report = import_text(
+            application.settings_service(),
+            &TomlBundleCodec,
+            &text,
+            mode,
+            &usernames,
+        )?;
         println!("{}", describe(&report));
 
         Ok(())
@@ -310,7 +311,7 @@ fn describe(report: &ImportReport) -> String {
 }
 
 impl ConfigIdp {
-    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+    fn run(&self, application: &CliApplication) -> Result<()> {
         let mut input = IdpInput::new(
             self.name.clone(),
             self.r#type.into(),
@@ -318,85 +319,83 @@ impl ConfigIdp {
             self.username.clone(),
         );
         input.mfa = self.mfa;
-        settings.save_idp(input, SaveAs::Upsert)?;
+        application
+            .settings_service()
+            .save_idp(input, SaveAs::Upsert)?;
 
         Ok(())
     }
 }
 
 impl ConfigAwsApp {
-    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+    fn run(&self, application: &CliApplication) -> Result<()> {
         let mut input = AwsAppInput::new(self.app_url.clone(), self.idp.clone());
         input.username = self.username.clone();
         input.mfa = self.mfa;
-        settings.save_aws_app(input, AwsAppKind::Aws, SaveAs::Upsert)?;
+        application
+            .settings_service()
+            .save_aws_app(input, AwsAppKind::Aws, SaveAs::Upsert)?;
 
         Ok(())
     }
 }
 
 impl ConfigAwsSso {
-    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+    fn run(&self, application: &CliApplication) -> Result<()> {
         let mut input = AwsAppInput::new(self.app_url.clone(), self.idp.clone());
         input.username = self.username.clone();
         input.mfa = self.mfa;
         let kind = AwsAppKind::AwsSso {
             region: self.region.clone(),
         };
-        settings.save_aws_app(input, kind, SaveAs::Upsert)?;
+        application
+            .settings_service()
+            .save_aws_app(input, kind, SaveAs::Upsert)?;
 
         Ok(())
     }
 }
 
 impl ConfigRancher {
-    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
+    fn run(&self, application: &CliApplication) -> Result<()> {
         let mut input =
             RancherInput::new(self.url.clone(), self.client_id.clone(), self.idp.clone());
         input.username = self.username.clone();
         input.mfa = self.mfa;
-        settings.save_rancher(input, SaveAs::Upsert)?;
+        application
+            .settings_service()
+            .save_rancher(input, SaveAs::Upsert)?;
 
         Ok(())
     }
 }
 
 impl ConfigGlobalUseKeyRing {
-    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
-        settings.set_use_keyring(self.enabled)?;
+    fn run(&self, application: &CliApplication) -> Result<()> {
+        application
+            .settings_service()
+            .set_use_keyring(self.enabled)?;
 
         Ok(())
     }
 }
 
 impl ConfigGlobalYubikey {
-    async fn run(
-        &self,
-        settings: &SettingsService<impl ConfigStore>,
-        interaction: Arc<impl UserInteraction + 'static>,
-        notifier: Arc<impl Notifier + 'static>,
-    ) -> Result<()> {
+    async fn run(&self, application: &CliApplication) -> Result<()> {
         match &self.sub_command {
-            ConfigGlobalYubikeySubCommand::Enroll(val) => {
-                val.run(settings, interaction, notifier).await
-            }
-            ConfigGlobalYubikeySubCommand::Disable(val) => val.run(settings),
-            ConfigGlobalYubikeySubCommand::Status(val) => val.run(settings),
-            ConfigGlobalYubikeySubCommand::WrapCached(val) => val.run(settings),
+            ConfigGlobalYubikeySubCommand::Enroll(val) => val.run(application).await,
+            ConfigGlobalYubikeySubCommand::Disable(val) => val.run(application),
+            ConfigGlobalYubikeySubCommand::Status(val) => val.run(application),
+            ConfigGlobalYubikeySubCommand::WrapCached(val) => val.run(application),
         }
     }
 }
 
 impl ConfigGlobalYubikeyEnroll {
-    async fn run(
-        &self,
-        settings: &SettingsService<impl ConfigStore>,
-        interaction: Arc<impl UserInteraction + 'static>,
-        notifier: Arc<impl Notifier + 'static>,
-    ) -> Result<()> {
+    async fn run(&self, application: &CliApplication) -> Result<()> {
         #[cfg(target_os = "windows")]
         {
-            let _ = (settings, interaction, notifier);
+            let _ = application;
             Err(anyhow::anyhow!(
                 "YubiKey wrapping is not supported on Windows"
             ))
@@ -404,8 +403,13 @@ impl ConfigGlobalYubikeyEnroll {
 
         #[cfg(not(target_os = "windows"))]
         {
-            let config = c9s::outbound::yubikey::enroll(&self.rp_id, interaction, notifier).await?;
-            settings.set_yubikey(Some(config))?;
+            let config = c9s::outbound::yubikey::enroll(
+                &self.rp_id,
+                Arc::new(application.interaction()),
+                Arc::new(application.notifier()),
+            )
+            .await?;
+            application.settings_service().set_yubikey(Some(config))?;
             println!("YubiKey successfully enrolled for secret wrapping.");
             Ok(())
         }
@@ -413,16 +417,16 @@ impl ConfigGlobalYubikeyEnroll {
 }
 
 impl ConfigGlobalYubikeyDisable {
-    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
-        settings.set_yubikey(None)?;
+    fn run(&self, application: &CliApplication) -> Result<()> {
+        application.settings_service().set_yubikey(None)?;
         println!("YubiKey secret wrapping disabled.");
         Ok(())
     }
 }
 
 impl ConfigGlobalYubikeyStatus {
-    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
-        let settings = settings.load()?;
+    fn run(&self, application: &CliApplication) -> Result<()> {
+        let settings = application.settings_service().load()?;
         match settings.yubikey_config() {
             Some(yk) => {
                 println!("YubiKey status: Enrolled");
@@ -446,8 +450,10 @@ impl ConfigGlobalYubikeyStatus {
 }
 
 impl ConfigGlobalYubikeyWrapCached {
-    fn run(&self, settings: &SettingsService<impl ConfigStore>) -> Result<()> {
-        settings.set_wrap_cached_secrets(self.enabled)?;
+    fn run(&self, application: &CliApplication) -> Result<()> {
+        application
+            .settings_service()
+            .set_wrap_cached_secrets(self.enabled)?;
         println!(
             "Protection for cached secrets (AWS/Rancher) is now {}.",
             if self.enabled { "enabled" } else { "disabled" }
@@ -460,6 +466,13 @@ impl ConfigGlobalYubikeyWrapCached {
 mod tests {
     use super::*;
     use c9s::domain::models::idp::IdpType;
+    use c9s::domain::models::secret::SafeSecret;
+    use c9s::domain::models::user_interaction::{
+        ChoicePrompt, ConfirmPrompt, SecretPrompt, UserNotice,
+    };
+    use c9s::domain::ports::notifier::{Notifier, NotifyError};
+    use c9s::domain::ports::user_interaction::{InteractionError, UserInteraction};
+    use c9s::domain::services::settings_editor::SettingsService;
 
     const APP_URL: &str = "https://id.example.com/application/saml/aws/sso/binding/init/";
 
@@ -694,13 +707,47 @@ mod tests {
         assert!(wrap.enabled);
     }
 
+    struct NoInteraction;
+
+    #[async_trait::async_trait(?Send)]
+    impl UserInteraction for NoInteraction {
+        async fn ask_secret(&self, _: SecretPrompt) -> Result<SafeSecret, InteractionError> {
+            Err(InteractionError::Unavailable)
+        }
+        async fn confirm(&self, _: ConfirmPrompt) -> Result<bool, InteractionError> {
+            Err(InteractionError::Unavailable)
+        }
+        async fn choose(&self, _: &ChoicePrompt) -> Result<usize, InteractionError> {
+            Err(InteractionError::Unavailable)
+        }
+    }
+
+    struct NoNotifier;
+
+    #[async_trait::async_trait(?Send)]
+    impl Notifier for NoNotifier {
+        async fn notify(&self, _: &UserNotice) -> Result<(), NotifyError> {
+            Err(NotifyError::Unavailable)
+        }
+    }
+
+    fn test_application(settings: SettingsService) -> CliApplication {
+        CliApplication::new(
+            Default::default(),
+            settings,
+            Arc::new(NoInteraction),
+            Arc::new(NoNotifier),
+        )
+    }
+
     #[test]
     fn a_read_only_command_never_writes_the_settings() {
         use c9s::outbound::config::config_store::ConfigFileAdapter;
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("c9s").join("settings.toml");
-        let service = SettingsService::new(ConfigFileAdapter::at(path.clone()));
+        let service = SettingsService::new(Arc::new(ConfigFileAdapter::at(path.clone())));
+        let service = test_application(service);
 
         ConfigGlobalYubikeyStatus {}.run(&service).unwrap();
         assert!(!path.exists());

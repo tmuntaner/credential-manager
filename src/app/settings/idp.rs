@@ -2,13 +2,12 @@ use super::errors::{edit_error, Errors, Form};
 use super::models::{Field, IdpForm, SettingsView, SetupError};
 use super::{mfa_selection, SettingsPage};
 use crate::domain::models::idp::IdpType;
-use crate::domain::ports::config::ConfigStore;
 use crate::domain::services::settings_editor::{IdpInput, SaveAs};
 use crate::domain::services::settings_validation::{
     allow_insecure_localhost, check_name, check_url, check_username,
 };
 
-impl<S: ConfigStore> SettingsPage<S> {
+impl SettingsPage {
     /// Adds or edits an IDP.
     pub fn save_idp(&self, form: IdpForm) -> Result<SettingsView, SetupError> {
         let mut errors = Errors::default();

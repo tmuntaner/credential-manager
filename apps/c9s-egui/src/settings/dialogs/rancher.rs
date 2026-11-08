@@ -5,7 +5,6 @@ use crate::ui::dialog::dialog;
 use crate::ui::errors::{general_error, FormErrors};
 use crate::ui::field::{submitted, text_field, TextOptions};
 use c9s::app::settings::{same_url, Field, RancherForm, RancherSummary, SettingsPage};
-use c9s::domain::ports::config::ConfigStore;
 use eframe::egui::Context;
 
 const FIELDS: [Field; 5] = [
@@ -68,7 +67,7 @@ impl RancherDialog {
         }
     }
 
-    pub fn submit<S: ConfigStore>(&mut self, page: &SettingsPage<S>) -> Result<Saved, String> {
+    pub fn submit(&mut self, page: &SettingsPage) -> Result<Saved, String> {
         let form = self.form();
 
         match page.save_rancher(form.clone()) {

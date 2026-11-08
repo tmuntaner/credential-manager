@@ -24,7 +24,6 @@ pub use models::{
 
 use crate::domain::models::mfa::MfaSelection;
 use crate::domain::models::settings::YubikeyConfig;
-use crate::domain::ports::config::ConfigStore;
 use crate::domain::ports::notifier::Notifier;
 use crate::domain::ports::user_interaction::UserInteraction;
 use crate::domain::services::settings_editor::SettingsService;
@@ -38,14 +37,14 @@ pub use transfer::{export_text, import_text, usernames_needed, ExportChoice, Tra
 /// Whether security keys can be used on this machine.
 const SECURITY_KEY_SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos"));
 
-pub struct SettingsPage<S: ConfigStore> {
-    settings: SettingsService<S>,
+pub struct SettingsPage {
+    settings: SettingsService,
 }
 
-impl<S: ConfigStore> SettingsPage<S> {
-    pub fn new(store: S) -> Self {
+impl SettingsPage {
+    pub fn new(store: SettingsService) -> Self {
         Self {
-            settings: SettingsService::new(store).with_login_checks(),
+            settings: store.with_login_checks(),
         }
     }
 
@@ -68,7 +67,7 @@ impl<S: ConfigStore> SettingsPage<S> {
     }
 }
 
-impl<S: ConfigStore> SettingsPage<S> {
+impl SettingsPage {
     /// Chooses whether issued credentials (AWS/Rancher) are encrypted with the security key.
     pub fn set_wrap_cached(&self, enabled: bool) -> Result<SettingsView, SetupError> {
         let settings = self

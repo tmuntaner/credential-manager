@@ -14,7 +14,6 @@ pub use usernames::UsernamesDialog;
 use crate::app::FocusTarget;
 use aws::AwsDialog;
 use c9s::app::settings::{AwsAppSummary, IdpSummary, RancherSummary, SettingsPage, SettingsView};
-use c9s::domain::ports::config::ConfigStore;
 use eframe::egui::Context;
 use idp::IdpDialog;
 use rancher::RancherDialog;
@@ -101,7 +100,7 @@ impl Dialog {
     }
 
     /// Submits the dialog form to the settings page to be saved.
-    pub fn submit<S: ConfigStore>(&mut self, page: &SettingsPage<S>) -> Result<Saved, String> {
+    pub fn submit(&mut self, page: &SettingsPage) -> Result<Saved, String> {
         match self {
             Dialog::Idp(d) => d.submit(page),
             Dialog::Aws(d) => d.submit(page),
@@ -119,19 +118,22 @@ impl Dialog {
 mod tests {
     use super::*;
     use c9s::app::settings::{AwsAppKind, MfaChoice};
+    use c9s::domain::services::settings_editor::SettingsService;
     use c9s::outbound::config::config_store::ConfigFileAdapter;
+    use std::sync::Arc;
 
-    fn page() -> (tempfile::TempDir, SettingsPage<ConfigFileAdapter>) {
+    fn page() -> (tempfile::TempDir, SettingsPage) {
         let dir = tempfile::tempdir().unwrap();
         let store = ConfigFileAdapter::at(dir.path().join("c9s").join("settings.toml"));
-        (dir, SettingsPage::new(store))
+        let settings = SettingsService::new(Arc::new(store));
+        (dir, SettingsPage::new(settings))
     }
 
-    fn form(page: &SettingsPage<ConfigFileAdapter>) -> FormContext {
+    fn form(page: &SettingsPage) -> FormContext {
         FormContext::of(&page.view().unwrap())
     }
 
-    fn typed_idp(page: &SettingsPage<ConfigFileAdapter>) -> Dialog {
+    fn typed_idp(page: &SettingsPage) -> Dialog {
         let mut dialog = Dialog::add_idp(&form(page));
         let Dialog::Idp(d) = &mut dialog else {
             unreachable!()

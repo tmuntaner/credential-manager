@@ -28,37 +28,38 @@ pub trait ConfigStore {
 #[cfg(test)]
 pub(crate) mod memory {
     use super::*;
-    use std::cell::{Cell, RefCell};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
     #[derive(Default)]
     pub(crate) struct MemoryStore {
-        saved: RefCell<Option<AppConfig>>,
-        saves: Cell<usize>,
-        fail_save: Cell<bool>,
+        saved: Mutex<Option<AppConfig>>,
+        saves: AtomicUsize,
+        fail_save: AtomicBool,
     }
 
     impl MemoryStore {
         pub(crate) fn saves(&self) -> usize {
-            self.saves.get()
+            self.saves.load(Ordering::SeqCst)
         }
 
         /// Makes every following save fail.
         pub(crate) fn fail_saves(&self) {
-            self.fail_save.set(true);
+            self.fail_save.store(true, Ordering::SeqCst);
         }
     }
 
-    impl ConfigStore for &MemoryStore {
+    impl ConfigStore for MemoryStore {
         fn load(&self) -> Result<AppConfig, ConfigError> {
-            Ok(self.saved.borrow().clone().unwrap_or_default())
+            Ok(self.saved.lock().unwrap().clone().unwrap_or_default())
         }
 
         fn save(&self, config: &AppConfig) -> Result<(), ConfigError> {
-            if self.fail_save.get() {
+            if self.fail_save.load(Ordering::SeqCst) {
                 return Err(ConfigError::Failed("disk full".into()));
             }
-            *self.saved.borrow_mut() = Some(config.clone());
-            self.saves.set(self.saves.get() + 1);
+            *self.saved.lock().unwrap() = Some(config.clone());
+            self.saves.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
     }

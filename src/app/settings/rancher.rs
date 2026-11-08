@@ -1,13 +1,12 @@
 use super::errors::{edit_error, Errors, Form};
 use super::models::{Field, RancherForm, SettingsView, SetupError};
 use super::{check_idp, mfa_override, SettingsPage};
-use crate::domain::ports::config::ConfigStore;
 use crate::domain::services::settings_editor::{RancherInput, SaveAs};
 use crate::domain::services::settings_validation::{
     allow_insecure_localhost, check_client_id, check_optional_username, check_url,
 };
 
-impl<S: ConfigStore> SettingsPage<S> {
+impl SettingsPage {
     /// Adds or edits a rancher application.
     pub fn save_rancher(&self, form: RancherForm) -> Result<SettingsView, SetupError> {
         let mut errors = Errors::default();
