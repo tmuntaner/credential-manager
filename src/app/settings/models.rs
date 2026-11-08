@@ -1,3 +1,11 @@
+use crate::app::settings::SECURITY_KEY_SUPPORTED;
+use crate::domain::models::mfa::MfaSelection;
+/// Whether two URLs are the same entry: the one rule of the settings.
+pub use crate::domain::models::settings::same_app_url as same_url;
+use crate::domain::models::settings::AppConfig;
+use crate::domain::services::settings_editor::idp_used_by;
+use crate::domain::services::settings_validation::allow_insecure_localhost;
+
 /// The MFA choice from the user.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MfaChoice {
@@ -6,6 +14,15 @@ pub enum MfaChoice {
     Totp,
     /// A security key, e.g., a YubiKey.
     SecurityKey,
+}
+
+impl From<MfaSelection> for MfaChoice {
+    fn from(value: MfaSelection) -> Self {
+        match value {
+            MfaSelection::Totp => MfaChoice::Totp,
+            MfaSelection::WebAuthn => MfaChoice::SecurityKey,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,6 +170,77 @@ pub struct SettingsView {
     pub checklist: Checklist,
 }
 
+impl From<AppConfig> for SettingsView {
+    fn from(value: AppConfig) -> Self {
+        let settings = &value;
+
+        let idps: Vec<IdpSummary> = settings
+            .idps()
+            .iter()
+            .map(|idp| IdpSummary {
+                name: idp.name().to_string(),
+                url: idp.url().to_string(),
+                username: idp.username().to_string(),
+                mfa: match idp.mfa() {
+                    Some(mfa) => mfa.into(),
+                    None => MfaChoice::Ask,
+                },
+                used_by: idp_used_by(settings, idp.name()),
+            })
+            .collect();
+
+        let mut aws_apps: Vec<AwsAppSummary> = settings
+            .aws_hosts()
+            .iter()
+            .map(|host| AwsAppSummary {
+                app_url: host.app_url().to_string(),
+                kind: AwsAppKind::Aws,
+                region: None,
+                idp: host.idp().to_string(),
+                username: host.username().map(str::to_string),
+                mfa: host.mfa().map(|mfa| mfa.into()),
+            })
+            .collect();
+        aws_apps.extend(settings.aws_sso_hosts().iter().map(|host| AwsAppSummary {
+            app_url: host.app_url().to_string(),
+            kind: AwsAppKind::AwsSso,
+            region: Some(host.region().to_string()),
+            idp: host.idp().to_string(),
+            username: host.username().map(str::to_string),
+            mfa: host.mfa().map(|mfa| mfa.into()),
+        }));
+
+        let rancher_hosts: Vec<RancherSummary> = settings
+            .rancher_hosts()
+            .iter()
+            .map(|host| RancherSummary {
+                url: host.url().to_string(),
+                client_id: host.client_id().to_string(),
+                idp: host.idp().to_string(),
+                username: host.username().map(str::to_string),
+                mfa: host.mfa().map(|mfa| mfa.into()),
+            })
+            .collect();
+
+        SettingsView {
+            checklist: Checklist {
+                idp: !idps.is_empty(),
+                aws: !aws_apps.is_empty(),
+                rancher: !rancher_hosts.is_empty(),
+            },
+            idps,
+            aws_apps,
+            rancher_hosts,
+            use_keyring: settings.keyring_enabled(),
+            security_key_supported: SECURITY_KEY_SUPPORTED,
+            security_key_enrolled: settings.yubikey_config().is_some(),
+            security_key_rp_id: settings.yubikey_config().map(|yk| yk.rp_id().to_string()),
+            wrap_cached: settings.wrap_cached_secrets_enabled(),
+            insecure_localhost_allowed: allow_insecure_localhost(),
+        }
+    }
+}
+
 /// An error from a form field.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FieldError {
@@ -197,9 +285,6 @@ impl SetupError {
         }
     }
 }
-
-/// Whether two URLs are the same entry: the one rule of the settings.
-pub use crate::domain::models::settings::same_app_url as same_url;
 
 #[cfg(test)]
 mod tests {

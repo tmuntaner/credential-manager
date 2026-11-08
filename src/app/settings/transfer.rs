@@ -1,6 +1,5 @@
 use super::errors::{edit_error, Form};
 use super::models::{SettingsView, SetupError};
-use super::summary::summarize;
 use super::SettingsPage;
 use crate::domain::ports::bundle::{BundleCodec, BundleError};
 use crate::domain::ports::config::ConfigStore;
@@ -146,7 +145,7 @@ impl<S: ConfigStore> SettingsPage<S> {
             .load()
             .map_err(|e| edit_error(e, Form::Action))?;
 
-        Ok((summarize(&settings), report))
+        Ok((settings.into(), report))
     }
 }
 
