@@ -1,6 +1,5 @@
 use super::errors::{edit_error, Errors, Form};
 use super::models::{AwsAppForm, AwsAppKey, AwsAppKind, Field, SettingsView, SetupError};
-use super::summary::summarize;
 use super::{check_idp, mfa_override, SettingsPage};
 use crate::domain::ports::config::ConfigStore;
 use crate::domain::services::settings_editor::{self, AwsAppInput, SaveAs};
@@ -61,7 +60,7 @@ impl<S: ConfigStore> SettingsPage<S> {
             .save_aws_app(input, kind, mode)
             .map_err(|e| edit_error(e, Form::Aws))?;
 
-        Ok(summarize(&settings))
+        Ok(settings.into())
     }
 
     pub fn remove_aws_app(&self, key: AwsAppKey) -> Result<SettingsView, SetupError> {
@@ -70,6 +69,6 @@ impl<S: ConfigStore> SettingsPage<S> {
             .remove_aws_app(&key.app_url, key.kind.into())
             .map_err(|e| edit_error(e, Form::Action))?;
 
-        Ok(summarize(&settings))
+        Ok(settings.into())
     }
 }

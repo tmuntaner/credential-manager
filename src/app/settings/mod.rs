@@ -13,7 +13,6 @@ mod idp;
 mod models;
 mod rancher;
 mod security_key;
-mod summary;
 #[cfg(test)]
 mod tests;
 mod transfer;
@@ -32,7 +31,6 @@ use crate::domain::services::settings_editor::SettingsService;
 use crate::domain::services::settings_validation::check_name;
 use errors::{edit_error, Form};
 use std::sync::Arc;
-use summary::summarize;
 
 pub use security_key::{enroll_security_key, DEFAULT_RP_ID};
 pub use transfer::{export_text, import_text, usernames_needed, ExportChoice, TransferError};
@@ -57,7 +55,7 @@ impl<S: ConfigStore> SettingsPage<S> {
             .load()
             .map_err(|e| edit_error(e, Form::Action))?;
 
-        Ok(summarize(&settings))
+        Ok(settings.into())
     }
 
     pub fn set_use_keyring(&self, enabled: bool) -> Result<SettingsView, SetupError> {
@@ -66,7 +64,7 @@ impl<S: ConfigStore> SettingsPage<S> {
             .set_use_keyring(enabled)
             .map_err(|e| edit_error(e, Form::Action))?;
 
-        Ok(summarize(&settings))
+        Ok(settings.into())
     }
 }
 
@@ -78,7 +76,7 @@ impl<S: ConfigStore> SettingsPage<S> {
             .set_wrap_cached_secrets(enabled)
             .map_err(|e| edit_error(e, Form::Action))?;
 
-        Ok(summarize(&settings))
+        Ok(settings.into())
     }
 
     /// Saves the enrolled security key, or `None` to stop using it.
@@ -88,7 +86,7 @@ impl<S: ConfigStore> SettingsPage<S> {
             .set_yubikey(key)
             .map_err(|e| edit_error(e, Form::Action))?;
 
-        Ok(summarize(&settings))
+        Ok(settings.into())
     }
 
     /// Enrolls a security key for `rp_id` and saves it.

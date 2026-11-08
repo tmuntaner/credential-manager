@@ -1,6 +1,5 @@
 use super::errors::{edit_error, Errors, Form};
 use super::models::{Field, IdpForm, SettingsView, SetupError};
-use super::summary::summarize;
 use super::{mfa_selection, SettingsPage};
 use crate::domain::models::idp::IdpType;
 use crate::domain::ports::config::ConfigStore;
@@ -41,7 +40,7 @@ impl<S: ConfigStore> SettingsPage<S> {
             .save_idp(input, mode)
             .map_err(|e| edit_error(e, Form::Idp))?;
 
-        Ok(summarize(&settings))
+        Ok(settings.into())
     }
 
     pub fn remove_idp(&self, name: &str) -> Result<SettingsView, SetupError> {
@@ -50,6 +49,6 @@ impl<S: ConfigStore> SettingsPage<S> {
             .remove_idp(name)
             .map_err(|e| edit_error(e, Form::Action))?;
 
-        Ok(summarize(&settings))
+        Ok(settings.into())
     }
 }

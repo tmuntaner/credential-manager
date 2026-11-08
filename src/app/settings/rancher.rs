@@ -1,6 +1,5 @@
 use super::errors::{edit_error, Errors, Form};
 use super::models::{Field, RancherForm, SettingsView, SetupError};
-use super::summary::summarize;
 use super::{check_idp, mfa_override, SettingsPage};
 use crate::domain::ports::config::ConfigStore;
 use crate::domain::services::settings_editor::{RancherInput, SaveAs};
@@ -43,7 +42,7 @@ impl<S: ConfigStore> SettingsPage<S> {
             .save_rancher(input, mode)
             .map_err(|e| edit_error(e, Form::Rancher))?;
 
-        Ok(summarize(&settings))
+        Ok(settings.into())
     }
 
     pub fn remove_rancher(&self, url: &str) -> Result<SettingsView, SetupError> {
@@ -52,6 +51,6 @@ impl<S: ConfigStore> SettingsPage<S> {
             .remove_rancher(url)
             .map_err(|e| edit_error(e, Form::Action))?;
 
-        Ok(summarize(&settings))
+        Ok(settings.into())
     }
 }
