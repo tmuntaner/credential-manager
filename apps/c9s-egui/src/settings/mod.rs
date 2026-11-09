@@ -11,11 +11,11 @@ use crate::app::{Focus, FocusTarget, Route, Section, Shell};
 use crate::prompts::Bridge;
 use c9s::app::prompts::{WindowInteraction, WindowNotifier};
 use c9s::app::settings::{
-    enroll_security_key, AwsAppSummary, IdpSummary, MfaChoice, RancherSummary, SettingsPage,
-    SettingsView, SetupError, DEFAULT_RP_ID,
+    describe_import, enroll_security_key, AwsAppSummary, IdpSummary, ImportPlan, MfaChoice,
+    RancherSummary, SettingsPage, SettingsView, SetupError, DEFAULT_RP_ID,
 };
 use c9s::domain::models::settings::YubikeyConfig;
-use c9s::domain::services::settings_editor::{ImportMode, ImportReport, SettingsService};
+use c9s::domain::services::settings_editor::{ImportMode, SettingsService};
 use c9s::outbound::config::bundle::TomlBundleCodec;
 use c9s::outbound::config::config_store::ConfigFileAdapter;
 use dialogs::{
@@ -23,7 +23,6 @@ use dialogs::{
 };
 use eframe::egui::{Id, Ui};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use transfer::{real_file_picker, ChosenFile, Transfer};
@@ -83,8 +82,8 @@ pub struct SettingsState {
     file_picker_choice: Option<ChosenFile>,
     /// Whether an import overwrites existing settings.
     import_overwrite: bool,
-    /// The file being imported while the user enters their user names.
-    importing: Option<(PathBuf, ImportMode)>,
+    /// The onboarding bundle we're importing.
+    importing: Option<(ImportPlan, ImportMode)>,
     page: SettingsPage,
     /// The settings view, or error message
     view: Result<SettingsView, String>,
@@ -332,15 +331,16 @@ impl SettingsState {
                 // import the onboarding data
                 // we need to check if there is anything new which requires a username
                 // if so, we need to ask the user for one
-                match self.page.usernames_needed_by_file(&TomlBundleCodec, &path) {
+                match self.page.plan_import_from_file(&TomlBundleCodec, &path) {
                     Err(error) => shell.fail(error.sentence()),
                     // Nothing is new, so there is no username to ask for.
-                    Ok(needed) if needed.is_empty() => {
-                        self.import(shell, &path, mode, &BTreeMap::new())
+                    Ok(plan) if plan.usernames_needed().is_empty() => {
+                        self.import(shell, &plan, mode, &BTreeMap::new())
                     }
-                    Ok(needed) => {
-                        self.importing = Some((path, mode));
-                        self.open(shell, Dialog::Usernames(UsernamesDialog::new(&needed)));
+                    Ok(plan) => {
+                        let dialog = UsernamesDialog::new(plan.usernames_needed());
+                        self.importing = Some((plan, mode));
+                        self.open(shell, Dialog::Usernames(dialog));
                     }
                 }
             }
@@ -351,14 +351,11 @@ impl SettingsState {
     fn import(
         &mut self,
         shell: &mut Shell,
-        path: &std::path::Path,
+        plan: &ImportPlan,
         mode: ImportMode,
         usernames: &BTreeMap<String, String>,
     ) {
-        match self
-            .page
-            .import_from_file(&TomlBundleCodec, path, mode, usernames)
-        {
+        match self.page.apply_import(plan, mode, usernames) {
             Ok((view, report)) => {
                 self.view = Ok(view);
                 // From the checklist, the next step is to leave it.
@@ -367,7 +364,7 @@ impl SettingsState {
                 } else {
                     FocusTarget::Add(Section::Share)
                 });
-                shell.say(imported(&report));
+                shell.say(describe_import(&report));
             }
             Err(error) => shell.fail(error.sentence()),
         }
@@ -438,8 +435,8 @@ impl SettingsState {
             };
             self.dialog = None;
             self.opener = None;
-            if let Some((path, mode)) = self.importing.take() {
-                self.import(shell, &path, mode, &usernames);
+            if let Some((plan, mode)) = self.importing.take() {
+                self.import(shell, &plan, mode, &usernames);
             }
             return;
         }
@@ -504,23 +501,6 @@ impl SettingsState {
             }
         }
     }
-}
-
-/// Says what an import did.
-fn imported(report: &ImportReport) -> String {
-    let (added, updated, kept) = (report.added(), report.overwritten(), report.skipped());
-    if added + updated == 0 {
-        return format!("Nothing new to import, {kept} were set up already.");
-    }
-    let mut parts = vec![format!("{added} added")];
-    if updated > 0 {
-        parts.push(format!("{updated} updated"));
-    }
-    if kept > 0 {
-        parts.push(format!("{kept} kept as they were"));
-    }
-
-    format!("Imported: {}.", parts.join(", "))
 }
 
 fn signs_in_with(idp: &str, username: Option<&str>, mfa: Option<MfaChoice>) -> String {

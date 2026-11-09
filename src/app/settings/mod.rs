@@ -30,13 +30,13 @@ use crate::domain::services::settings_editor::{SettingsEditError, SettingsServic
 use errors::{edit_error, Form};
 use std::sync::Arc;
 
-pub use security_key::{enroll_security_key, DEFAULT_RP_ID};
-pub use transfer::{
-    check_import_username, export_text, import_text, usernames_needed, ExportChoice, TransferError,
+pub use security_key::{
+    enroll_and_save, enroll_security_key, DEFAULT_RP_ID, SECURITY_KEY_SUPPORTED,
 };
-
-/// Whether security keys can be used on this machine.
-const SECURITY_KEY_SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos"));
+pub use transfer::{
+    check_import_username, describe_import, export_bundle, plan_import, ExportChoice, ImportPlan,
+    TransferError,
+};
 
 pub struct SettingsPage {
     settings: SettingsService,
@@ -85,8 +85,9 @@ impl SettingsPage {
         interaction: Arc<U>,
         notifier: Arc<N>,
     ) -> Result<SettingsView, SetupError> {
-        let key = enroll_security_key(rp_id, interaction, notifier).await?;
-        self.set_security_key(Some(key))
+        enroll_and_save(&self.settings, rp_id, interaction, notifier)
+            .await
+            .map(Into::into)
     }
 }
 

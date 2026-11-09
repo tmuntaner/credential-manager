@@ -1,11 +1,13 @@
 use crate::app::CliApplication;
 use crate::args::IdpTypeArg;
 use crate::utils::true_or_false;
-use anyhow::{Context, Result};
-use c9s::app::settings::{export_text, import_text, usernames_needed};
+use anyhow::{anyhow, Context, Result};
+use c9s::app::settings::{
+    describe_import, enroll_and_save, export_bundle, plan_import, ExportChoice, DEFAULT_RP_ID,
+};
 use c9s::domain::models::mfa::MfaSelection;
 use c9s::domain::services::settings_editor::{
-    AwsAppInput, AwsAppKind, IdpInput, ImportMode, ImportReport, RancherInput, SaveAs,
+    AwsAppInput, AwsAppKind, IdpInput, ImportMode, RancherInput, SaveAs,
 };
 use c9s::outbound::config::bundle::TomlBundleCodec;
 use clap::Parser;
@@ -170,7 +172,7 @@ enum ConfigGlobalYubikeySubCommand {
 #[derive(Parser)]
 struct ConfigGlobalYubikeyEnroll {
     /// Relying party ID for WebAuthn/FIDO2 enrollment (defaults to "localhost")
-    #[clap(long, default_value = "localhost")]
+    #[clap(long, default_value = DEFAULT_RP_ID)]
     rp_id: String,
 }
 
@@ -228,7 +230,11 @@ impl ConfigExport {
             self.idps.clone()
         };
 
-        let text = export_text(application.settings_service(), &TomlBundleCodec, &names)?;
+        let text = export_bundle(
+            application.settings_service(),
+            &TomlBundleCodec,
+            &ExportChoice::everything_of(names),
+        )?;
 
         match &self.output {
             Some(path) => std::fs::write(path, text)
@@ -257,19 +263,11 @@ impl ConfigImport {
             ImportMode::SkipExisting
         };
 
-        let usernames = self.usernames(&usernames_needed(
-            application.settings_service(),
-            &TomlBundleCodec,
-            &text,
-        )?);
-        let report = import_text(
-            application.settings_service(),
-            &TomlBundleCodec,
-            &text,
-            mode,
-            &usernames,
-        )?;
-        println!("{}", describe(&report));
+        let settings = application.settings_service();
+        let plan = plan_import(settings, &TomlBundleCodec, &text)?;
+        let usernames = self.usernames(plan.usernames_needed());
+        let report = plan.apply(settings, mode, &usernames)?;
+        println!("{}", describe_import(&report));
 
         Ok(())
     }
@@ -299,15 +297,6 @@ impl ConfigImport {
             })
             .collect()
     }
-}
-
-fn describe(report: &ImportReport) -> String {
-    format!(
-        "Added {}, updated {}, kept {} that were set up already.",
-        report.added(),
-        report.overwritten(),
-        report.skipped()
-    )
 }
 
 impl ConfigIdp {
@@ -393,26 +382,16 @@ impl ConfigGlobalYubikey {
 
 impl ConfigGlobalYubikeyEnroll {
     async fn run(&self, application: &CliApplication) -> Result<()> {
-        #[cfg(target_os = "windows")]
-        {
-            let _ = application;
-            Err(anyhow::anyhow!(
-                "YubiKey wrapping is not supported on Windows"
-            ))
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            let config = c9s::outbound::yubikey::enroll(
-                &self.rp_id,
-                Arc::new(application.interaction()),
-                Arc::new(application.notifier()),
-            )
-            .await?;
-            application.settings_service().set_yubikey(Some(config))?;
-            println!("YubiKey successfully enrolled for secret wrapping.");
-            Ok(())
-        }
+        enroll_and_save(
+            application.settings_service(),
+            &self.rp_id,
+            Arc::new(application.interaction()),
+            Arc::new(application.notifier()),
+        )
+        .await
+        .map_err(|e| anyhow!(e.sentence()))?;
+        println!("YubiKey successfully enrolled for secret wrapping.");
+        Ok(())
     }
 }
 
@@ -481,6 +460,29 @@ mod tests {
         argv.extend(args);
 
         Config::try_parse_from(argv)
+    }
+
+    #[test]
+    fn a_named_username_wins_over_the_generic_one_and_unneeded_ones_are_dropped() {
+        let Config {
+            sub_command: ConfigSubCommand::Import(import),
+        } = parse(&[
+            "import", "f.toml", "-u", "all", "-u", "corp=me", "-u", "gone=x",
+        ])
+        .unwrap()
+        else {
+            panic!("not an import");
+        };
+
+        let usernames = import.usernames(&["corp".to_string(), "other".to_string()]);
+        assert_eq!(
+            usernames,
+            BTreeMap::from([
+                ("corp".to_string(), "me".to_string()),
+                ("other".to_string(), "all".to_string()),
+            ])
+        );
+        assert!(import.usernames(&[]).is_empty());
     }
 
     #[test]

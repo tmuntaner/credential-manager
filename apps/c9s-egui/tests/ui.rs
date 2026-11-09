@@ -651,6 +651,43 @@ fn a_file_is_imported_and_found_by_the_cli() {
 }
 
 #[test]
+fn importing_the_same_file_again_says_nothing_is_new() {
+    let sharer = Window::new();
+    sharer.with_idp_and_aws();
+    let file = sharer.dir.path().join("share.toml");
+    SettingsPage::new(SettingsService::new(Arc::new(sharer.store())))
+        .export_choice_to_file(
+            &TomlBundleCodec,
+            &ExportChoice::new(vec!["work".into()], vec![APP_URL.into()], vec![]),
+            &file,
+        )
+        .unwrap();
+
+    let window = Window::new();
+    let mut harness = window.open();
+    harness
+        .state_mut()
+        .as_mut()
+        .unwrap()
+        .set_chooser(chooser(Some(file)));
+
+    click_button(&mut harness, "Import / Export");
+    click_button(&mut harness, "Import…");
+    wait_until(&mut harness, "the question for the user name", |h| {
+        h.query_by_label("Import onboarding file").is_some()
+    });
+    type_into(&mut harness, "User name for work", "newcomer@example.com");
+    click_button(&mut harness, "Import");
+    harness.get_by_label("Imported: 2 added.");
+
+    click_button(&mut harness, "Import…");
+    wait_until(&mut harness, "the second report", |h| {
+        h.query_by_label("Nothing new to import, 2 were set up already.")
+            .is_some()
+    });
+}
+
+#[test]
 fn a_file_that_is_not_an_export_is_refused_and_nothing_is_written() {
     let window = Window::new();
     let file = window.dir.path().join("junk.toml");

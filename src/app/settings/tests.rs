@@ -449,3 +449,36 @@ fn a_failed_save_of_the_security_key_is_an_error() {
     assert!(page.set_security_key(Some(yubikey())).is_err());
     assert!(page.set_wrap_cached(true).is_err());
 }
+
+#[test]
+fn the_view_says_what_the_one_predicate_says() {
+    let (_store, page) = page();
+
+    assert_eq!(
+        page.view().unwrap().security_key_supported,
+        SECURITY_KEY_SUPPORTED
+    );
+}
+
+#[test]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn enrolling_where_security_keys_do_not_work_is_refused_and_saves_nothing() {
+    use crate::domain::ports::notifier::MockNotifier;
+    use crate::domain::ports::user_interaction::MockUserInteraction;
+
+    let (store, page) = page();
+    let error = futures::executor::block_on(enroll_and_save(
+        &page.settings,
+        DEFAULT_RP_ID,
+        Arc::new(MockUserInteraction::new()),
+        Arc::new(MockNotifier::new()),
+    ))
+    .unwrap_err();
+
+    assert!(error.sentence().contains("not supported"));
+    assert!(another_service(&store)
+        .load()
+        .unwrap()
+        .yubikey_config()
+        .is_none());
+}
