@@ -5,7 +5,7 @@
 use c9s::app::prompts::WindowInteraction;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use c9s::app::settings::SetupError;
-use c9s::app::settings::{AwsAppForm, AwsAppKind, ExportChoice, IdpForm, MfaChoice, SettingsPage};
+use c9s::app::settings::{AwsAppForm, AwsAppType, ExportChoice, IdpForm, MfaChoice, SettingsPage};
 use c9s::domain::models::login::{AwsOverrides, RancherOverrides};
 use c9s::domain::models::settings::YubikeyConfig;
 use c9s::domain::models::user_interaction::SecretPrompt;
@@ -83,7 +83,7 @@ impl Window {
         page.save_aws_app(AwsAppForm {
             original: None,
             app_url: APP_URL.into(),
-            kind: AwsAppKind::Aws,
+            kind: AwsAppType::Aws,
             region: None,
             idp: "work".into(),
             username: None,

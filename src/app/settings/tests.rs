@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::domain::models::login::{AwsOverrides, RancherOverrides};
-use crate::domain::models::settings::AwsAppType;
 use crate::domain::models::settings::YubikeyConfig;
 use crate::domain::ports::config::{ConfigError, InMemoryConfigStore, MockConfigStore};
 use crate::domain::ports::login::LoginResolver;
@@ -28,7 +27,7 @@ fn aws() -> AwsAppForm {
     AwsAppForm {
         original: None,
         app_url: APP_URL.into(),
-        kind: AwsAppKind::Aws,
+        kind: AwsAppType::Aws,
         region: None,
         idp: "work".into(),
         username: None,
@@ -171,13 +170,32 @@ fn an_idp_in_use_is_not_removed() {
 
     page.remove_aws_app(AwsAppKey {
         app_url: STORED_APP_URL.into(),
-        kind: AwsAppKind::Aws,
+        kind: AwsAppType::Aws,
     })
     .unwrap();
     page.remove_rancher(RANCHER_URL).unwrap();
     let view = page.remove_idp("work").unwrap();
     assert!(view.idps.is_empty());
     assert!(!view.checklist.idp && !view.checklist.aws);
+}
+
+#[test]
+fn the_summary_kind_is_the_domain_kind() {
+    let (_store, page) = page();
+    page.save_idp(idp("work")).unwrap();
+    let mut sso = aws();
+    sso.kind = AwsAppType::AwsSso;
+    sso.region = Some("eu-west-1".into());
+    let view = page.save_aws_app(sso).unwrap();
+    assert_eq!(view.aws_apps[0].kind, AwsAppType::AwsSso);
+
+    let view = page
+        .remove_aws_app(AwsAppKey {
+            app_url: view.aws_apps[0].app_url.clone(),
+            kind: AwsAppType::AwsSso,
+        })
+        .unwrap();
+    assert!(view.aws_apps.is_empty());
 }
 
 #[test]
@@ -196,7 +214,7 @@ fn every_bad_field_is_reported_and_nothing_is_written() {
 
     let mut bad = aws();
     bad.app_url = "https://u:p@id.example.com".into();
-    bad.kind = AwsAppKind::AwsSso;
+    bad.kind = AwsAppType::AwsSso;
     bad.region = Some("eu-west-1; rm".into());
     bad.username = Some("a\nb".into());
     bad.idp = "x=y".into();

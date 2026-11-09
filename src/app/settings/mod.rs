@@ -18,11 +18,12 @@ mod tests;
 mod transfer;
 
 pub use models::{
-    same_url, AwsAppForm, AwsAppKey, AwsAppKind, AwsAppSummary, Checklist, Field, FieldError,
-    IdpForm, IdpSummary, MfaChoice, RancherForm, RancherSummary, SettingsView, SetupError,
+    same_url, AwsAppForm, AwsAppKey, AwsAppSummary, Checklist, Field, FieldError, IdpForm,
+    IdpSummary, MfaChoice, RancherForm, RancherSummary, SettingsView, SetupError,
 };
 
 use crate::domain::models::mfa::MfaSelection;
+pub use crate::domain::models::settings::AwsAppType;
 use crate::domain::models::settings::{AppConfig, YubikeyConfig};
 use crate::domain::ports::notifier::Notifier;
 use crate::domain::ports::user_interaction::UserInteraction;

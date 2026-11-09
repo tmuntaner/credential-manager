@@ -49,7 +49,7 @@ impl Focus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use c9s::app::settings::AwsAppKind;
+    use c9s::app::settings::AwsAppType;
 
     #[test]
     fn the_focus_goes_to_the_target_once() {
@@ -68,13 +68,13 @@ mod tests {
         focus.set(FocusTarget::Nav(Route::Setup));
         focus.set(FocusTarget::AwsApp(AwsAppKey {
             app_url: "https://a".into(),
-            kind: AwsAppKind::Aws,
+            kind: AwsAppType::Aws,
         }));
 
         assert!(!focus.take(&FocusTarget::Nav(Route::Setup)));
         assert!(focus.take(&FocusTarget::AwsApp(AwsAppKey {
             app_url: "https://a".into(),
-            kind: AwsAppKind::Aws,
+            kind: AwsAppType::Aws,
         })));
     }
 
@@ -87,9 +87,9 @@ mod tests {
             })
         };
         let mut focus = Focus::default();
-        focus.set(key(AwsAppKind::AwsSso));
+        focus.set(key(AwsAppType::AwsSso));
 
-        assert!(!focus.take(&key(AwsAppKind::Aws)));
-        assert!(focus.take(&key(AwsAppKind::AwsSso)));
+        assert!(!focus.take(&key(AwsAppType::Aws)));
+        assert!(focus.take(&key(AwsAppType::AwsSso)));
     }
 }

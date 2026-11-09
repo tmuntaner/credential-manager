@@ -117,7 +117,7 @@ impl Dialog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use c9s::app::settings::{AwsAppKind, MfaChoice};
+    use c9s::app::settings::{AwsAppType, MfaChoice};
     use c9s::domain::ports::config::InMemoryConfigStore;
     use c9s::domain::services::settings_editor::SettingsService;
     use std::sync::Arc;
@@ -179,7 +179,7 @@ mod tests {
             saved.focus,
             Some(FocusTarget::AwsApp(c9s::app::settings::AwsAppKey {
                 app_url: "https://id.example.com/application/saml/aws/binding/init".into(),
-                kind: AwsAppKind::Aws,
+                kind: AwsAppType::Aws,
             }))
         );
     }

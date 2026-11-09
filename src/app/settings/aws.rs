@@ -1,6 +1,7 @@
 use super::errors::{with_mfa, Form};
-use super::models::{AwsAppForm, AwsAppKey, AwsAppKind, Field, SettingsView, SetupError};
+use super::models::{AwsAppForm, AwsAppKey, Field, SettingsView, SetupError};
 use super::{mfa_override, SettingsPage};
+use crate::domain::models::settings::AwsAppType;
 use crate::domain::services::settings_editor::{self, AwsAppInput, SaveAs};
 
 impl SettingsPage {
@@ -12,14 +13,14 @@ impl SettingsPage {
         input.username = form.username;
 
         let kind = match form.kind {
-            AwsAppKind::Aws => settings_editor::AwsAppKind::Aws,
-            AwsAppKind::AwsSso => settings_editor::AwsAppKind::AwsSso {
+            AwsAppType::Aws => settings_editor::AwsAppKind::Aws,
+            AwsAppType::AwsSso => settings_editor::AwsAppKind::AwsSso {
                 region: form.region.unwrap_or_default(),
             },
         };
 
         let mode = match form.original {
-            Some(key) => SaveAs::Replace((key.app_url, key.kind.into())),
+            Some(key) => SaveAs::Replace((key.app_url, key.kind)),
             None => SaveAs::New,
         };
 
@@ -38,8 +39,6 @@ impl SettingsPage {
     }
 
     pub fn remove_aws_app(&self, key: AwsAppKey) -> Result<SettingsView, SetupError> {
-        self.run(Form::Action, |s| {
-            s.remove_aws_app(&key.app_url, key.kind.into())
-        })
+        self.run(Form::Action, |s| s.remove_aws_app(&key.app_url, key.kind))
     }
 }
