@@ -17,6 +17,9 @@ pub struct Session<'a> {
     aes_key: Vec<u8>,
 }
 
+/// Size in bytes of the 1024 bit prime, and so of the shared secret.
+const DH_SECRET_LEN: usize = 128;
+
 pub const DH_ALGORITHM: &str = "dh-ietf1024-sha256-aes128-cbc-pkcs7";
 
 #[derive(Debug, Error)]
@@ -48,7 +51,12 @@ impl Session<'_> {
         let server_public_key = session.server_public_key()?;
         let common_key = key.compute_key(server_public_key.borrow())?;
 
-        let ikm = common_key.as_slice();
+        // OpenSSL drops leading zero bytes of the shared secret, but the service derives its key
+        // from the full 128 bytes (the size of the prime). Without the padding the keys differ
+        // in about 1 of 256 sessions and the service rejects the secret.
+        let mut ikm = vec![0u8; DH_SECRET_LEN.saturating_sub(common_key.len())];
+        ikm.extend_from_slice(&common_key);
+        let ikm = ikm.as_slice();
         let info = [];
 
         let mut okm = [0; 16];

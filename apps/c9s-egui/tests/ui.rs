@@ -5,7 +5,7 @@
 use c9s::app::prompts::WindowInteraction;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use c9s::app::settings::SetupError;
-use c9s::app::settings::{AwsAppForm, AwsAppKind, ExportChoice, IdpForm, MfaChoice, SettingsPage};
+use c9s::app::settings::{AwsAppForm, AwsAppType, ExportChoice, IdpForm, MfaChoice, SettingsPage};
 use c9s::domain::models::login::{AwsOverrides, RancherOverrides};
 use c9s::domain::models::settings::YubikeyConfig;
 use c9s::domain::models::user_interaction::SecretPrompt;
@@ -13,6 +13,7 @@ use c9s::domain::ports::config::ConfigStore;
 use c9s::domain::ports::login::LoginResolver;
 use c9s::domain::ports::user_interaction::UserInteraction;
 use c9s::domain::services::login_resolver::LoginResolverService;
+use c9s::domain::services::settings_editor::SettingsService;
 use c9s::outbound::config::bundle::TomlBundleCodec;
 use c9s::outbound::config::config_store::ConfigFileAdapter;
 use c9s_egui::app::C9sApp;
@@ -69,7 +70,8 @@ impl Window {
 
     /// Settings made without the window, as if by `c9s config`.
     fn with_idp_and_aws(&self) {
-        let page = SettingsPage::new(self.store());
+        let settings = SettingsService::new(Arc::new(self.store()));
+        let page = SettingsPage::new(settings);
         page.save_idp(IdpForm {
             editing: false,
             name: "work".into(),
@@ -81,7 +83,7 @@ impl Window {
         page.save_aws_app(AwsAppForm {
             original: None,
             app_url: APP_URL.into(),
-            kind: AwsAppKind::Aws,
+            kind: AwsAppType::Aws,
             region: None,
             idp: "work".into(),
             username: None,
@@ -402,7 +404,8 @@ fn issued_credentials_can_only_be_encrypted_with_a_key_enrolled() {
 #[test]
 fn issued_credentials_are_encrypted_when_chosen() {
     let window = Window::new();
-    SettingsPage::new(window.store())
+    let settings = SettingsService::new(Arc::new(window.store()));
+    SettingsPage::new(settings)
         .set_security_key(Some(yubikey()))
         .unwrap();
     let mut harness = window.open();
@@ -419,7 +422,8 @@ fn issued_credentials_are_encrypted_when_chosen() {
 #[test]
 fn a_security_key_is_disabled_after_asking() {
     let window = Window::new();
-    SettingsPage::new(window.store())
+    let settings = SettingsService::new(Arc::new(window.store()));
+    SettingsPage::new(settings)
         .set_security_key(Some(yubikey()))
         .unwrap();
     let mut harness = window.open();
@@ -523,7 +527,8 @@ fn export_and_import_live_on_their_own_page() {
 fn identity_providers_are_exported_to_a_file_without_security_settings() {
     let window = Window::new();
     window.with_idp_and_aws();
-    SettingsPage::new(window.store())
+    let settings = SettingsService::new(Arc::new(window.store()));
+    SettingsPage::new(settings)
         .set_security_key(Some(yubikey()))
         .unwrap();
     let file = window.dir.path().join("share.toml");
@@ -606,7 +611,8 @@ fn a_file_is_imported_and_found_by_the_cli() {
     let sharer = Window::new();
     sharer.with_idp_and_aws();
     let file = sharer.dir.path().join("share.toml");
-    SettingsPage::new(sharer.store())
+    let settings = SettingsService::new(Arc::new(sharer.store()));
+    SettingsPage::new(settings)
         .export_choice_to_file(
             &TomlBundleCodec,
             &ExportChoice::new(vec!["work".into()], vec![APP_URL.into()], vec![]),
@@ -642,6 +648,43 @@ fn a_file_is_imported_and_found_by_the_cli() {
         .unwrap();
     // The user name is the importer's, not the one of the exporter.
     assert_eq!(login.username, "newcomer@example.com");
+}
+
+#[test]
+fn importing_the_same_file_again_says_nothing_is_new() {
+    let sharer = Window::new();
+    sharer.with_idp_and_aws();
+    let file = sharer.dir.path().join("share.toml");
+    SettingsPage::new(SettingsService::new(Arc::new(sharer.store())))
+        .export_choice_to_file(
+            &TomlBundleCodec,
+            &ExportChoice::new(vec!["work".into()], vec![APP_URL.into()], vec![]),
+            &file,
+        )
+        .unwrap();
+
+    let window = Window::new();
+    let mut harness = window.open();
+    harness
+        .state_mut()
+        .as_mut()
+        .unwrap()
+        .set_chooser(chooser(Some(file)));
+
+    click_button(&mut harness, "Import / Export");
+    click_button(&mut harness, "Import…");
+    wait_until(&mut harness, "the question for the user name", |h| {
+        h.query_by_label("Import onboarding file").is_some()
+    });
+    type_into(&mut harness, "User name for work", "newcomer@example.com");
+    click_button(&mut harness, "Import");
+    harness.get_by_label("Imported: 2 added.");
+
+    click_button(&mut harness, "Import…");
+    wait_until(&mut harness, "the second report", |h| {
+        h.query_by_label("Nothing new to import, 2 were set up already.")
+            .is_some()
+    });
 }
 
 #[test]
@@ -691,7 +734,8 @@ fn a_first_run_is_set_up_by_importing_a_file() {
     let sharer = Window::new();
     sharer.with_idp_and_aws();
     let file = sharer.dir.path().join("share.toml");
-    SettingsPage::new(sharer.store())
+    let settings = SettingsService::new(Arc::new(sharer.store()));
+    SettingsPage::new(settings)
         .export_choice_to_file(
             &TomlBundleCodec,
             &ExportChoice::new(vec!["work".into()], vec![APP_URL.into()], vec![]),
@@ -736,7 +780,8 @@ fn a_first_run_is_set_up_by_importing_a_file() {
 #[test]
 fn an_identity_provider_alone_is_enough_to_be_set_up() {
     let window = Window::new();
-    SettingsPage::new(window.store())
+    let settings = SettingsService::new(Arc::new(window.store()));
+    SettingsPage::new(settings)
         .save_idp(IdpForm {
             editing: false,
             name: "work".into(),

@@ -13,11 +13,13 @@ pub use usernames::UsernamesDialog;
 
 use crate::app::FocusTarget;
 use aws::AwsDialog;
-use c9s::app::settings::{AwsAppSummary, IdpSummary, RancherSummary, SettingsPage, SettingsView};
-use c9s::domain::ports::config::ConfigStore;
+use c9s::app::settings::{
+    AwsAppSummary, ExportChoice, IdpSummary, RancherSummary, SettingsPage, SettingsView,
+};
 use eframe::egui::Context;
 use idp::IdpDialog;
 use rancher::RancherDialog;
+use std::collections::BTreeMap;
 
 /// The context of a form dialog.
 #[derive(Clone, Debug, Default)]
@@ -45,6 +47,29 @@ pub struct Saved {
     pub message: String,
     /// The widget that should get the focus after the dialog closes.
     pub focus: Option<FocusTarget>,
+}
+
+/// What a submitted dialog asks the settings screen to do next.
+#[derive(Debug)]
+pub enum Submitted {
+    /// We wrote the changes. We can show it and close the dialog.
+    Saved(Saved),
+    /// The user chose what to export. We can close the dialog and ask for the file.
+    Export(ExportChoice),
+    /// The usernames for an import. We can close the dialog and import.
+    Usernames(BTreeMap<String, String>),
+    /// Not done yet. The dialog stays open and shows the problem to the user.
+    StillOpen,
+}
+
+#[cfg(test)]
+impl Submitted {
+    pub fn saved(self) -> Saved {
+        match self {
+            Submitted::Saved(saved) => saved,
+            other => panic!("expected a saved change, got {other:?}"),
+        }
+    }
 }
 
 /// The dialog popups.
@@ -100,17 +125,18 @@ impl Dialog {
         }
     }
 
-    /// Submits the dialog form to the settings page to be saved.
-    pub fn submit<S: ConfigStore>(&mut self, page: &SettingsPage<S>) -> Result<Saved, String> {
+    /// Submits the dialog to the settings page, and says what happens next.
+    pub fn submit(&mut self, page: &SettingsPage) -> Result<Submitted, String> {
         match self {
-            Dialog::Idp(d) => d.submit(page),
-            Dialog::Aws(d) => d.submit(page),
-            Dialog::Rancher(d) => d.submit(page),
-            Dialog::Remove(d) => d.submit(page),
-            // Exporting writes a file the user chooses next, the state takes it from there.
-            Dialog::Export(_) | Dialog::Usernames(_) => {
-                Err("Choose a file to export to.".to_string())
-            }
+            Dialog::Idp(d) => d.submit(page).map(Submitted::Saved),
+            Dialog::Aws(d) => d.submit(page).map(Submitted::Saved),
+            Dialog::Rancher(d) => d.submit(page).map(Submitted::Saved),
+            Dialog::Remove(d) => d.submit(page).map(Submitted::Saved),
+            // Exporting writes a file the user chooses next, the screen takes it from there.
+            Dialog::Export(d) => Ok(Submitted::Export(d.chosen())),
+            Dialog::Usernames(d) => Ok(d
+                .usernames()
+                .map_or(Submitted::StillOpen, Submitted::Usernames)),
         }
     }
 }
@@ -118,20 +144,20 @@ impl Dialog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use c9s::app::settings::{AwsAppKind, MfaChoice};
-    use c9s::outbound::config::config_store::ConfigFileAdapter;
+    use c9s::app::settings::{AwsAppType, MfaChoice};
+    use c9s::domain::services::settings_editor::SettingsService;
+    use c9s::outbound::config::in_memory::InMemoryConfigStore;
+    use std::sync::Arc;
 
-    fn page() -> (tempfile::TempDir, SettingsPage<ConfigFileAdapter>) {
-        let dir = tempfile::tempdir().unwrap();
-        let store = ConfigFileAdapter::at(dir.path().join("c9s").join("settings.toml"));
-        (dir, SettingsPage::new(store))
+    fn page() -> SettingsPage {
+        SettingsPage::new(SettingsService::new(Arc::new(InMemoryConfigStore::new())))
     }
 
-    fn form(page: &SettingsPage<ConfigFileAdapter>) -> FormContext {
+    fn form(page: &SettingsPage) -> FormContext {
         FormContext::of(&page.view().unwrap())
     }
 
-    fn typed_idp(page: &SettingsPage<ConfigFileAdapter>) -> Dialog {
+    fn typed_idp(page: &SettingsPage) -> Dialog {
         let mut dialog = Dialog::add_idp(&form(page));
         let Dialog::Idp(d) = &mut dialog else {
             unreachable!()
@@ -142,10 +168,10 @@ mod tests {
 
     #[test]
     fn a_saved_identity_provider_gives_back_the_view_and_the_focus() {
-        let (_dir, page) = page();
+        let page = page();
         let mut dialog = typed_idp(&page);
 
-        let saved = dialog.submit(&page).unwrap();
+        let saved = dialog.submit(&page).unwrap().saved();
 
         assert_eq!(saved.message, "Identity provider work saved.");
         assert_eq!(saved.focus, Some(FocusTarget::Idp("work".into())));
@@ -154,7 +180,7 @@ mod tests {
 
     #[test]
     fn an_invalid_form_keeps_its_errors_and_says_how_many() {
-        let (_dir, page) = page();
+        let page = page();
         let mut dialog = Dialog::add_idp(&form(&page));
 
         let said = dialog.submit(&page).unwrap_err();
@@ -165,36 +191,36 @@ mod tests {
 
     #[test]
     fn a_saved_aws_app_focuses_the_entry_the_view_stored() {
-        let (_dir, page) = page();
-        typed_idp(&page).submit(&page).unwrap();
+        let page = page();
+        typed_idp(&page).submit(&page).unwrap().saved();
         let mut dialog = Dialog::add_aws(&form(&page));
         let Dialog::Aws(d) = &mut dialog else {
             unreachable!()
         };
         d.type_into("https://id.example.com/application/saml/aws/binding/init/");
 
-        let saved = dialog.submit(&page).unwrap();
+        let saved = dialog.submit(&page).unwrap().saved();
 
         // The settings keep the url without the trailing slash, the focus finds it all the same.
         assert_eq!(
             saved.focus,
             Some(FocusTarget::AwsApp(c9s::app::settings::AwsAppKey {
                 app_url: "https://id.example.com/application/saml/aws/binding/init".into(),
-                kind: AwsAppKind::Aws,
+                kind: AwsAppType::Aws,
             }))
         );
     }
 
     #[test]
     fn a_removal_that_is_refused_is_explained_in_the_dialog() {
-        let (_dir, page) = page();
-        typed_idp(&page).submit(&page).unwrap();
+        let page = page();
+        typed_idp(&page).submit(&page).unwrap().saved();
         let mut add = Dialog::add_aws(&form(&page));
         let Dialog::Aws(d) = &mut add else {
             unreachable!()
         };
         d.type_into("https://id.example.com/application/saml/aws/binding/init");
-        add.submit(&page).unwrap();
+        add.submit(&page).unwrap().saved();
         let mut remove = Dialog::Remove(RemoveDialog::new(
             Removal::Idp("work".into()),
             "Remove work?",
@@ -211,8 +237,8 @@ mod tests {
 
     #[test]
     fn a_removal_goes_back_to_the_add_button() {
-        let (_dir, page) = page();
-        typed_idp(&page).submit(&page).unwrap();
+        let page = page();
+        typed_idp(&page).submit(&page).unwrap().saved();
         let mut remove = Dialog::Remove(RemoveDialog::new(
             Removal::Idp("work".into()),
             "Remove work?",
@@ -220,7 +246,7 @@ mod tests {
             "work removed.",
         ));
 
-        let saved = remove.submit(&page).unwrap();
+        let saved = remove.submit(&page).unwrap().saved();
 
         assert_eq!(saved.message, "work removed.");
         assert_eq!(

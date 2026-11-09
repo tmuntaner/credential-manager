@@ -61,6 +61,8 @@ impl PinRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum KeyEvent {
+    /// No security key is plugged in yet. The flow keeps looking for one.
+    InsertKey,
     /// The user must touch the security key to continue.
     TouchRequired,
     /// More than one key is available, and the user has to select the device by touching it.
@@ -79,13 +81,17 @@ impl KeyEvent {
     /// The flow waits for the user to act on the key, and the user may give up instead (see
     /// [`SecurityKeyUi::cancelled`]).
     pub fn awaits_user(&self) -> bool {
-        matches!(self, KeyEvent::TouchRequired | KeyEvent::SelectDevice)
+        matches!(
+            self,
+            KeyEvent::InsertKey | KeyEvent::TouchRequired | KeyEvent::SelectDevice
+        )
     }
 }
 
 impl fmt::Display for KeyEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            KeyEvent::InsertKey => "Insert your security key...",
             KeyEvent::TouchRequired => "Touch your security key to continue...",
             KeyEvent::SelectDevice => "Several security keys found. Touch the one you want to use.",
             KeyEvent::PinAuthBlocked => {
@@ -198,6 +204,7 @@ mod tests {
 
     #[test]
     fn only_the_waits_can_be_cancelled() {
+        assert!(KeyEvent::InsertKey.awaits_user());
         assert!(KeyEvent::TouchRequired.awaits_user());
         assert!(KeyEvent::SelectDevice.awaits_user());
         assert!(!KeyEvent::PinBlocked.awaits_user());

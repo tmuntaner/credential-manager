@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use clap::Parser;
 
+use crate::app::CliApplication;
 use c9s::domain::models::settings::AppConfig;
 use c9s::domain::ports::notifier::Notifier;
 use c9s::domain::ports::user_interaction::UserInteraction;
@@ -70,14 +71,14 @@ pub struct DaemonStop {
 }
 
 impl Daemon {
-    pub async fn run<U: UserInteraction + 'static, N: Notifier + 'static>(
-        self,
-        settings: AppConfig,
-        interaction: Arc<U>,
-        notifier: Arc<N>,
-    ) -> Result<()> {
+    pub async fn run(self, application: &CliApplication) -> Result<()> {
+        let settings = application.config().clone();
         match self.sub_command {
-            DaemonSubCommands::Run(cmd) => cmd.run(&settings, interaction, notifier).await,
+            DaemonSubCommands::Run(cmd) => {
+                let interaction = Arc::new(application.interaction());
+                let notifier = Arc::new(application.notifier());
+                cmd.run(&settings, interaction, notifier).await
+            }
             DaemonSubCommands::Status(cmd) => cmd.run(&settings).await,
             DaemonSubCommands::Lock(cmd) => cmd.run(&settings).await,
             DaemonSubCommands::Stop(cmd) => cmd.run(&settings).await,

@@ -5,9 +5,8 @@ use crate::ui::dialog::dialog;
 use crate::ui::errors::{general_error, FormErrors};
 use crate::ui::field::{submitted, text_field, TextOptions};
 use c9s::app::settings::{
-    same_url, AwsAppForm, AwsAppKey, AwsAppKind, AwsAppSummary, Field, SettingsPage, SettingsView,
+    same_url, AwsAppForm, AwsAppKey, AwsAppSummary, AwsAppType, Field, SettingsPage, SettingsView,
 };
-use c9s::domain::ports::config::ConfigStore;
 use eframe::egui::{Context, RichText};
 
 const FIELDS: [Field; 5] = [
@@ -27,7 +26,7 @@ const SIGN_IN: SignInKeys = SignInKeys {
 pub struct AwsDialog {
     original: Option<AwsAppKey>,
     app_url: String,
-    kind: AwsAppKind,
+    kind: AwsAppType,
     region: String,
     sign_in: SignInFields,
     first_frame: bool,
@@ -40,7 +39,7 @@ impl AwsDialog {
         Self {
             original: None,
             app_url: String::new(),
-            kind: AwsAppKind::Aws,
+            kind: AwsAppType::Aws,
             region: String::new(),
             sign_in: SignInFields::new(SIGN_IN, form),
             first_frame: true,
@@ -68,7 +67,7 @@ impl AwsDialog {
     }
 
     /// Takes the changes and generates a `Saved` result.
-    pub fn submit<S: ConfigStore>(&mut self, page: &SettingsPage<S>) -> Result<Saved, String> {
+    pub fn submit(&mut self, page: &SettingsPage) -> Result<Saved, String> {
         let form = self.form();
 
         match page.save_aws_app(form.clone()) {
@@ -115,17 +114,17 @@ impl AwsDialog {
             ui.label(RichText::new("Type of application").strong());
 
             // radio value for kind
-            ui.radio_value(&mut self.kind, AwsAppKind::Aws, "AWS with IAM roles");
+            ui.radio_value(&mut self.kind, AwsAppType::Aws, "AWS with IAM roles");
             ui.radio_value(
                 &mut self.kind,
-                AwsAppKind::AwsSso,
+                AwsAppType::AwsSso,
                 "AWS IAM Identity Center",
             );
 
             ui.add_space(8.0);
 
             // if the radio is AwsSso, get the region
-            if self.kind == AwsAppKind::AwsSso {
+            if self.kind == AwsAppType::AwsSso {
                 let input = text_field(
                     ui,
                     &mut self.errors,
@@ -152,7 +151,7 @@ impl AwsDialog {
             original: self.original.clone(),
             app_url: self.app_url.trim().to_string(),
             kind: self.kind,
-            region: (self.kind == AwsAppKind::AwsSso).then(|| self.region.trim().to_string()),
+            region: (self.kind == AwsAppType::AwsSso).then(|| self.region.trim().to_string()),
             idp: self.sign_in.idp.clone(),
             username: self.sign_in.username(),
             mfa: self.sign_in.mfa,
@@ -161,7 +160,7 @@ impl AwsDialog {
 }
 
 /// Gets the AWS widget that was saved to take a focus.
-fn saved_entry(view: &SettingsView, kind: AwsAppKind, app_url: &str) -> Option<FocusTarget> {
+fn saved_entry(view: &SettingsView, kind: AwsAppType, app_url: &str) -> Option<FocusTarget> {
     view.aws_apps
         .iter()
         .find(|a| a.kind == kind && same_url(&a.app_url, app_url))

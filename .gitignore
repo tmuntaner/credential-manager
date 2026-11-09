@@ -4,5 +4,9 @@
 license.html
 license.txt
 AGENTS.md
+docs/specs
 
 requests/*
+
+# temporary, it's not ready yet
+/docs/settings.md

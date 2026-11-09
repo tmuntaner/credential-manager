@@ -5,7 +5,6 @@ use crate::ui::dialog::modal;
 use crate::ui::errors::error_label;
 use crate::ui::heading;
 use c9s::app::settings::{AwsAppKey, SettingsPage};
-use c9s::domain::ports::config::ConfigStore;
 use eframe::egui::{Context, RichText};
 
 /// What to remove.
@@ -59,7 +58,7 @@ impl RemoveDialog {
     }
 
     /// Remove the entry and gives focus to the add button of its add section.
-    pub fn submit<S: ConfigStore>(&mut self, page: &SettingsPage<S>) -> Result<Saved, String> {
+    pub fn submit(&mut self, page: &SettingsPage) -> Result<Saved, String> {
         let (result, section) = match &self.removal {
             Removal::Idp(name) => (page.remove_idp(name), Section::Idp),
             Removal::AwsApp(key) => (page.remove_aws_app(key.clone()), Section::Aws),

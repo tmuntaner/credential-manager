@@ -2,9 +2,8 @@ use crate::app::settings::SECURITY_KEY_SUPPORTED;
 use crate::domain::models::mfa::MfaSelection;
 /// Whether two URLs are the same entry: the one rule of the settings.
 pub use crate::domain::models::settings::same_app_url as same_url;
-use crate::domain::models::settings::AppConfig;
-use crate::domain::services::settings_editor::idp_used_by;
-use crate::domain::services::settings_validation::allow_insecure_localhost;
+use crate::domain::models::settings::{AppConfig, AwsAppType};
+use crate::domain::services::settings_editor::fields::allow_insecure_localhost;
 
 /// The MFA choice from the user.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,29 +15,22 @@ pub enum MfaChoice {
     SecurityKey,
 }
 
+impl MfaChoice {
+    /// The selection to save: "ask" is no selection.
+    pub fn selection(self) -> Option<MfaSelection> {
+        match self {
+            MfaChoice::Ask => None,
+            MfaChoice::Totp => Some(MfaSelection::Totp),
+            MfaChoice::SecurityKey => Some(MfaSelection::WebAuthn),
+        }
+    }
+}
+
 impl From<MfaSelection> for MfaChoice {
     fn from(value: MfaSelection) -> Self {
         match value {
             MfaSelection::Totp => MfaChoice::Totp,
             MfaSelection::WebAuthn => MfaChoice::SecurityKey,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AwsAppKind {
-    /// An AWS app with IAM roles.
-    Aws,
-    /// An AWS IAM Identity Center app.
-    AwsSso,
-}
-
-impl From<AwsAppKind> for crate::domain::models::settings::AwsAppType {
-    fn from(kind: AwsAppKind) -> Self {
-        use crate::domain::models::settings::AwsAppType;
-        match kind {
-            AwsAppKind::Aws => AwsAppType::Aws,
-            AwsAppKind::AwsSso => AwsAppType::AwsSso,
         }
     }
 }
@@ -77,7 +69,7 @@ pub struct IdpForm {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AwsAppKey {
     pub app_url: String,
-    pub kind: AwsAppKind,
+    pub kind: AwsAppType,
 }
 
 /// The form to manage an AWS app.
@@ -86,8 +78,8 @@ pub struct AwsAppForm {
     /// The app we're working on (which may change URLs).
     pub original: Option<AwsAppKey>,
     pub app_url: String,
-    pub kind: AwsAppKind,
-    /// Only for [`AwsAppKind::AwsSso`].
+    pub kind: AwsAppType,
+    /// Only for [`AwsAppType::AwsSso`].
     pub region: Option<String>,
     /// The identity provider the app logs in with. Required.
     pub idp: String,
@@ -123,7 +115,7 @@ pub struct IdpSummary {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AwsAppSummary {
     pub app_url: String,
-    pub kind: AwsAppKind,
+    pub kind: AwsAppType,
     pub region: Option<String>,
     pub idp: String,
     pub username: Option<String>,
@@ -185,7 +177,7 @@ impl From<AppConfig> for SettingsView {
                     Some(mfa) => mfa.into(),
                     None => MfaChoice::Ask,
                 },
-                used_by: idp_used_by(settings, idp.name()),
+                used_by: settings.apps_using_idp(idp.name()),
             })
             .collect();
 
@@ -194,7 +186,7 @@ impl From<AppConfig> for SettingsView {
             .iter()
             .map(|host| AwsAppSummary {
                 app_url: host.app_url().to_string(),
-                kind: AwsAppKind::Aws,
+                kind: AwsAppType::Aws,
                 region: None,
                 idp: host.idp().to_string(),
                 username: host.username().map(str::to_string),
@@ -203,7 +195,7 @@ impl From<AppConfig> for SettingsView {
             .collect();
         aws_apps.extend(settings.aws_sso_hosts().iter().map(|host| AwsAppSummary {
             app_url: host.app_url().to_string(),
-            kind: AwsAppKind::AwsSso,
+            kind: AwsAppType::AwsSso,
             region: Some(host.region().to_string()),
             idp: host.idp().to_string(),
             username: host.username().map(str::to_string),

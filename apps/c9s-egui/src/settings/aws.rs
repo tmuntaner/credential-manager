@@ -4,7 +4,7 @@ use super::dialogs::{Removal, RemoveDialog};
 use super::{signs_in_with, SettingsAction};
 use crate::app::{Focus, FocusTarget, Section};
 use crate::ui::card::{card, card_button, card_header};
-use c9s::app::settings::{AwsAppKey, AwsAppKind, AwsAppSummary, SettingsView};
+use c9s::app::settings::{AwsAppKey, AwsAppSummary, AwsAppType, SettingsView};
 use eframe::egui::Ui;
 
 pub fn ui(ui: &mut Ui, view: &SettingsView, focus: &mut Focus) -> Option<SettingsAction> {
@@ -69,8 +69,8 @@ fn app_entry(ui: &mut Ui, app: &AwsAppSummary, focus: &mut Focus) -> Option<Sett
 
 fn aws_title(app: &AwsAppSummary) -> String {
     let kind = match app.kind {
-        AwsAppKind::Aws => "AWS with IAM roles",
-        AwsAppKind::AwsSso => "AWS IAM Identity Center",
+        AwsAppType::Aws => "AWS with IAM roles",
+        AwsAppType::AwsSso => "AWS IAM Identity Center",
     };
     match &app.region {
         Some(region) => format!("{kind} ({region})"),
@@ -86,14 +86,14 @@ mod tests {
     fn an_aws_app_is_titled_by_kind_and_region() {
         let mut app = AwsAppSummary {
             app_url: "https://a".into(),
-            kind: AwsAppKind::Aws,
+            kind: AwsAppType::Aws,
             region: None,
             idp: "work".into(),
             username: None,
             mfa: None,
         };
         assert_eq!(aws_title(&app), "AWS with IAM roles");
-        app.kind = AwsAppKind::AwsSso;
+        app.kind = AwsAppType::AwsSso;
         app.region = Some("eu-west-1".into());
         assert_eq!(aws_title(&app), "AWS IAM Identity Center (eu-west-1)");
     }

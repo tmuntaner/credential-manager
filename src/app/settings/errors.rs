@@ -1,104 +1,92 @@
 use super::models::{Field, FieldError, SetupError};
 use crate::domain::models::login::ResolveError;
 use crate::domain::models::settings::SettingsError;
-use crate::domain::services::settings_editor::{InvalidField, SettingsEditError};
+use crate::domain::services::settings_editor::{
+    FieldProblem, InvalidField, Problem, SettingsEditError,
+};
 
 /// The form a change came from.
 #[derive(Clone, Copy)]
-pub(super) enum Form {
-    Idp,
-    Aws,
-    Rancher,
-    /// Not a form, a button such as "Remove".
-    Action,
+pub(super) struct Form {
+    name: Option<Field>,
+    url: Option<Field>,
+    username: Option<Field>,
+    mfa: Option<Field>,
+    client_id: Option<Field>,
+    region: Option<Field>,
+    idp: Option<Field>,
+    /// The input that identifies the entry.
+    key: Option<Field>,
+    already_exists: fn(&str) -> String,
 }
 
 impl Form {
-    /// Returns the URL field if the form has one.
-    fn url(self) -> Option<Field> {
-        match self {
-            Form::Idp => Some(Field::IdpUrl),
-            Form::Aws => Some(Field::AwsAppUrl),
-            Form::Rancher => Some(Field::RancherUrl),
-            Form::Action => None,
-        }
-    }
+    pub(super) const IDP: Form = Form {
+        name: Some(Field::IdpName),
+        url: Some(Field::IdpUrl),
+        username: Some(Field::IdpUsername),
+        mfa: Some(Field::IdpMfa),
+        client_id: None,
+        region: None,
+        idp: None,
+        key: Some(Field::IdpName),
+        already_exists: |key| {
+            format!(
+                "An identity provider called {key} exists already. Edit it, or choose another name."
+            )
+        },
+    };
 
-    /// Returns the field that identifies the entry.
-    fn key(self) -> Option<Field> {
-        match self {
-            Form::Idp => Some(Field::IdpName),
-            Form::Aws => Some(Field::AwsAppUrl),
-            Form::Rancher => Some(Field::RancherUrl),
-            Form::Action => None,
-        }
-    }
+    pub(super) const AWS: Form = Form {
+        name: None,
+        url: Some(Field::AwsAppUrl),
+        username: Some(Field::AwsUsername),
+        mfa: Some(Field::AwsMfa),
+        client_id: None,
+        region: Some(Field::AwsRegion),
+        idp: Some(Field::AwsIdp),
+        key: Some(Field::AwsAppUrl),
+        already_exists: |_| {
+            "This application is set up already. Edit it in the list instead.".into()
+        },
+    };
 
-    /// Returns the field of the form that holds a value the domain refused.
-    fn invalid_field(self, field: InvalidField) -> Option<Field> {
-        // Every pair is named, so a new `InvalidField` fails to compile here until a form decides where it goes.
-        match self {
-            Form::Idp => match field {
-                InvalidField::Name => Some(Field::IdpName),
-                InvalidField::Url => Some(Field::IdpUrl),
-                InvalidField::Username => Some(Field::IdpUsername),
-                InvalidField::ClientId | InvalidField::Region => None,
-            },
-            Form::Aws => match field {
-                InvalidField::Url => Some(Field::AwsAppUrl),
-                InvalidField::Username => Some(Field::AwsUsername),
-                InvalidField::Region => Some(Field::AwsRegion),
-                InvalidField::Name | InvalidField::ClientId => None,
-            },
-            Form::Rancher => match field {
-                InvalidField::Url => Some(Field::RancherUrl),
-                InvalidField::Username => Some(Field::RancherUsername),
-                InvalidField::ClientId => Some(Field::RancherClientId),
-                InvalidField::Name | InvalidField::Region => None,
-            },
-            Form::Action => match field {
-                InvalidField::Name
-                | InvalidField::Url
-                | InvalidField::Username
-                | InvalidField::ClientId
-                | InvalidField::Region => None,
-            },
-        }
-    }
+    pub(super) const RANCHER: Form = Form {
+        name: None,
+        url: Some(Field::RancherUrl),
+        username: Some(Field::RancherUsername),
+        mfa: Some(Field::RancherMfa),
+        client_id: Some(Field::RancherClientId),
+        region: None,
+        idp: Some(Field::RancherIdp),
+        key: Some(Field::RancherUrl),
+        already_exists: |_| "This Rancher is set up already. Edit it in the list instead.".into(),
+    };
 
-    /// Returns the field for the idp.
-    fn idp(self) -> Option<Field> {
-        match self {
-            Form::Aws => Some(Field::AwsIdp),
-            Form::Rancher => Some(Field::RancherIdp),
-            Form::Idp | Form::Action => None,
-        }
-    }
-}
+    /// Not a form, a button such as "Remove".
+    pub(super) const ACTION: Form = Form {
+        name: None,
+        url: None,
+        username: None,
+        mfa: None,
+        client_id: None,
+        region: None,
+        idp: None,
+        key: None,
+        already_exists: |key| format!("{key} exists already."),
+    };
 
-/// Collects the errors of a form, with an error per field.
-#[derive(Default)]
-pub(super) struct Errors(Vec<FieldError>);
-
-impl Errors {
-    pub(super) fn keep<T>(&mut self, field: Field, result: Result<T, String>) -> Option<T> {
-        match result {
-            Ok(value) => Some(value),
-            Err(message) => {
-                self.0.push(FieldError { field, message });
-                None
-            }
-        }
-    }
-
-    pub(super) fn into_result(self) -> Result<(), SetupError> {
-        if self.0.is_empty() {
-            Ok(())
-        } else {
-            Err(SetupError {
-                fields: self.0,
-                message: None,
-            })
+    /// The input that holds a value the domain refused.
+    fn input_of(self, field: InvalidField) -> Option<Field> {
+        // Every field is named, so a new `InvalidField` fails to compile here until the forms can place it.
+        match field {
+            InvalidField::Name => self.name,
+            InvalidField::Url => self.url,
+            InvalidField::Username => self.username,
+            InvalidField::Mfa => self.mfa,
+            InvalidField::ClientId => self.client_id,
+            InvalidField::Region => self.region,
+            InvalidField::Idp => self.idp,
         }
     }
 }
@@ -125,23 +113,43 @@ fn under(field: Option<Field>, message: impl Into<String>) -> SetupError {
     }
 }
 
+fn unknown_idp_message(name: &str) -> String {
+    format!("There is no identity provider called {name}. Choose another one.")
+}
+
 fn unknown_idp(form: Form, name: &str) -> SetupError {
-    under(
-        form.idp(),
-        format!("There is no identity provider called {name}. Choose another one."),
-    )
+    under(form.idp, unknown_idp_message(name))
+}
+
+/// One error per problem the form has a field for; the others are told in general.
+fn field_problems(form: Form, problems: Vec<FieldProblem>) -> SetupError {
+    let mut error = SetupError::default();
+    let mut general = Vec::new();
+    for FieldProblem { field, problem } in problems {
+        let message = match problem {
+            Problem::Message(message) => message,
+            Problem::UnknownIdp(name) => unknown_idp_message(&name),
+        };
+        match form.input_of(field) {
+            Some(field) => error.fields.push(FieldError { field, message }),
+            None => general.push(message),
+        }
+    }
+    if !general.is_empty() {
+        error.message = Some(general.join(" "));
+    }
+
+    error
 }
 
 pub(super) fn edit_error(error: SettingsEditError, form: Form) -> SetupError {
     match error {
         SettingsEditError::Invalid(SettingsError::UnknownIdp(name)) => unknown_idp(form, &name),
-        SettingsEditError::Invalid(_) => match form.url() {
+        SettingsEditError::Invalid(_) => match form.url {
             Some(field) => SetupError::field(field, "This web address cannot be used."),
             None => SetupError::general("A web address is not valid."),
         },
-        SettingsEditError::InvalidField { field, message } => {
-            under(form.invalid_field(field), message)
-        }
+        SettingsEditError::InvalidFields(problems) => field_problems(form, problems),
         SettingsEditError::IdpInUse { name, used_by } => SetupError::general(format!(
             "{name} cannot be removed: {} still sign{} in with it ({}). Choose another identity provider for {}, or remove {} first.",
             count(used_by.len()),
@@ -167,16 +175,7 @@ pub(super) fn edit_error(error: SettingsEditError, form: Form) -> SetupError {
 }
 
 fn already_exists(form: Form, key: &str) -> SetupError {
-    let message = match form {
-        Form::Idp => format!(
-            "An identity provider called {key} exists already. Edit it, or choose another name."
-        ),
-        Form::Aws => "This application is set up already. Edit it in the list instead.".into(),
-        Form::Rancher => "This Rancher is set up already. Edit it in the list instead.".into(),
-        Form::Action => format!("{key} exists already."),
-    };
-
-    under(form.key(), message)
+    under(form.key, (form.already_exists)(key))
 }
 
 fn count(n: usize) -> String {

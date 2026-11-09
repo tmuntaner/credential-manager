@@ -1,3 +1,4 @@
+use crate::app::CliApplication;
 use crate::args::AwsAppTypeArg;
 use crate::utils::parse_ttl;
 use anyhow::{anyhow, Result};
@@ -108,12 +109,10 @@ struct AwsCredentials {
 }
 
 impl Credentials {
-    pub async fn run(
-        &self,
-        settings: AppConfig,
-        prompt: Arc<impl UserInteraction + 'static>,
-        notifier: Arc<impl Notifier + 'static>,
-    ) -> Result<()> {
+    pub async fn run(&self, application: &CliApplication) -> Result<()> {
+        let settings = application.config().clone();
+        let prompt = Arc::new(application.interaction());
+        let notifier = Arc::new(application.notifier());
         let resolver = LoginResolverService::new(settings.clone());
         match &self.sub_command {
             CredentialsSubCommands::Aws(val) => val.run(prompt, notifier, settings).await,

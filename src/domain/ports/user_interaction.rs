@@ -42,3 +42,19 @@ pub trait UserInteraction: Send + Sync {
     /// Asks to pick an option and returns its index.
     async fn choose(&self, prompt: &ChoicePrompt) -> Result<usize, InteractionError>;
 }
+
+/// Lets a shared `Arc<dyn UserInteraction>` be used wherever a sized port is expected.
+#[async_trait(?Send)]
+impl<T: UserInteraction + ?Sized> UserInteraction for std::sync::Arc<T> {
+    async fn ask_secret(&self, prompt: SecretPrompt) -> Result<SafeSecret, InteractionError> {
+        (**self).ask_secret(prompt).await
+    }
+
+    async fn confirm(&self, prompt: ConfirmPrompt) -> Result<bool, InteractionError> {
+        (**self).confirm(prompt).await
+    }
+
+    async fn choose(&self, prompt: &ChoicePrompt) -> Result<usize, InteractionError> {
+        (**self).choose(prompt).await
+    }
+}

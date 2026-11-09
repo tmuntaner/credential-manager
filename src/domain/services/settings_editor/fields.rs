@@ -1,3 +1,4 @@
+use crate::domain::models::mfa::MfaSelection;
 use url::{Host, Url};
 
 /// Longest accepted url size.
@@ -16,6 +17,25 @@ const MAX_CLIENT_ID: usize = 256;
 /// We only allow this for debug builds.
 pub fn allow_insecure_localhost() -> bool {
     cfg!(debug_assertions)
+}
+
+/// Whether security keys work on this computer (os dependent).
+pub const fn security_key_supported() -> bool {
+    cfg!(any(target_os = "linux", target_os = "macos"))
+}
+
+/// Checks that the second step can be used where `security_key_supported` says.
+pub fn check_mfa(
+    mfa: Option<MfaSelection>,
+    security_key_supported: bool,
+) -> Result<Option<MfaSelection>, String> {
+    match mfa {
+        Some(MfaSelection::WebAuthn) if !security_key_supported => Err(
+            "Security keys are not supported on this computer yet. Choose the authenticator app code."
+                .into(),
+        ),
+        other => Ok(other),
+    }
 }
 
 /// Checks if the URL is valid and returns a cleaned version of it.
@@ -297,6 +317,18 @@ mod tests {
             Some("me")
         );
         assert!(check_optional_username(Some("me\nroot")).is_err());
+    }
+
+    #[test]
+    fn security_keys_need_a_supported_platform() {
+        let key = Some(MfaSelection::WebAuthn);
+        assert!(check_mfa(key, false).is_err());
+        assert_eq!(check_mfa(None, false), Ok(None));
+        assert_eq!(
+            check_mfa(Some(MfaSelection::Totp), false),
+            Ok(Some(MfaSelection::Totp))
+        );
+        assert_eq!(check_mfa(key, true), Ok(key));
     }
 
     #[test]

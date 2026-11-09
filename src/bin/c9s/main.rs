@@ -1,3 +1,4 @@
+pub mod app;
 mod args;
 mod config;
 mod credentials;
@@ -5,6 +6,7 @@ mod credentials;
 mod daemon;
 mod utils;
 
+use crate::app::CliApplication;
 use crate::args::PromptModeArg;
 use crate::config::Config;
 use crate::credentials::Credentials;
@@ -14,6 +16,7 @@ use anyhow::Result;
 use c9s::domain::services::settings_editor::SettingsService;
 use c9s::outbound::config::config_store::ConfigFileAdapter;
 use clap::Parser;
+use std::sync::Arc;
 
 #[derive(Parser)]
 #[clap(version, author = "Thomas Muntaner <thomas.muntaner@gmail.com>")]
@@ -49,15 +52,16 @@ impl Licenses {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opt: Opts = Opts::parse();
-    let settings_service = SettingsService::new(ConfigFileAdapter::in_user_config_dir()?);
-    let settings = settings_service.load()?;
-    let (interaction, notifier) = utils::interaction(&settings, opt.prompt.map(Into::into));
+    let settings_service = SettingsService::new(Arc::new(ConfigFileAdapter::in_user_config_dir()?));
+    let config = settings_service.load()?;
+    let (interaction, notifier) = utils::interaction(&config, opt.prompt.map(Into::into));
+    let application = CliApplication::new(config, settings_service, interaction, notifier);
 
     match opt.sub_command {
-        SubCommand::Config(val) => val.run(&settings_service, interaction, notifier).await?,
-        SubCommand::Creds(val) => val.run(settings, interaction, notifier).await?,
+        SubCommand::Config(val) => val.run(&application).await?,
+        SubCommand::Creds(val) => val.run(&application).await?,
         #[cfg(unix)]
-        SubCommand::Daemon(val) => val.run(settings, interaction, notifier).await?,
+        SubCommand::Daemon(val) => val.run(&application).await?,
         SubCommand::Licenses(val) => val.run()?,
     }
 

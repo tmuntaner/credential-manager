@@ -1,0 +1,25 @@
+Cargo.lock
+target
+.cargo
+
+# Environment variables & secrets
+.env
+.env.*
+*.pem
+*.key
+*.cert
+
+# Logs, crash dumps, and profiling data
+*.log
+flamegraph.svg
+perf.data
+callgrind.out.*
+
+# IDEs and OS metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Version control history
+.git/

@@ -3,6 +3,7 @@ use crate::domain::ports::secret_wrapper::WrapError;
 impl From<webauthn::WebauthnError> for WrapError {
     fn from(err: webauthn::WebauthnError) -> Self {
         match err {
+            webauthn::WebauthnError::NoKeyFound => WrapError::DeviceNotPresent,
             webauthn::WebauthnError::Cancelled
             | webauthn::WebauthnError::ReceiveSignResult
             | webauthn::WebauthnError::ReceiveRegisterResult => WrapError::Cancelled,
@@ -41,6 +42,12 @@ mod tests {
         let err = WrapError::from(webauthn::WebauthnError::Cancelled);
 
         assert!(matches!(err, WrapError::Cancelled));
+    }
+
+    #[test]
+    fn no_key_found_is_device_not_present() {
+        let err = WrapError::from(webauthn::WebauthnError::NoKeyFound);
+        assert!(matches!(err, WrapError::DeviceNotPresent));
     }
 
     #[test]
