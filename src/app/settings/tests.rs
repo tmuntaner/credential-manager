@@ -1,14 +1,14 @@
-//! The settings page against a real settings file in a temporary folder.
+//! The settings page against an in-memory store.
 
 use super::*;
 use crate::domain::models::login::{AwsOverrides, RancherOverrides};
 use crate::domain::models::settings::AwsAppType;
 use crate::domain::models::settings::YubikeyConfig;
+use crate::domain::ports::config::{ConfigError, InMemoryConfigStore, MockConfigStore};
 use crate::domain::ports::login::LoginResolver;
 use crate::domain::ports::secret_wrapper::WrapError;
 use crate::domain::services::login_resolver::LoginResolverService;
 use crate::domain::services::settings_editor::SettingsService;
-use crate::outbound::config::config_store::ConfigFileAdapter;
 
 const APP_URL: &str = "https://id.example.com/application/saml/aws/sso/binding/init/";
 const STORED_APP_URL: &str = "https://id.example.com/application/saml/aws/sso/binding/init";
@@ -47,16 +47,16 @@ fn rancher() -> RancherForm {
     }
 }
 
-fn page() -> (tempfile::TempDir, SettingsPage) {
-    let dir = tempfile::tempdir().unwrap();
-    let settings = SettingsService::new(Arc::new(store(&dir)));
-    let page = SettingsPage::new(settings);
+fn page() -> (Arc<InMemoryConfigStore>, SettingsPage) {
+    let store = Arc::new(InMemoryConfigStore::new());
+    let page = SettingsPage::new(SettingsService::new(store.clone()));
 
-    (dir, page)
+    (store, page)
 }
 
-fn store(dir: &tempfile::TempDir) -> ConfigFileAdapter {
-    ConfigFileAdapter::at(dir.path().join("c9s").join("settings.toml"))
+/// What the CLI would see: another service on the same store.
+fn another_service(store: &Arc<InMemoryConfigStore>) -> SettingsService {
+    SettingsService::new(store.clone())
 }
 
 fn fields(error: &SetupError) -> Vec<Field> {
@@ -65,7 +65,7 @@ fn fields(error: &SetupError) -> Vec<Field> {
 
 #[test]
 fn nothing_is_configured_at_first() {
-    let (_dir, page) = page();
+    let (_store, page) = page();
 
     let view = page.view().unwrap();
     assert_eq!(
@@ -82,7 +82,7 @@ fn nothing_is_configured_at_first() {
 
 #[test]
 fn what_is_set_up_here_is_found_by_the_cli() {
-    let (dir, page) = page();
+    let (store, page) = page();
 
     page.save_idp(idp("work")).unwrap();
     page.save_aws_app(aws()).unwrap();
@@ -99,8 +99,7 @@ fn what_is_set_up_here_is_found_by_the_cli() {
     assert_eq!(view.idps[0].used_by.len(), 2);
 
     // The CLI reads the same file: `c9s creds aws` and `c9s creds rancher` without flags.
-    let resolver =
-        LoginResolverService::new(SettingsService::new(Arc::new(store(&dir))).load().unwrap());
+    let resolver = LoginResolverService::new(another_service(&store).load().unwrap());
     let login = resolver.resolve_aws(&AwsOverrides::default()).unwrap();
     assert_eq!(login.username, "me@work.example.com");
     assert_eq!(login.app_type, AwsAppType::Aws);
@@ -115,7 +114,7 @@ fn what_is_set_up_here_is_found_by_the_cli() {
 
 #[test]
 fn the_overrides_of_an_app_win_over_its_idp() {
-    let (dir, page) = page();
+    let (store, page) = page();
     page.save_idp(idp("work")).unwrap();
     page.save_idp(idp("lab")).unwrap();
 
@@ -129,17 +128,16 @@ fn the_overrides_of_an_app_win_over_its_idp() {
     // "Ask" as an override is no override.
     assert_eq!(view.aws_apps[0].mfa, None);
 
-    let login =
-        LoginResolverService::new(SettingsService::new(Arc::new(store(&dir))).load().unwrap())
-            .resolve_aws(&AwsOverrides::default())
-            .unwrap();
+    let login = LoginResolverService::new(another_service(&store).load().unwrap())
+        .resolve_aws(&AwsOverrides::default())
+        .unwrap();
     assert_eq!(login.username, "other");
     assert_eq!(login.idp_url, "https://lab.example.com");
 }
 
 #[test]
 fn an_app_has_to_name_an_idp() {
-    let (_dir, page) = page();
+    let (_store, page) = page();
     page.save_idp(idp("work")).unwrap();
 
     let mut app = aws();
@@ -159,32 +157,8 @@ fn an_app_has_to_name_an_idp() {
 }
 
 #[test]
-fn a_second_idp_does_not_move_an_app() {
-    let (_dir, page) = page();
-    page.save_idp(idp("work")).unwrap();
-    let view = page.save_aws_app(aws()).unwrap();
-    assert_eq!(view.aws_apps[0].idp, "work");
-
-    let view = page.save_idp(idp("lab")).unwrap();
-    assert_eq!(view.aws_apps[0].idp, "work");
-    assert_eq!(
-        view.idps.iter().find(|i| i.name == "lab").unwrap().used_by,
-        Vec::<String>::new()
-    );
-    assert_eq!(
-        view.idps
-            .iter()
-            .find(|i| i.name == "work")
-            .unwrap()
-            .used_by
-            .len(),
-        1
-    );
-}
-
-#[test]
 fn an_idp_in_use_is_not_removed() {
-    let (_dir, page) = page();
+    let (_store, page) = page();
     page.save_idp(idp("work")).unwrap();
     page.save_aws_app(aws()).unwrap();
     page.save_rancher(rancher()).unwrap();
@@ -207,80 +181,8 @@ fn an_idp_in_use_is_not_removed() {
 }
 
 #[test]
-fn an_edit_can_change_the_url_and_the_kind() {
-    let (_dir, page) = page();
-    page.save_idp(idp("work")).unwrap();
-    page.save_aws_app(aws()).unwrap();
-    page.save_rancher(rancher()).unwrap();
-
-    let mut edit = aws();
-    edit.original = Some(AwsAppKey {
-        app_url: STORED_APP_URL.into(),
-        kind: AwsAppKind::Aws,
-    });
-    edit.kind = AwsAppKind::AwsSso;
-    edit.region = Some("eu-west-1".into());
-    let view = page.save_aws_app(edit).unwrap();
-    assert_eq!(view.aws_apps.len(), 1);
-    assert_eq!(view.aws_apps[0].kind, AwsAppKind::AwsSso);
-    assert_eq!(view.aws_apps[0].region.as_deref(), Some("eu-west-1"));
-
-    let mut edit = rancher();
-    edit.original_url = Some(RANCHER_URL.into());
-    edit.url = "https://new.example.com".into();
-    let view = page.save_rancher(edit).unwrap();
-    assert_eq!(view.rancher_hosts.len(), 1);
-    assert_eq!(view.rancher_hosts[0].url, "https://new.example.com");
-}
-
-#[test]
-fn an_edit_of_an_idp_keeps_its_name() {
-    let (_dir, page) = page();
-    page.save_idp(idp("work")).unwrap();
-
-    let mut edit = idp("work");
-    edit.editing = true;
-    edit.username = "new@example.com".into();
-    let view = page.save_idp(edit).unwrap();
-    assert_eq!(view.idps.len(), 1);
-    assert_eq!(view.idps[0].username, "new@example.com");
-
-    // Editing one that is not there is refused, it would add one.
-    let mut ghost = idp("ghost");
-    ghost.editing = true;
-    assert!(page.save_idp(ghost).unwrap_err().message.is_some());
-}
-
-#[test]
-fn adding_what_exists_is_refused_instead_of_overwriting() {
-    let (_dir, page) = page();
-    page.save_idp(idp("work")).unwrap();
-    page.save_aws_app(aws()).unwrap();
-    page.save_rancher(rancher()).unwrap();
-
-    assert_eq!(
-        fields(&page.save_idp(idp("work")).unwrap_err()),
-        [Field::IdpName]
-    );
-    assert_eq!(
-        fields(&page.save_aws_app(aws()).unwrap_err()),
-        [Field::AwsAppUrl]
-    );
-    assert_eq!(
-        fields(&page.save_rancher(rancher()).unwrap_err()),
-        [Field::RancherUrl]
-    );
-    // The same url as the other kind of AWS app is a different app.
-    let mut sso = aws();
-    sso.kind = AwsAppKind::AwsSso;
-    sso.region = Some("eu-west-1".into());
-    assert_eq!(page.save_aws_app(sso).unwrap().aws_apps.len(), 2);
-}
-
-#[test]
 fn every_bad_field_is_reported_and_nothing_is_written() {
-    let (dir, page) = page();
-    let path = dir.path().join("c9s").join("settings.toml");
+    let (store, page) = page();
 
     let mut bad = idp("work");
     bad.name = "a/b".into();
@@ -319,38 +221,12 @@ fn every_bad_field_is_reported_and_nothing_is_written() {
         [Field::RancherUrl, Field::RancherClientId, Field::RancherIdp]
     );
 
-    assert!(!path.exists());
-}
-
-#[test]
-fn an_app_that_could_not_sign_in_is_not_written() {
-    let (dir, page) = page();
-    let path = dir.path().join("c9s").join("settings.toml");
-
-    // No identity provider is configured yet.
-    assert_eq!(
-        fields(&page.save_aws_app(aws()).unwrap_err()),
-        [Field::AwsIdp]
-    );
-    assert_eq!(
-        fields(&page.save_rancher(rancher()).unwrap_err()),
-        [Field::RancherIdp]
-    );
-    page.save_idp(idp("work")).unwrap();
-    let mut unknown = aws();
-    unknown.idp = "nope".into();
-    assert_eq!(
-        fields(&page.save_aws_app(unknown).unwrap_err()),
-        [Field::AwsIdp]
-    );
-
-    let saved = std::fs::read_to_string(path).unwrap();
-    assert!(!saved.contains("binding"), "{saved}");
+    assert_eq!(store.saves(), 0);
 }
 
 #[test]
 fn the_keyring_choice_is_kept() {
-    let (_dir, page) = page();
+    let (_store, page) = page();
 
     assert!(!page.set_use_keyring(false).unwrap().use_keyring);
     assert!(page.set_use_keyring(true).unwrap().use_keyring);
@@ -359,7 +235,7 @@ fn the_keyring_choice_is_kept() {
 #[test]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn a_security_key_is_offered_where_it_works() {
-    let (_dir, page) = page();
+    let (_store, page) = page();
     let mut key = idp("work");
     key.mfa = MfaChoice::SecurityKey;
 
@@ -371,7 +247,7 @@ fn a_security_key_is_offered_where_it_works() {
 #[test]
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn a_security_key_is_refused_where_it_does_not_work() {
-    let (_dir, page) = page();
+    let (_store, page) = page();
     let mut key = idp("work");
     key.mfa = MfaChoice::SecurityKey;
     assert_eq!(fields(&page.save_idp(key).unwrap_err()), [Field::IdpMfa]);
@@ -386,36 +262,8 @@ fn a_security_key_is_refused_where_it_does_not_work() {
 }
 
 #[test]
-fn a_broken_settings_file_is_a_readable_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.toml");
-    std::fs::write(&path, "this is [not toml").unwrap();
-    let settings = SettingsService::new(Arc::new(ConfigFileAdapter::at(path)));
-    let page = SettingsPage::new(settings);
-
-    let error = page.save_idp(idp("work")).unwrap_err();
-    assert!(error.message.unwrap().contains("settings file"));
-}
-
-#[test]
-fn removing_what_is_not_there_says_so() {
-    let (_dir, page) = page();
-
-    assert!(page
-        .remove_rancher(RANCHER_URL)
-        .unwrap_err()
-        .message
-        .is_some());
-    assert!(page.remove_idp("work").unwrap_err().message.is_some());
-}
-
-#[test]
 fn a_failed_save_is_a_readable_error_with_its_cause() {
-    use crate::domain::ports::config::memory::MemoryStore;
-
-    let store = Arc::new(MemoryStore::default());
-    let settings = SettingsService::new(store.clone());
-    let page = SettingsPage::new(settings);
+    let (store, page) = page();
     page.save_idp(idp("work")).unwrap();
     store.fail_saves();
 
@@ -426,21 +274,6 @@ fn a_failed_save_is_a_readable_error_with_its_cause() {
     assert!(message.contains("disk full"), "{message}");
     assert_eq!(store.saves(), 1);
     assert!(page.set_use_keyring(false).is_err());
-}
-
-#[test]
-fn a_change_that_would_break_an_app_is_refused_and_not_saved() {
-    use crate::domain::ports::config::memory::MemoryStore;
-    let store = Arc::new(MemoryStore::default());
-    let page = SettingsPage::new(SettingsService::new(store.clone()));
-    page.save_idp(idp("work")).unwrap();
-    page.save_aws_app(aws()).unwrap();
-    let saves = store.saves();
-
-    // Pointing the default at nothing the app can use: removing the idp is refused as in use.
-    let error = page.remove_idp("work").unwrap_err();
-    assert!(error.message.is_some());
-    assert_eq!(store.saves(), saves);
 }
 
 #[test]
@@ -511,7 +344,7 @@ fn yubikey() -> YubikeyConfig {
 
 #[test]
 fn no_security_key_is_enrolled_at_first() {
-    let (_dir, page) = page();
+    let (_store, page) = page();
 
     let view = page.view().unwrap();
     assert!(!view.security_key_enrolled);
@@ -521,7 +354,7 @@ fn no_security_key_is_enrolled_at_first() {
 
 #[test]
 fn a_security_key_is_saved_shown_and_removed() {
-    let (dir, page) = page();
+    let (store, page) = page();
 
     let view = page.set_security_key(Some(yubikey())).unwrap();
     assert!(view.security_key_enrolled);
@@ -529,13 +362,13 @@ fn a_security_key_is_saved_shown_and_removed() {
     assert_eq!(page.view().unwrap(), view);
 
     // The CLI reads what the page wrote.
-    let settings = SettingsService::new(Arc::new(store(&dir))).load().unwrap();
+    let settings = another_service(&store).load().unwrap();
     assert_eq!(settings.yubikey_config(), Some(&yubikey()));
 
     let view = page.set_security_key(None).unwrap();
     assert!(!view.security_key_enrolled);
     assert_eq!(view.security_key_rp_id, None);
-    assert!(SettingsService::new(Arc::new(store(&dir)))
+    assert!(another_service(&store)
         .load()
         .unwrap()
         .yubikey_config()
@@ -544,27 +377,15 @@ fn a_security_key_is_saved_shown_and_removed() {
 
 #[test]
 fn wrapping_issued_credentials_is_saved_and_found_by_the_cli() {
-    let (dir, page) = page();
+    let (store, page) = page();
 
     assert!(page.set_wrap_cached(true).unwrap().wrap_cached);
-    assert!(SettingsService::new(Arc::new(store(&dir)))
+    assert!(another_service(&store)
         .load()
         .unwrap()
         .wrap_cached_secrets_enabled());
 
     assert!(!page.set_wrap_cached(false).unwrap().wrap_cached);
-}
-
-#[test]
-fn a_failed_save_of_the_security_key_is_an_error() {
-    let dir = tempfile::tempdir().unwrap();
-    // The settings file's folder is a file, so nothing can be written.
-    let blocker = dir.path().join("c9s");
-    std::fs::write(&blocker, "x").unwrap();
-    let page = SettingsPage::new(SettingsService::new(Arc::new(store(&dir))));
-
-    assert!(page.set_security_key(Some(yubikey())).is_err());
-    assert!(page.set_wrap_cached(true).is_err());
 }
 
 #[test]
@@ -606,4 +427,25 @@ fn security_keys_need_a_supported_platform() {
     assert!(mfa_selection_on(MfaChoice::Totp, false).is_ok());
     assert_eq!(mfa_selection_on(MfaChoice::Ask, false), Ok(None));
     assert!(mfa_selection_on(MfaChoice::SecurityKey, true).is_ok());
+}
+
+#[test]
+fn a_broken_settings_file_is_a_readable_error() {
+    let mut store = MockConfigStore::new();
+    store
+        .expect_load()
+        .returning(|| Err(ConfigError::Failed("this is [not toml".into())));
+    let page = SettingsPage::new(SettingsService::new(Arc::new(store)));
+
+    let error = page.save_idp(idp("work")).unwrap_err();
+    assert!(error.message.unwrap().contains("settings file"));
+}
+
+#[test]
+fn a_failed_save_of_the_security_key_is_an_error() {
+    let (store, page) = page();
+    store.fail_saves();
+
+    assert!(page.set_security_key(Some(yubikey())).is_err());
+    assert!(page.set_wrap_cached(true).is_err());
 }

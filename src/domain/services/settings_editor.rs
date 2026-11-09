@@ -699,6 +699,10 @@ fn check_mode<K>(
 /// A change to the apps (the `save_*`, `remove_*` and `import` methods) is refused when what it sets up does not
 /// resolve a login, or when it stops an app that resolved before from resolving. The check is the [`LoginCheck`]
 /// port; [`SettingsService::new`] resolves the way the CLI would.
+///
+/// Concurrent writers are last-write-wins: the whole file is rewritten from what this process loaded. The file
+/// store replaces the file atomically, so a reader never sees a half written file, but two programs saving at
+/// the same moment can lose one change.
 #[derive(Clone)]
 pub struct SettingsService<C: LoginCheck = ResolvingLoginCheck> {
     store: Arc<dyn ConfigStore + Send + Sync>,
@@ -1001,7 +1005,7 @@ impl<C: LoginCheck> SettingsService<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::ports::config::memory::MemoryStore;
+    use crate::domain::ports::config::InMemoryConfigStore;
     use crate::domain::ports::config::MockConfigStore;
     use crate::domain::ports::login_check::{MockLoginCheck, NoLoginCheck};
 
@@ -1162,8 +1166,19 @@ mod tests {
     }
 
     #[test]
+    fn two_services_on_one_store_see_each_others_saved_changes() {
+        let store = Arc::new(InMemoryConfigStore::default());
+        let first = SettingsService::new(store.clone());
+        let second = SettingsService::new(store.clone());
+
+        first.save_idp(idp_input(), SaveAs::Upsert).unwrap();
+
+        assert_eq!(second.load().unwrap().idps().len(), 1);
+    }
+
+    #[test]
     fn check_aws_app_never_saves() {
-        let store = Arc::new(MemoryStore::default());
+        let store = Arc::new(InMemoryConfigStore::default());
         let service = SettingsService::new(store.clone());
         service.save_idp(idp_input(), SaveAs::Upsert).unwrap();
         let saves = store.saves();
@@ -1183,7 +1198,7 @@ mod tests {
 
     #[test]
     fn update_saves_once_on_success_and_never_on_error() {
-        let store = Arc::new(MemoryStore::default());
+        let store = Arc::new(InMemoryConfigStore::default());
         let service = SettingsService::new(store.clone());
 
         let err = service
@@ -1204,7 +1219,7 @@ mod tests {
 
     #[test]
     fn a_failed_save_is_an_error_with_its_cause() {
-        let store = Arc::new(MemoryStore::default());
+        let store = Arc::new(InMemoryConfigStore::default());
         store.fail_saves();
         let service = SettingsService::new(store.clone());
 
@@ -1250,7 +1265,7 @@ mod tests {
 
     #[test]
     fn a_change_that_breaks_an_app_is_refused() {
-        let store = Arc::new(MemoryStore::default());
+        let store = Arc::new(InMemoryConfigStore::default());
         let setup = SettingsService::with_login_check(store.clone(), NoLoginCheck);
         setup.save_idp(idp_input(), SaveAs::New).unwrap();
         setup
@@ -1300,7 +1315,7 @@ mod tests {
 
     #[test]
     fn checks_run_for_every_kind_and_for_the_cli_constructor() {
-        let store = Arc::new(MemoryStore::default());
+        let store = Arc::new(InMemoryConfigStore::default());
         let service = SettingsService::new(store.clone());
         service.save_idp(idp_input(), SaveAs::New).unwrap();
         service
@@ -1325,7 +1340,7 @@ mod tests {
                 SaveAs::New,
             )
             .unwrap();
-        let fresh = SettingsService::new(Arc::new(MemoryStore::default()));
+        let fresh = SettingsService::new(Arc::new(InMemoryConfigStore::default()));
         fresh.save_idp(idp_input(), SaveAs::New).unwrap();
         fresh
             .import(&bundle_of_two(), ImportMode::Overwrite, &BTreeMap::new())
@@ -1334,7 +1349,7 @@ mod tests {
 
     #[test]
     fn a_failing_check_saves_nothing_for_aws_rancher_and_import() {
-        let store = Arc::new(MemoryStore::default());
+        let store = Arc::new(InMemoryConfigStore::default());
         SettingsService::with_login_check(store.clone(), NoLoginCheck)
             .save_idp(idp_input(), SaveAs::New)
             .unwrap();
@@ -1363,7 +1378,7 @@ mod tests {
 
     #[test]
     fn import_checks_only_what_it_wrote() {
-        let store = Arc::new(MemoryStore::default());
+        let store = Arc::new(InMemoryConfigStore::default());
         let setup = SettingsService::with_login_check(store.clone(), NoLoginCheck);
         setup.save_idp(idp_input(), SaveAs::New).unwrap();
         setup
@@ -1398,7 +1413,7 @@ mod tests {
 
     #[test]
     fn no_login_check_lets_everything_through() {
-        let store = Arc::new(MemoryStore::default());
+        let store = Arc::new(InMemoryConfigStore::default());
         let service = SettingsService::with_login_check(store, NoLoginCheck);
         service.save_idp(idp_input(), SaveAs::New).unwrap();
         service
@@ -1435,7 +1450,7 @@ mod tests {
 
     #[test]
     fn new_refuses_what_exists_and_replace_refuses_what_is_gone() {
-        let store = Arc::new(MemoryStore::default());
+        let store = Arc::new(InMemoryConfigStore::default());
         let service = SettingsService::new(store.clone());
         service.save_idp(idp_input(), SaveAs::New).unwrap();
         service
@@ -1503,11 +1518,24 @@ mod tests {
             .unwrap();
         service.save_idp(idp_input(), SaveAs::Upsert).unwrap();
         assert_eq!(store.saves(), saves + 2);
+
+        // The same url as the other kind of AWS app is a different app.
+        let config = service
+            .save_aws_app(
+                AwsAppInput::new(APP_URL, "suse"),
+                AwsAppKind::AwsSso {
+                    region: "eu-west-1".into(),
+                },
+                SaveAs::New,
+            )
+            .unwrap();
+        assert_eq!(config.aws_hosts().len(), 1);
+        assert_eq!(config.aws_sso_hosts().len(), 1);
     }
 
     #[test]
     fn a_replace_onto_another_entry_is_refused() {
-        let store = Arc::new(MemoryStore::default());
+        let store = Arc::new(InMemoryConfigStore::default());
         let service = SettingsService::new(store.clone());
         service.save_idp(idp_input(), SaveAs::New).unwrap();
         let other = "https://id.example.com/application/saml/other/sso/binding/init";
@@ -1533,7 +1561,7 @@ mod tests {
 
     #[test]
     fn a_replace_that_only_tidies_the_url_is_not_a_collision() {
-        let store = Arc::new(MemoryStore::default());
+        let store = Arc::new(InMemoryConfigStore::default());
         let service = SettingsService::new(store.clone());
         let idp = IdpInput::new("suse", IdpType::Authentik, IDP_URL, "user");
         service.save_idp(idp, SaveAs::New).unwrap();
@@ -1587,7 +1615,7 @@ mod tests {
 
     #[test]
     fn a_rancher_replace_onto_another_rancher_is_refused() {
-        let store = Arc::new(MemoryStore::default());
+        let store = Arc::new(InMemoryConfigStore::default());
         let service = SettingsService::new(store.clone());
         service.save_idp(idp_input(), SaveAs::New).unwrap();
         for url in ["https://a.example.com", "https://b.example.com"] {
@@ -1608,7 +1636,7 @@ mod tests {
     #[test]
     fn editing_an_idp_keeps_the_apps_that_use_it() {
         for mode in [SaveAs::Upsert, SaveAs::Replace(())] {
-            let store = Arc::new(MemoryStore::default());
+            let store = Arc::new(InMemoryConfigStore::default());
             let service = SettingsService::new(store.clone());
             service.save_idp(idp_input(), SaveAs::New).unwrap();
             service
@@ -1675,7 +1703,7 @@ mod tests {
 
     #[test]
     fn the_service_refuses_what_the_forms_refuse() {
-        let store = Arc::new(MemoryStore::default());
+        let store = Arc::new(InMemoryConfigStore::default());
         let service = SettingsService::new(store.clone());
         let invalid = |field| move |e| matches!(e, SettingsEditError::InvalidFields(p) if fields_of(&p) == [field]);
 
@@ -1721,7 +1749,7 @@ mod tests {
 
     #[test]
     fn the_global_settings_are_saved_through_the_service() {
-        let store = Arc::new(MemoryStore::default());
+        let store = Arc::new(InMemoryConfigStore::default());
         let service = SettingsService::new(store.clone());
 
         assert!(!service.set_use_keyring(false).unwrap().keyring_enabled());
@@ -1912,7 +1940,7 @@ mod tests {
 
     #[test]
     fn a_refused_edit_or_removal_saves_nothing() {
-        let store = Arc::new(MemoryStore::default());
+        let store = Arc::new(InMemoryConfigStore::default());
         let service = SettingsService::new(store.clone());
         service.save_idp(idp_input(), SaveAs::Upsert).unwrap();
         service
@@ -1947,8 +1975,8 @@ mod tests {
     }
 
     /// A store with the `suse` and `other` idps, an AWS app of each, and a Rancher of `suse`.
-    fn seeded() -> Arc<MemoryStore> {
-        let store = Arc::new(MemoryStore::default());
+    fn seeded() -> Arc<InMemoryConfigStore> {
+        let store = Arc::new(InMemoryConfigStore::default());
         let service = SettingsService::new(store.clone());
         service.save_idp(idp_input(), SaveAs::Upsert).unwrap();
         let mut other = idp_input();
@@ -2005,7 +2033,7 @@ mod tests {
         let bundle = SettingsService::new(seeded())
             .export(&["suse".to_string()])
             .unwrap();
-        let target = Arc::new(MemoryStore::default());
+        let target = Arc::new(InMemoryConfigStore::default());
         let service = SettingsService::new(target.clone());
 
         assert_eq!(service.usernames_needed(&bundle).unwrap(), ["suse"]);
@@ -2056,7 +2084,7 @@ mod tests {
         let bundle = SettingsService::new(seeded())
             .export(&["suse".to_string()])
             .unwrap();
-        let target = Arc::new(MemoryStore::default());
+        let target = Arc::new(InMemoryConfigStore::default());
         let service = SettingsService::new(target.clone());
         service.set_use_keyring(false).unwrap();
         service.set_wrap_cached_secrets(true).unwrap();
@@ -2079,7 +2107,7 @@ mod tests {
         let bundle = SettingsService::new(seeded())
             .export(&["suse".to_string()])
             .unwrap();
-        let target = Arc::new(MemoryStore::default());
+        let target = Arc::new(InMemoryConfigStore::default());
         let service = SettingsService::new(target.clone());
         let mut mine = idp_input();
         mine.username = "mine".into();
@@ -2111,7 +2139,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
-        let target = Arc::new(MemoryStore::default());
+        let target = Arc::new(InMemoryConfigStore::default());
 
         assert!(matches!(
             SettingsService::new(target.clone()).import(
@@ -2135,7 +2163,7 @@ mod tests {
         )
         .unwrap();
         let bundle = SettingsBundle::new(vec![http], Vec::new(), Vec::new(), Vec::new());
-        let target = Arc::new(MemoryStore::default());
+        let target = Arc::new(InMemoryConfigStore::default());
 
         assert!(matches!(
             SettingsService::new(target.clone()).import(

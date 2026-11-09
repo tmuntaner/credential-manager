@@ -118,15 +118,12 @@ impl Dialog {
 mod tests {
     use super::*;
     use c9s::app::settings::{AwsAppKind, MfaChoice};
+    use c9s::domain::ports::config::InMemoryConfigStore;
     use c9s::domain::services::settings_editor::SettingsService;
-    use c9s::outbound::config::config_store::ConfigFileAdapter;
     use std::sync::Arc;
 
-    fn page() -> (tempfile::TempDir, SettingsPage) {
-        let dir = tempfile::tempdir().unwrap();
-        let store = ConfigFileAdapter::at(dir.path().join("c9s").join("settings.toml"));
-        let settings = SettingsService::new(Arc::new(store));
-        (dir, SettingsPage::new(settings))
+    fn page() -> SettingsPage {
+        SettingsPage::new(SettingsService::new(Arc::new(InMemoryConfigStore::new())))
     }
 
     fn form(page: &SettingsPage) -> FormContext {
@@ -144,7 +141,7 @@ mod tests {
 
     #[test]
     fn a_saved_identity_provider_gives_back_the_view_and_the_focus() {
-        let (_dir, page) = page();
+        let page = page();
         let mut dialog = typed_idp(&page);
 
         let saved = dialog.submit(&page).unwrap();
@@ -156,7 +153,7 @@ mod tests {
 
     #[test]
     fn an_invalid_form_keeps_its_errors_and_says_how_many() {
-        let (_dir, page) = page();
+        let page = page();
         let mut dialog = Dialog::add_idp(&form(&page));
 
         let said = dialog.submit(&page).unwrap_err();
@@ -167,7 +164,7 @@ mod tests {
 
     #[test]
     fn a_saved_aws_app_focuses_the_entry_the_view_stored() {
-        let (_dir, page) = page();
+        let page = page();
         typed_idp(&page).submit(&page).unwrap();
         let mut dialog = Dialog::add_aws(&form(&page));
         let Dialog::Aws(d) = &mut dialog else {
@@ -189,7 +186,7 @@ mod tests {
 
     #[test]
     fn a_removal_that_is_refused_is_explained_in_the_dialog() {
-        let (_dir, page) = page();
+        let page = page();
         typed_idp(&page).submit(&page).unwrap();
         let mut add = Dialog::add_aws(&form(&page));
         let Dialog::Aws(d) = &mut add else {
@@ -213,7 +210,7 @@ mod tests {
 
     #[test]
     fn a_removal_goes_back_to_the_add_button() {
-        let (_dir, page) = page();
+        let page = page();
         typed_idp(&page).submit(&page).unwrap();
         let mut remove = Dialog::Remove(RemoveDialog::new(
             Removal::Idp("work".into()),

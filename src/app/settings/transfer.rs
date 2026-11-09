@@ -157,21 +157,20 @@ mod tests {
     use super::*;
     use crate::domain::models::idp::IdpType;
     use crate::domain::models::settings::YubikeyConfig;
+    use crate::domain::ports::config::InMemoryConfigStore;
     use crate::domain::services::settings_editor::{AwsAppInput, AwsAppKind, IdpInput, SaveAs};
     use crate::outbound::config::bundle::TomlBundleCodec;
-    use crate::outbound::config::config_store::ConfigFileAdapter;
     use std::sync::Arc;
-
-    fn store(dir: &Path) -> Arc<ConfigFileAdapter> {
-        Arc::new(ConfigFileAdapter::at(dir.join("c9s").join("settings.toml")))
-    }
 
     #[test]
     fn a_bundle_moves_between_machines_without_security_settings() {
         let dir = tempfile::tempdir().unwrap();
-        let (mine, theirs) = (dir.path().join("mine"), dir.path().join("theirs"));
+        let (mine, theirs) = (
+            Arc::new(InMemoryConfigStore::new()),
+            Arc::new(InMemoryConfigStore::new()),
+        );
 
-        let service = SettingsService::new(store(&mine));
+        let service = SettingsService::new(mine.clone());
         service
             .save_idp(
                 IdpInput::new("corp", IdpType::Authentik, "https://id.example.com", "me"),
@@ -191,7 +190,7 @@ mod tests {
         service.set_use_keyring(false).unwrap();
 
         let file = dir.path().join("bundle.toml");
-        SettingsPage::new(SettingsService::new(store(&mine)))
+        SettingsPage::new(SettingsService::new(mine.clone()))
             .export_choice_to_file(
                 &TomlBundleCodec,
                 &ExportChoice::new(
@@ -206,7 +205,7 @@ mod tests {
         assert!(!text.contains("yubikey") && !text.contains("keyring"));
         assert!(!text.contains("username"));
 
-        let page = SettingsPage::new(SettingsService::new(store(&theirs)));
+        let page = SettingsPage::new(SettingsService::new(theirs.clone()));
         let (view, report) = page
             .import_from_file(
                 &TomlBundleCodec,
@@ -219,7 +218,7 @@ mod tests {
         assert_eq!(view.idps.len(), 1);
         assert_eq!(view.aws_apps.len(), 1);
 
-        let imported = SettingsService::new(store(&theirs)).load().unwrap();
+        let imported = SettingsService::new(theirs.clone()).load().unwrap();
         // The importer's own user name, not the one of the exporter.
         assert_eq!(imported.resolve_idp("corp").unwrap().username(), "them");
         assert!(imported.yubikey_config().is_none());
@@ -229,7 +228,7 @@ mod tests {
     #[test]
     fn exporting_nothing_or_importing_junk_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
-        let page = SettingsPage::new(SettingsService::new(store(dir.path())));
+        let page = SettingsPage::new(SettingsService::new(Arc::new(InMemoryConfigStore::new())));
         let file = dir.path().join("x.toml");
 
         assert!(page
