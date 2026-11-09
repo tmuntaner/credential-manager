@@ -48,6 +48,10 @@ pub enum WebauthnError {
     #[error("the security key does not support the hmac-secret extension")]
     HmacSecretNotSupported,
 
+    /// No security key was plugged in before the time ran out.
+    #[error("no security key was found. Plug it in and try again")]
+    NoKeyFound,
+
     /// The user gave up waiting for the key.
     #[error("cancelled by the user")]
     Cancelled,

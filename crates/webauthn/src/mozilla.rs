@@ -9,6 +9,7 @@ use authenticator::{
         PublicKeyCredentialParameters, PublicKeyCredentialUserEntity, RelyingParty,
         ResidentKeyRequirement, Transport, UserVerificationRequirement,
     },
+    errors::AuthenticatorError,
     statecallback::StateCallback,
     Pin, StatusPinUv, StatusUpdate,
 };
@@ -18,6 +19,7 @@ use std::convert::TryFrom;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 
 /// Long enough to type a PIN and touch the key. The server's challenge allows 60 seconds.
@@ -41,19 +43,9 @@ pub async fn sign_assertion(
         return Err(WebauthnError::NoUsableCredentialIds);
     }
 
-    let mut manager = AuthenticatorService::new()?;
-    manager.add_u2f_usb_hid_platform_transports();
-
-    let (status_tx, status_rx) = status_channel();
-    let (sign_tx, sign_rx) = oneshot::channel();
-
     for notifier in &notifiers {
         notifier.notify_start()?;
     }
-
-    let callback = StateCallback::new(Box::new(move |rv| {
-        let _ = sign_tx.send(rv);
-    }));
 
     let args = SignArgs {
         client_data_hash,
@@ -67,21 +59,20 @@ pub async fn sign_assertion(
         use_ctap1_fallback: false,
     };
 
-    manager
-        .sign(TIMEOUT_MS, args, status_tx, callback)
-        .map_err(WebauthnError::StartSigning)?;
-
-    let sign_result =
-        answer_status_updates(status_rx, sign_rx, ui.as_ref(), || cancel(&mut manager)).await;
-    drop(manager);
+    let sign_result = run_until_key_answers(ui.as_ref(), |timeout, status_tx, callback| {
+        let mut manager = new_manager()?;
+        manager
+            .sign(timeout, args.clone(), status_tx, callback)
+            .map_err(WebauthnError::StartSigning)?;
+        Ok(manager)
+    })
+    .await;
 
     for notifier in &notifiers {
         notifier.notify_end()?;
     }
 
-    let result = sign_result
-        .map_err(|e| e.into_sign_error())?
-        .map_err(WebauthnError::SecurityKey)?;
+    let result = sign_result?.map_err(WebauthnError::SecurityKey)?;
 
     let assertion = result.assertion;
     let credential_id = match (assertion.credentials, allow_list.as_slice()) {
@@ -108,18 +99,6 @@ pub async fn enroll_hmac_secret(
     // build the clientDataJSON for enrollment and then hash it.
     let client_data_json = crate::utils::registration_client_data(&origin, "c9s-enroll")?;
     let client_data_hash: [u8; 32] = Sha256::digest(client_data_json.as_bytes()).into();
-
-    // build the authenticator service
-    let mut manager = AuthenticatorService::new()?;
-    manager.add_u2f_usb_hid_platform_transports();
-
-    // set up the channels
-    let (status_tx, status_rx) = status_channel();
-    let (register_tx, register_rx) = oneshot::channel();
-
-    let callback = StateCallback::new(Box::new(move |rv| {
-        let _ = register_tx.send(rv);
-    }));
 
     let pub_cred_params = vec![
         PublicKeyCredentialParameters::try_from(-7)?,   // ES256
@@ -152,19 +131,17 @@ pub async fn enroll_hmac_secret(
         use_ctap1_fallback: false,
     };
 
-    // start registration
-    manager
-        .register(TIMEOUT_MS, args, status_tx, callback)
-        .map_err(WebauthnError::StartRegistering)?;
-
-    let register_result =
-        answer_status_updates(status_rx, register_rx, ui.as_ref(), || cancel(&mut manager)).await;
-    drop(manager);
+    let register_result = run_until_key_answers(ui.as_ref(), |timeout, status_tx, callback| {
+        let mut manager = new_manager()?;
+        manager
+            .register(timeout, args.clone(), status_tx, callback)
+            .map_err(WebauthnError::StartRegistering)?;
+        Ok(manager)
+    })
+    .await;
 
     // handle the registration result
-    let result = register_result
-        .map_err(|e| e.into_register_error())?
-        .map_err(WebauthnError::SecurityKey)?;
+    let result = register_result?.map_err(WebauthnError::SecurityKey)?;
 
     // if the hmac-secret extension is not supported, return an error
     if result.extensions.hmac_create_secret != Some(true) {
@@ -201,18 +178,6 @@ pub async fn derive_hmac_secret(
         transports: vec![Transport::USB],
     }];
 
-    // build the authentication service
-    let mut manager = AuthenticatorService::new()?;
-    manager.add_u2f_usb_hid_platform_transports();
-
-    // set up the channels
-    let (status_tx, status_rx) = status_channel();
-    let (sign_tx, sign_rx) = oneshot::channel();
-
-    let callback = StateCallback::new(Box::new(move |rv| {
-        let _ = sign_tx.send(rv);
-    }));
-
     // create the signing request
     let args = SignArgs {
         client_data_hash,
@@ -232,19 +197,17 @@ pub async fn derive_hmac_secret(
         use_ctap1_fallback: false,
     };
 
-    // send the signing request
-    manager
-        .sign(TIMEOUT_MS, args, status_tx, callback)
-        .map_err(WebauthnError::StartSigning)?;
-
-    let sign_result =
-        answer_status_updates(status_rx, sign_rx, ui.as_ref(), || cancel(&mut manager)).await;
-    drop(manager);
+    let sign_result = run_until_key_answers(ui.as_ref(), |timeout, status_tx, callback| {
+        let mut manager = new_manager()?;
+        manager
+            .sign(timeout, args.clone(), status_tx, callback)
+            .map_err(WebauthnError::StartSigning)?;
+        Ok(manager)
+    })
+    .await;
 
     // handle the result
-    let result = sign_result
-        .map_err(|e| e.into_sign_error())?
-        .map_err(WebauthnError::SecurityKey)?;
+    let result = sign_result?.map_err(WebauthnError::SecurityKey)?;
 
     // get the hmac secret
     let output = result
@@ -253,6 +216,75 @@ pub async fn derive_hmac_secret(
         .ok_or(WebauthnError::HmacSecretNotSupported)?;
 
     Ok(output.output1)
+}
+
+/// How long to wait for a key to show up before looking for keys again from scratch. The authenticator
+/// writes off a device that failed to open when it was plugged in, so a fresh look finds it.
+const DEVICE_WAIT: Duration = Duration::from_secs(5);
+
+/// How long to wait before telling the user to insert their key.
+const INSERT_HINT_AFTER: Duration = Duration::from_millis(500);
+
+fn new_manager() -> Result<AuthenticatorService, WebauthnError> {
+    let mut manager = AuthenticatorService::new()?;
+    manager.add_u2f_usb_hid_platform_transports();
+
+    Ok(manager)
+}
+
+/// Starts the operation with `start` and answers the key until it has a result.
+///
+/// While no key shows up, the operation is restarted every [`DEVICE_WAIT`], so a key plugged in late is found.
+/// `start` gets the time left in milliseconds. Once a key answers, the operation is left to finish.
+async fn run_until_key_answers<R>(
+    ui: &dyn SecurityKeyUi,
+    start: impl Fn(
+        u64,
+        Sender<StatusUpdate>,
+        StateCallback<Result<R, AuthenticatorError>>,
+    ) -> Result<AuthenticatorService, WebauthnError>,
+) -> Result<Result<R, AuthenticatorError>, WebauthnError>
+where
+    R: Send + 'static,
+{
+    let deadline = Instant::now() + Duration::from_millis(TIMEOUT_MS);
+    let mut hinted = false;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(WebauthnError::NoKeyFound);
+        }
+
+        let (status_tx, status_rx) = status_channel();
+        let (result_tx, result_rx) = oneshot::channel();
+        let callback = StateCallback::new(Box::new(move |rv| {
+            let _ = result_tx.send(rv);
+        }));
+
+        let mut manager = start(remaining.as_millis() as u64, status_tx, callback)?;
+        let answered = answer_status_updates(
+            status_rx,
+            result_rx,
+            ui,
+            DEVICE_WAIT.min(remaining),
+            &mut hinted,
+            || cancel(&mut manager),
+        )
+        .await;
+        drop(manager);
+
+        match &answered {
+            Err(Interrupted::NoDevice) => {
+                log::debug!("no security key answered, looking again");
+                continue;
+            }
+            Err(why) => log::debug!("waiting for the security key ended: {why:?}"),
+            Ok(Err(e)) => log::debug!("the security key reported an error: {e:?}"),
+            Ok(Ok(_)) => {}
+        }
+        return answered.map_err(Interrupted::into_error);
+    }
 }
 
 /// The channel the authenticator reports its status on.
@@ -286,20 +318,16 @@ enum Interrupted {
     Cancelled,
     /// The key's side hung up without a result.
     NoResult,
+    /// No key answered in time. The operation was cancelled on the key, and can be started again.
+    NoDevice,
 }
 
 impl Interrupted {
-    fn into_sign_error(self) -> WebauthnError {
+    fn into_error(self) -> WebauthnError {
         match self {
             Interrupted::Cancelled => WebauthnError::Cancelled,
             Interrupted::NoResult => WebauthnError::ReceiveSignResult,
-        }
-    }
-
-    fn into_register_error(self) -> WebauthnError {
-        match self {
-            Interrupted::Cancelled => WebauthnError::Cancelled,
-            Interrupted::NoResult => WebauthnError::ReceiveRegisterResult,
+            Interrupted::NoDevice => WebauthnError::NoKeyFound,
         }
     }
 }
@@ -314,21 +342,41 @@ fn cancel(manager: &mut AuthenticatorService) {
 
 /// Answers the key's status updates until the key has a result, or the user gives up. Then `cancel` is called to
 /// stop the key.
+///
+/// When the key has not said anything after `device_wait`, no key is plugged in: `cancel` is called and
+/// [`Interrupted::NoDevice`] is returned. The user is asked to insert a key meanwhile, once (`hinted`).
 async fn answer_status_updates<T>(
     mut status_rx: tokio_mpsc::UnboundedReceiver<StatusUpdate>,
     mut result_rx: oneshot::Receiver<T>,
     ui: &dyn SecurityKeyUi,
+    device_wait: Duration,
+    hinted: &mut bool,
     cancel: impl FnOnce(),
 ) -> Result<T, Interrupted> {
     let mut touch_prompted = false;
+    let mut device_seen = false;
+    let hint = tokio::time::sleep(INSERT_HINT_AFTER);
+    let no_device = tokio::time::sleep(device_wait);
+    tokio::pin!(hint, no_device);
     // Made once, so a cancel between two updates is not missed.
     let cancelled = ui.cancelled();
     tokio::pin!(cancelled);
 
     loop {
         tokio::select! {
-            Some(update) = status_rx.recv() => on_status(update, ui, &mut touch_prompted).await,
+            Some(update) = status_rx.recv() => {
+                device_seen = true;
+                on_status(update, ui, &mut touch_prompted).await;
+            }
             result = &mut result_rx => return result.map_err(|_| Interrupted::NoResult),
+            _ = &mut hint, if !device_seen && !*hinted => {
+                *hinted = true;
+                ui.notify(KeyEvent::InsertKey).await;
+            }
+            _ = &mut no_device, if !device_seen => {
+                cancel();
+                return Err(Interrupted::NoDevice);
+            }
             _ = &mut cancelled => {
                 cancel();
                 return Err(Interrupted::Cancelled);
@@ -398,6 +446,8 @@ mod tests {
     use crate::{PinError, SecurityKeyPin};
     use async_trait::async_trait;
     use std::sync::Mutex;
+
+    const LONG: Duration = Duration::from_secs(3600);
 
     /// Never asked in the tests that use it.
     struct NoUi;
@@ -559,8 +609,12 @@ mod tests {
         let (_result_tx, result_rx) = oneshot::channel::<()>();
         let cancelled_on_key = std::cell::Cell::new(false);
 
+        let mut hinted = false;
+
         let (result, _) = tokio::join!(
-            answer_status_updates(status_rx, result_rx, &ui, || cancelled_on_key.set(true)),
+            answer_status_updates(status_rx, result_rx, &ui, LONG, &mut hinted, || {
+                cancelled_on_key.set(true)
+            }),
             async {
                 tokio::task::yield_now().await;
                 notify.notify_waiters();
@@ -579,8 +633,10 @@ mod tests {
         let cancelled_on_key = std::cell::Cell::new(false);
 
         // `NoUi` can never be cancelled.
-        let result =
-            answer_status_updates(status_rx, result_rx, &NoUi, || cancelled_on_key.set(true)).await;
+        let result = answer_status_updates(status_rx, result_rx, &NoUi, LONG, &mut false, || {
+            cancelled_on_key.set(true)
+        })
+        .await;
 
         assert_eq!(result, Ok(7));
         assert!(!cancelled_on_key.get());
@@ -592,9 +648,65 @@ mod tests {
         let (result_tx, result_rx) = oneshot::channel::<()>();
         drop(result_tx);
 
-        let result = answer_status_updates(status_rx, result_rx, &NoUi, || {}).await;
+        let result =
+            answer_status_updates(status_rx, result_rx, &NoUi, LONG, &mut false, || {}).await;
 
         assert_eq!(result, Err(Interrupted::NoResult));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn no_key_asks_to_insert_it_then_gives_up_for_a_new_look() {
+        let ui = RecordingUi::new(None);
+        let (_status_tx, status_rx) = tokio_mpsc::unbounded_channel();
+        let (_result_tx, result_rx) = oneshot::channel::<()>();
+        let cancelled_on_key = std::cell::Cell::new(false);
+
+        let result =
+            answer_status_updates(status_rx, result_rx, &ui, DEVICE_WAIT, &mut false, || {
+                cancelled_on_key.set(true)
+            })
+            .await;
+
+        assert_eq!(result, Err(Interrupted::NoDevice));
+        assert!(cancelled_on_key.get());
+        assert_eq!(*ui.events.lock().unwrap(), vec![KeyEvent::InsertKey]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_insert_hint_is_given_once_across_looks() {
+        let ui = RecordingUi::new(None);
+        let mut hinted = false;
+
+        for _ in 0..2 {
+            let (_status_tx, status_rx) = tokio_mpsc::unbounded_channel();
+            let (_result_tx, result_rx) = oneshot::channel::<()>();
+            let _ =
+                answer_status_updates(status_rx, result_rx, &ui, DEVICE_WAIT, &mut hinted, || {})
+                    .await;
+        }
+
+        assert_eq!(*ui.events.lock().unwrap(), vec![KeyEvent::InsertKey]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_key_that_answers_is_waited_for() {
+        let ui = RecordingUi::new(None);
+        let (status_tx, status_rx) = tokio_mpsc::unbounded_channel();
+        let (result_tx, result_rx) = oneshot::channel();
+        status_tx.send(StatusUpdate::PresenceRequired).unwrap();
+
+        let mut hinted = false;
+
+        let (result, _) = tokio::join!(
+            answer_status_updates(status_rx, result_rx, &ui, DEVICE_WAIT, &mut hinted, || {}),
+            async {
+                tokio::time::sleep(DEVICE_WAIT * 3).await;
+                result_tx.send(9).unwrap();
+            }
+        );
+
+        assert_eq!(result, Ok(9));
+        assert_eq!(*ui.events.lock().unwrap(), vec![KeyEvent::TouchRequired]);
     }
 
     #[test]

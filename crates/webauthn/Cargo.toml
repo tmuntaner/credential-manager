@@ -31,3 +31,6 @@ log = { workspace = true }
 authenticator = { version = "0.5", default-features = false, features = ["crypto_rust"] }
 rpassword = "7.3"
 sha2 = "0.11"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
