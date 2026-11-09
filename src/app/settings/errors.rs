@@ -1,7 +1,9 @@
 use super::models::{Field, FieldError, SetupError};
 use crate::domain::models::login::ResolveError;
 use crate::domain::models::settings::SettingsError;
-use crate::domain::services::settings_editor::{InvalidField, SettingsEditError};
+use crate::domain::services::settings_editor::{
+    FieldProblem, InvalidField, Problem, SettingsEditError,
+};
 
 /// The form a change came from.
 #[derive(Clone, Copy)]
@@ -42,18 +44,20 @@ impl Form {
                 InvalidField::Name => Some(Field::IdpName),
                 InvalidField::Url => Some(Field::IdpUrl),
                 InvalidField::Username => Some(Field::IdpUsername),
-                InvalidField::ClientId | InvalidField::Region => None,
+                InvalidField::ClientId | InvalidField::Region | InvalidField::Idp => None,
             },
             Form::Aws => match field {
                 InvalidField::Url => Some(Field::AwsAppUrl),
                 InvalidField::Username => Some(Field::AwsUsername),
                 InvalidField::Region => Some(Field::AwsRegion),
+                InvalidField::Idp => Some(Field::AwsIdp),
                 InvalidField::Name | InvalidField::ClientId => None,
             },
             Form::Rancher => match field {
                 InvalidField::Url => Some(Field::RancherUrl),
                 InvalidField::Username => Some(Field::RancherUsername),
                 InvalidField::ClientId => Some(Field::RancherClientId),
+                InvalidField::Idp => Some(Field::RancherIdp),
                 InvalidField::Name | InvalidField::Region => None,
             },
             Form::Action => match field {
@@ -61,7 +65,8 @@ impl Form {
                 | InvalidField::Url
                 | InvalidField::Username
                 | InvalidField::ClientId
-                | InvalidField::Region => None,
+                | InvalidField::Region
+                | InvalidField::Idp => None,
             },
         }
     }
@@ -72,33 +77,6 @@ impl Form {
             Form::Aws => Some(Field::AwsIdp),
             Form::Rancher => Some(Field::RancherIdp),
             Form::Idp | Form::Action => None,
-        }
-    }
-}
-
-/// Collects the errors of a form, with an error per field.
-#[derive(Default)]
-pub(super) struct Errors(Vec<FieldError>);
-
-impl Errors {
-    pub(super) fn keep<T>(&mut self, field: Field, result: Result<T, String>) -> Option<T> {
-        match result {
-            Ok(value) => Some(value),
-            Err(message) => {
-                self.0.push(FieldError { field, message });
-                None
-            }
-        }
-    }
-
-    pub(super) fn into_result(self) -> Result<(), SetupError> {
-        if self.0.is_empty() {
-            Ok(())
-        } else {
-            Err(SetupError {
-                fields: self.0,
-                message: None,
-            })
         }
     }
 }
@@ -125,11 +103,57 @@ fn under(field: Option<Field>, message: impl Into<String>) -> SetupError {
     }
 }
 
+fn unknown_idp_message(name: &str) -> String {
+    format!("There is no identity provider called {name}. Choose another one.")
+}
+
 fn unknown_idp(form: Form, name: &str) -> SetupError {
-    under(
-        form.idp(),
-        format!("There is no identity provider called {name}. Choose another one."),
-    )
+    under(form.idp(), unknown_idp_message(name))
+}
+
+/// One error per problem the form has a field for; the others are told in general.
+fn field_problems(form: Form, problems: Vec<FieldProblem>) -> SetupError {
+    let mut error = SetupError::default();
+    let mut general = Vec::new();
+    for FieldProblem { field, problem } in problems {
+        let message = match problem {
+            Problem::Message(message) => message,
+            Problem::UnknownIdp(name) => unknown_idp_message(&name),
+        };
+        match form.invalid_field(field) {
+            Some(field) => error.fields.push(FieldError { field, message }),
+            None => general.push(message),
+        }
+    }
+    if !general.is_empty() {
+        error.message = Some(general.join(" "));
+    }
+
+    error
+}
+
+/// The error of a form that has a problem of its own (`message` under `field`, the platform cannot do what was
+/// chosen) next to what the domain found (`domain`). The own problem comes before the identity provider's, so the
+/// order stays that of the form: url, region, username, mfa, idp.
+pub(super) fn with_mfa(
+    form: Form,
+    field: Field,
+    message: String,
+    domain: Result<(), SettingsEditError>,
+) -> SetupError {
+    let mut error = match domain {
+        Ok(()) => SetupError::default(),
+        Err(e) => edit_error(e, form),
+    };
+    let own = FieldError { field, message };
+    let at = error
+        .fields
+        .iter()
+        .position(|f| Some(f.field) == form.idp())
+        .unwrap_or(error.fields.len());
+    error.fields.insert(at, own);
+
+    error
 }
 
 pub(super) fn edit_error(error: SettingsEditError, form: Form) -> SetupError {
@@ -139,9 +163,7 @@ pub(super) fn edit_error(error: SettingsEditError, form: Form) -> SetupError {
             Some(field) => SetupError::field(field, "This web address cannot be used."),
             None => SetupError::general("A web address is not valid."),
         },
-        SettingsEditError::InvalidField { field, message } => {
-            under(form.invalid_field(field), message)
-        }
+        SettingsEditError::InvalidFields(problems) => field_problems(form, problems),
         SettingsEditError::IdpInUse { name, used_by } => SetupError::general(format!(
             "{name} cannot be removed: {} still sign{} in with it ({}). Choose another identity provider for {}, or remove {} first.",
             count(used_by.len()),

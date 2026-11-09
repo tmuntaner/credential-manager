@@ -764,4 +764,25 @@ mod tests {
             modified
         );
     }
+
+    #[test]
+    fn a_bad_url_and_an_unknown_idp_are_both_reported_and_nothing_is_written() {
+        use c9s::outbound::config::config_store::ConfigFileAdapter;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("c9s").join("settings.toml");
+        let service = SettingsService::new(Arc::new(ConfigFileAdapter::at(path.clone())));
+        let application = test_application(service);
+        let app = ConfigAwsApp {
+            app_url: "not a url".into(),
+            idp: "nope".into(),
+            username: None,
+            mfa: None,
+        };
+
+        let error = app.run(&application).unwrap_err().to_string();
+        assert!(error.contains("nope"), "{error}");
+        assert!(error.contains("web address"), "{error}");
+        assert!(!path.exists());
+    }
 }

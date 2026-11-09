@@ -2,7 +2,7 @@ use super::DialogOutcome;
 use crate::ui::dialog::dialog;
 use crate::ui::errors::error_label;
 use crate::ui::field::{hint, submitted, INPUT_WIDTH};
-use c9s::domain::services::settings_validation::check_username;
+use c9s::app::settings::check_import_username;
 use eframe::egui::{Context, RichText, TextEdit};
 use std::collections::BTreeMap;
 
@@ -30,7 +30,7 @@ impl UsernamesDialog {
         let mut usernames = BTreeMap::new();
 
         for (idp, username) in &self.idps {
-            let username = check_username(username).map_err(|e| format!("{idp}: {e}"))?;
+            let username = check_import_username(idp, username)?;
             usernames.insert(idp.clone(), username);
         }
 
@@ -85,5 +85,20 @@ impl UsernamesDialog {
         }
 
         outcome
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_username_is_refused_with_the_idp_name() {
+        let mut dialog = UsernamesDialog::new(&["suse".to_string()]);
+
+        assert_eq!(
+            dialog.usernames(),
+            Err("suse: Enter your user name.".to_string())
+        );
     }
 }

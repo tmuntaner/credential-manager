@@ -1,5 +1,8 @@
 //! Changes to the settings, and the validation that goes with them.
 //!
+//! A change is validated once, here: every field is checked and all the problems come back together, in form
+//! order, as [`SettingsEditError::InvalidFields`], each naming its [`InvalidField`].
+//!
 //! Every driving adapter (the CLI, the GUI) edits the settings through here, so they accept and refuse the same
 //! things. The `apply` functions change settings in memory; [`SettingsService`] is the one way to load, change and
 //! save them: every change goes through it, every change to an app is login-checked (there is no mode), and
@@ -32,6 +35,60 @@ pub enum InvalidField {
     Username,
     ClientId,
     Region,
+    /// The identity provider an app logs in with.
+    Idp,
+}
+
+/// What is wrong with a field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Problem {
+    /// A sentence that says what to change.
+    Message(String),
+    /// The identity provider is not configured (it keeps its own wording).
+    UnknownIdp(String),
+}
+
+impl std::fmt::Display for Problem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Problem::Message(message) => f.write_str(message),
+            Problem::UnknownIdp(name) => {
+                write!(f, "{}", SettingsError::UnknownIdp(name.clone()))
+            }
+        }
+    }
+}
+
+/// A field of a change and what is wrong with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FieldProblem {
+    pub field: InvalidField,
+    pub problem: Problem,
+}
+
+impl FieldProblem {
+    fn message(field: InvalidField, message: String) -> Self {
+        Self {
+            field,
+            problem: Problem::Message(message),
+        }
+    }
+}
+
+impl std::fmt::Display for FieldProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.problem.fmt(f)
+    }
+}
+
+fn join_problems(problems: &[FieldProblem]) -> String {
+    problems
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Why the settings were not changed.
@@ -42,12 +99,10 @@ pub enum SettingsEditError {
     #[error(transparent)]
     Invalid(#[from] SettingsError),
 
-    /// A value does not pass the checks of the settings (an `http` web address, a bad region, ...).
-    #[error("{message}")]
-    InvalidField {
-        field: InvalidField,
-        message: String,
-    },
+    /// Values do not pass the checks of the settings (an `http` web address, a bad region, ...). Every problem
+    /// of the change, in form order. Never empty.
+    #[error("{}", join_problems(.0))]
+    InvalidFields(Vec<FieldProblem>),
 
     /// An identity provider that apps still log in with cannot be removed.
     #[error(
@@ -198,36 +253,159 @@ impl RancherInput {
     }
 }
 
-/// Runs one check of `settings_validation`, and names the field when it fails.
-fn valid(field: InvalidField, result: Result<String, String>) -> Result<String, SettingsEditError> {
-    result.map_err(|message| SettingsEditError::InvalidField { field, message })
+struct ValidIdp {
+    name: String,
+    url: String,
+    username: String,
 }
 
-fn valid_url(input: &str) -> Result<String, SettingsEditError> {
-    valid(
+struct ValidAws {
+    app_url: String,
+    username: Option<String>,
+    idp: String,
+    region: Option<String>,
+}
+
+struct ValidRancher {
+    url: String,
+    client_id: String,
+    username: Option<String>,
+    idp: String,
+}
+
+/// Runs one check of `settings_validation` and keeps the problem, if any, under `field`.
+fn keep<T>(
+    problems: &mut Vec<FieldProblem>,
+    field: InvalidField,
+    result: Result<T, String>,
+) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(message) => {
+            problems.push(FieldProblem::message(field, message));
+            None
+        }
+    }
+}
+
+/// The identity provider an app logs in with: chosen, well-formed and configured.
+fn keep_idp(problems: &mut Vec<FieldProblem>, settings: &AppConfig, input: &str) -> Option<String> {
+    let name = match input.trim() {
+        "" => Err("Choose an identity provider.".to_string()),
+        name => check_name(name),
+    };
+    let name = keep(problems, InvalidField::Idp, name)?;
+    match settings.resolve_idp(&name) {
+        Ok(idp) => Some(idp.name().to_string()),
+        Err(_) => {
+            problems.push(FieldProblem {
+                field: InvalidField::Idp,
+                problem: Problem::UnknownIdp(name),
+            });
+            None
+        }
+    }
+}
+
+fn validate_idp(input: &IdpInput) -> Result<ValidIdp, Vec<FieldProblem>> {
+    let mut problems = Vec::new();
+    let name = keep(&mut problems, InvalidField::Name, check_name(&input.name));
+    let url = keep(
+        &mut problems,
         InvalidField::Url,
-        check_url(input, allow_insecure_localhost()),
-    )
+        check_url(&input.url, allow_insecure_localhost()),
+    );
+    let username = keep(
+        &mut problems,
+        InvalidField::Username,
+        check_username(&input.username),
+    );
+    match (name, url, username) {
+        (Some(name), Some(url), Some(username)) => Ok(ValidIdp {
+            name,
+            url,
+            username,
+        }),
+        _ => Err(problems),
+    }
 }
 
-fn valid_username(input: Option<String>) -> Result<Option<String>, SettingsEditError> {
-    check_optional_username(input.as_deref()).map_err(|message| SettingsEditError::InvalidField {
-        field: InvalidField::Username,
-        message,
-    })
+fn validate_aws(
+    settings: &AppConfig,
+    input: &AwsAppInput,
+    kind: &AwsAppKind,
+) -> Result<ValidAws, Vec<FieldProblem>> {
+    let mut problems = Vec::new();
+    let app_url = keep(
+        &mut problems,
+        InvalidField::Url,
+        check_url(&input.app_url, allow_insecure_localhost()),
+    );
+    let region = match kind {
+        AwsAppKind::Aws => Some(None),
+        AwsAppKind::AwsSso { region } => {
+            keep(&mut problems, InvalidField::Region, check_region(region)).map(Some)
+        }
+    };
+    let username = keep(
+        &mut problems,
+        InvalidField::Username,
+        check_optional_username(input.username.as_deref()),
+    );
+    let idp = keep_idp(&mut problems, settings, &input.idp);
+    match (app_url, region, username, idp) {
+        (Some(app_url), Some(region), Some(username), Some(idp)) => Ok(ValidAws {
+            app_url,
+            username,
+            idp,
+            region,
+        }),
+        _ => Err(problems),
+    }
 }
 
-/// The identity provider an app logs in with has to be configured.
-fn known_idp(settings: &AppConfig, idp: &str) -> Result<String, SettingsEditError> {
-    Ok(settings.resolve_idp(idp)?.name().to_string())
+fn validate_rancher(
+    settings: &AppConfig,
+    input: &RancherInput,
+) -> Result<ValidRancher, Vec<FieldProblem>> {
+    let mut problems = Vec::new();
+    let url = keep(
+        &mut problems,
+        InvalidField::Url,
+        check_url(&input.url, allow_insecure_localhost()),
+    );
+    let client_id = keep(
+        &mut problems,
+        InvalidField::ClientId,
+        check_client_id(&input.client_id),
+    );
+    let username = keep(
+        &mut problems,
+        InvalidField::Username,
+        check_optional_username(input.username.as_deref()),
+    );
+    let idp = keep_idp(&mut problems, settings, &input.idp);
+    match (url, client_id, username, idp) {
+        (Some(url), Some(client_id), Some(username), Some(idp)) => Ok(ValidRancher {
+            url,
+            client_id,
+            username,
+            idp,
+        }),
+        _ => Err(problems),
+    }
 }
 
 /// Adds an identity provider, or updates the one with the same name.
 pub fn apply_idp(settings: &mut AppConfig, input: IdpInput) -> Result<(), SettingsEditError> {
-    let name = valid(InvalidField::Name, check_name(&input.name))?;
-    let url = valid_url(&input.url)?;
-    let username = valid(InvalidField::Username, check_username(&input.username))?;
-    let idp = Idp::new(name, input.idp_type, url, username, input.mfa)?;
+    let valid = validate_idp(&input).map_err(SettingsEditError::InvalidFields)?;
+    let idp = Idp::new(
+        valid.name,
+        input.idp_type,
+        valid.url,
+        valid.username,
+        input.mfa,
+    )?;
     settings.add_idp(idp);
 
     Ok(())
@@ -238,10 +416,9 @@ pub fn apply_aws_app(
     settings: &mut AppConfig,
     input: AwsAppInput,
 ) -> Result<(), SettingsEditError> {
-    let idp = known_idp(settings, &input.idp)?;
-    let app_url = valid_url(&input.app_url)?;
-    let username = valid_username(input.username)?;
-    let host = AwsHost::new(app_url, username, idp, input.mfa)?;
+    let valid = validate_aws(settings, &input, &AwsAppKind::Aws)
+        .map_err(SettingsEditError::InvalidFields)?;
+    let host = AwsHost::new(valid.app_url, valid.username, valid.idp, input.mfa)?;
     settings.add_aws_host(host);
 
     Ok(())
@@ -253,11 +430,12 @@ pub fn apply_aws_sso_app(
     input: AwsAppInput,
     region: impl Into<String>,
 ) -> Result<(), SettingsEditError> {
-    let idp = known_idp(settings, &input.idp)?;
-    let app_url = valid_url(&input.app_url)?;
-    let username = valid_username(input.username)?;
-    let region = valid(InvalidField::Region, check_region(&region.into()))?;
-    let host = AwsSsoHost::new(app_url, username, idp, region, input.mfa)?;
+    let kind = AwsAppKind::AwsSso {
+        region: region.into(),
+    };
+    let valid = validate_aws(settings, &input, &kind).map_err(SettingsEditError::InvalidFields)?;
+    let region = valid.region.unwrap_or_default();
+    let host = AwsSsoHost::new(valid.app_url, valid.username, valid.idp, region, input.mfa)?;
     settings.add_aws_sso_host(host);
 
     Ok(())
@@ -268,11 +446,14 @@ pub fn apply_rancher(
     settings: &mut AppConfig,
     input: RancherInput,
 ) -> Result<(), SettingsEditError> {
-    let idp = known_idp(settings, &input.idp)?;
-    let url = valid_url(&input.url)?;
-    let client_id = valid(InvalidField::ClientId, check_client_id(&input.client_id))?;
-    let username = valid_username(input.username)?;
-    let host = RancherHost::new(url, client_id, idp, username, input.mfa)?;
+    let valid = validate_rancher(settings, &input).map_err(SettingsEditError::InvalidFields)?;
+    let host = RancherHost::new(
+        valid.url,
+        valid.client_id,
+        valid.idp,
+        valid.username,
+        input.mfa,
+    )?;
     settings.add_rancher_host(host);
 
     Ok(())
@@ -568,6 +749,33 @@ impl<C: LoginCheck> SettingsService<C> {
         Ok(config)
     }
 
+    /// Whether `input` passes the checks of an identity provider. Never saves.
+    pub fn check_idp(&self, input: &IdpInput) -> Result<(), SettingsEditError> {
+        validate_idp(input)
+            .map(drop)
+            .map_err(SettingsEditError::InvalidFields)
+    }
+
+    /// Whether `input` passes the checks of an AWS app of `kind`. Never saves.
+    pub fn check_aws_app(
+        &self,
+        input: &AwsAppInput,
+        kind: &AwsAppKind,
+    ) -> Result<(), SettingsEditError> {
+        let settings = self.store.load()?;
+        validate_aws(&settings, input, kind)
+            .map(drop)
+            .map_err(SettingsEditError::InvalidFields)
+    }
+
+    /// Whether `input` passes the checks of a Rancher. Never saves.
+    pub fn check_rancher(&self, input: &RancherInput) -> Result<(), SettingsEditError> {
+        let settings = self.store.load()?;
+        validate_rancher(&settings, input)
+            .map(drop)
+            .map_err(SettingsEditError::InvalidFields)
+    }
+
     /// Adds an identity provider, or updates the one with the same name.
     pub fn save_idp(
         &self,
@@ -800,6 +1008,15 @@ mod tests {
     const IDP_URL: &str = "https://id.example.com/";
     const APP_URL: &str = "https://id.example.com/application/saml/aws/sso/binding/init/";
 
+    fn fields_of(problems: &[FieldProblem]) -> Vec<InvalidField> {
+        problems.iter().map(|p| p.field).collect()
+    }
+
+    fn is_unknown_idp(error: &SettingsEditError) -> bool {
+        matches!(error, SettingsEditError::InvalidFields(problems)
+            if matches!(problems.as_slice(), [FieldProblem { field: InvalidField::Idp, problem: Problem::UnknownIdp(_) }]))
+    }
+
     fn idp_input() -> IdpInput {
         IdpInput::new("suse", IdpType::Authentik, IDP_URL, "user")
     }
@@ -822,10 +1039,8 @@ mod tests {
 
         assert!(matches!(
             apply_idp(&mut settings, input),
-            Err(SettingsEditError::InvalidField {
-                field: InvalidField::Url,
-                ..
-            })
+            Err(SettingsEditError::InvalidFields(problems))
+                if fields_of(&problems) == [InvalidField::Url]
         ));
         assert!(settings.idps().is_empty());
     }
@@ -836,10 +1051,7 @@ mod tests {
         let err = apply_aws_app(&mut settings, AwsAppInput::new(APP_URL, "suse"))
             .map(|_| ())
             .unwrap_err();
-        assert!(matches!(
-            err,
-            SettingsEditError::Invalid(SettingsError::UnknownIdp(_))
-        ));
+        assert!(is_unknown_idp(&err));
 
         apply_idp(&mut settings, idp_input()).unwrap();
         apply_aws_app(&mut settings, AwsAppInput::new(APP_URL, "suse")).unwrap();
@@ -866,9 +1078,8 @@ mod tests {
         let mut settings = AppConfig::default();
         let input = AwsAppInput::new(APP_URL, "nope");
 
-        assert!(matches!(
-            apply_aws_app(&mut settings, input),
-            Err(SettingsEditError::Invalid(SettingsError::UnknownIdp(_)))
+        assert!(is_unknown_idp(
+            &apply_aws_app(&mut settings, input).unwrap_err()
         ));
     }
 
@@ -876,9 +1087,8 @@ mod tests {
     fn rancher_needs_a_configured_idp() {
         let mut settings = AppConfig::default();
         let input = RancherInput::new("https://rancher.example.com", "rancher", "suse");
-        assert!(matches!(
-            apply_rancher(&mut settings, input.clone()),
-            Err(SettingsEditError::Invalid(SettingsError::UnknownIdp(_)))
+        assert!(is_unknown_idp(
+            &apply_rancher(&mut settings, input.clone()).unwrap_err()
         ));
 
         apply_idp(&mut settings, idp_input()).unwrap();
@@ -887,22 +1097,88 @@ mod tests {
     }
 
     #[test]
-    fn the_idp_is_checked_before_the_rest_of_an_app() {
-        // The same order for every kind of app: the identity provider first, so a form is not fixed field by
-        // field only to find out it has no identity provider.
+    fn every_problem_is_returned_together_in_form_order() {
+        use InvalidField::*;
         let mut settings = AppConfig::default();
-        let unknown = |e: SettingsEditError| {
-            matches!(e, SettingsEditError::Invalid(SettingsError::UnknownIdp(_)))
+        let fields = |e: SettingsEditError| match e {
+            SettingsEditError::InvalidFields(problems) => fields_of(&problems),
+            other => panic!("not field problems: {other}"),
         };
 
+        let mut bad = idp_input();
+        bad.name = "a/b".into();
+        bad.url = "nope".into();
+        bad.username = " ".into();
+        let err = apply_idp(&mut settings, bad).unwrap_err();
+        assert_eq!(fields(err), [Name, Url, Username]);
+
+        let mut input = AwsAppInput::new("not a url", "suse");
+        input.username = Some("a\nb".into());
+        let err = apply_aws_sso_app(&mut settings, input, "mars").unwrap_err();
+        assert_eq!(fields(err), [Url, Region, Username, Idp]);
+
+        let mut input = RancherInput::new("not a url", "", "suse");
+        input.username = Some("a\nb".into());
+        let err = apply_rancher(&mut settings, input).unwrap_err();
+        assert_eq!(fields(err), [Url, ClientId, Username, Idp]);
+
         let err = apply_aws_app(&mut settings, AwsAppInput::new("not a url", "suse")).unwrap_err();
-        assert!(unknown(err));
-        let err = apply_aws_sso_app(&mut settings, AwsAppInput::new("not a url", "suse"), "mars")
-            .unwrap_err();
-        assert!(unknown(err));
-        let err =
-            apply_rancher(&mut settings, RancherInput::new("not a url", "", "suse")).unwrap_err();
-        assert!(unknown(err));
+        match err {
+            SettingsEditError::InvalidFields(problems) => {
+                assert_eq!(fields_of(&problems), [Url, Idp]);
+                assert_eq!(problems[1].problem, Problem::UnknownIdp("suse".into()));
+            }
+            other => panic!("not field problems: {other}"),
+        }
+    }
+
+    #[test]
+    fn a_blank_idp_reference_is_a_field_problem() {
+        let mut settings = AppConfig::default();
+        let err = apply_aws_app(&mut settings, AwsAppInput::new(APP_URL, "  ")).unwrap_err();
+        match err {
+            SettingsEditError::InvalidFields(problems) => assert_eq!(
+                problems,
+                [FieldProblem {
+                    field: InvalidField::Idp,
+                    problem: Problem::Message("Choose an identity provider.".into())
+                }]
+            ),
+            other => panic!("not field problems: {other}"),
+        }
+    }
+
+    #[test]
+    fn display_joins_the_messages() {
+        let mut settings = AppConfig::default();
+        let err = apply_aws_app(&mut settings, AwsAppInput::new("not a url", "suse")).unwrap_err();
+        let text = err.to_string();
+        assert!(text
+            .ends_with("the identity provider \"suse\" is not configured, run `c9s config idp`"));
+        assert!(
+            text.contains(". ") || text.contains("web address"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn check_aws_app_never_saves() {
+        let store = Arc::new(MemoryStore::default());
+        let service = SettingsService::new(store.clone());
+        service.save_idp(idp_input(), SaveAs::Upsert).unwrap();
+        let saves = store.saves();
+
+        service
+            .check_aws_app(&AwsAppInput::new(APP_URL, "suse"), &AwsAppKind::Aws)
+            .unwrap();
+        assert!(service
+            .check_aws_app(&AwsAppInput::new("nope", "suse"), &AwsAppKind::Aws)
+            .is_err());
+        assert!(service.check_idp(&idp_input()).is_ok());
+        assert!(service
+            .check_rancher(&RancherInput::new("nope", "c", "suse"))
+            .is_err());
+        assert_eq!(store.saves(), saves);
     }
 
     #[test]
@@ -914,7 +1190,7 @@ mod tests {
             .update(|config| apply_aws_app(config, AwsAppInput::new(APP_URL, "suse")))
             .map(|_| ())
             .unwrap_err();
-        assert!(matches!(err, SettingsEditError::Invalid(_)));
+        assert!(is_unknown_idp(&err));
         assert_eq!(store.saves(), 0);
 
         let saved = service
@@ -1401,7 +1677,7 @@ mod tests {
     fn the_service_refuses_what_the_forms_refuse() {
         let store = Arc::new(MemoryStore::default());
         let service = SettingsService::new(store.clone());
-        let invalid = |field| move |e| matches!(e, SettingsEditError::InvalidField { field: f, .. } if f == field);
+        let invalid = |field| move |e| matches!(e, SettingsEditError::InvalidFields(p) if fields_of(&p) == [field]);
 
         let mut bad = idp_input();
         bad.url = "http://id.example.com".into();
@@ -1843,7 +2119,7 @@ mod tests {
                 ImportMode::SkipExisting,
                 &names()
             ),
-            Err(SettingsEditError::Invalid(SettingsError::UnknownIdp(_)))
+            Err(ref e) if is_unknown_idp(e)
         ));
         assert_eq!(target.saves(), 0);
     }
@@ -1867,10 +2143,8 @@ mod tests {
                 ImportMode::SkipExisting,
                 &BTreeMap::from([("bad".to_string(), "user".to_string())])
             ),
-            Err(SettingsEditError::InvalidField {
-                field: InvalidField::Url,
-                ..
-            })
+            Err(SettingsEditError::InvalidFields(problems))
+                if fields_of(&problems) == [InvalidField::Url]
         ));
         assert_eq!(target.saves(), 0);
     }

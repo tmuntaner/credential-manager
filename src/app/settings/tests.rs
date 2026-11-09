@@ -313,7 +313,11 @@ fn every_bad_field_is_reported_and_nothing_is_written() {
     bad.url = "javascript:alert(1)".into();
     bad.client_id = "two words".into();
     let error = page.save_rancher(bad).unwrap_err();
-    assert_eq!(fields(&error), [Field::RancherUrl, Field::RancherClientId]);
+    // The idp `work` is not configured either, and that is reported together with the bad fields.
+    assert_eq!(
+        fields(&error),
+        [Field::RancherUrl, Field::RancherClientId, Field::RancherIdp]
+    );
 
     assert!(!path.exists());
 }
@@ -443,6 +447,7 @@ fn a_change_that_would_break_an_app_is_refused_and_not_saved() {
 fn the_kind_of_error_picks_the_field() {
     use super::errors::edit_error;
     use crate::domain::services::settings_editor::SettingsEditError as E;
+    use crate::domain::services::settings_editor::{FieldProblem, InvalidField, Problem};
 
     let key = || "x".to_string();
     assert_eq!(
@@ -467,6 +472,33 @@ fn the_kind_of_error_picks_the_field() {
         fields(&edit_error(unknown(), Form::Rancher)),
         [Field::RancherIdp]
     );
+    let problems = || {
+        E::InvalidFields(vec![
+            FieldProblem {
+                field: InvalidField::Url,
+                problem: Problem::Message("Bad url.".into()),
+            },
+            FieldProblem {
+                field: InvalidField::Idp,
+                problem: Problem::UnknownIdp(key()),
+            },
+        ])
+    };
+    let error = edit_error(problems(), Form::Aws);
+    assert_eq!(fields(&error), [Field::AwsAppUrl, Field::AwsIdp]);
+    assert_eq!(
+        error.fields[1].message,
+        "There is no identity provider called x. Choose another one."
+    );
+    assert_eq!(
+        fields(&edit_error(problems(), Form::Rancher)),
+        [Field::RancherUrl, Field::RancherIdp]
+    );
+    // The identity provider form has no field for the reference, an action has no fields at all.
+    assert_eq!(fields(&edit_error(problems(), Form::Idp)), [Field::IdpUrl]);
+    let general = edit_error(problems(), Form::Action);
+    assert!(general.fields.is_empty());
+    assert!(general.message.unwrap().starts_with("Bad url. "));
     let gone = edit_error(E::Gone, Form::Aws);
     assert!(gone.fields.is_empty() && gone.message.is_some());
     let broken = edit_error(E::WouldBreak { urls: vec![key()] }, Form::Idp);
@@ -541,4 +573,37 @@ fn a_missing_security_key_is_explained() {
     assert!(error.sentence().contains("Plug it in"));
     let error = security_key::wrap_error(WrapError::Cancelled);
     assert!(error.sentence().contains("cancelled"));
+}
+
+#[test]
+fn with_mfa_keeps_form_order() {
+    use super::errors::with_mfa;
+    use crate::domain::services::settings_editor::{
+        FieldProblem, InvalidField, Problem, SettingsEditError as E,
+    };
+    let problem = |field| FieldProblem {
+        field,
+        problem: Problem::Message("m".into()),
+    };
+    let domain = Err(E::InvalidFields(vec![
+        problem(InvalidField::Url),
+        problem(InvalidField::Idp),
+    ]));
+
+    let error = with_mfa(Form::Aws, Field::AwsMfa, "mfa".into(), domain);
+    assert_eq!(
+        fields(&error),
+        [Field::AwsAppUrl, Field::AwsMfa, Field::AwsIdp]
+    );
+
+    let error = with_mfa(Form::Idp, Field::IdpMfa, "mfa".into(), Ok(()));
+    assert_eq!(fields(&error), [Field::IdpMfa]);
+}
+
+#[test]
+fn security_keys_need_a_supported_platform() {
+    assert!(mfa_selection_on(MfaChoice::SecurityKey, false).is_err());
+    assert!(mfa_selection_on(MfaChoice::Totp, false).is_ok());
+    assert_eq!(mfa_selection_on(MfaChoice::Ask, false), Ok(None));
+    assert!(mfa_selection_on(MfaChoice::SecurityKey, true).is_ok());
 }

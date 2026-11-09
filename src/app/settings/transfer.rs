@@ -5,6 +5,7 @@ use crate::domain::ports::bundle::{BundleCodec, BundleError};
 use crate::domain::services::settings_editor::{
     ImportMode, ImportReport, SettingsEditError, SettingsService,
 };
+use crate::domain::services::settings_validation::check_username;
 use std::collections::BTreeMap;
 use std::path::Path;
 use thiserror::Error;
@@ -54,6 +55,12 @@ pub fn usernames_needed<C: BundleCodec>(
     text: &str,
 ) -> Result<Vec<String>, TransferError> {
     Ok(settings.usernames_needed(&codec.decode(text)?)?)
+}
+
+/// The pre-flight check of the user name typed for the identity provider `idp` of an import. The import checks it
+/// again, this lets a dialog keep its error inline.
+pub fn check_import_username(idp: &str, input: &str) -> Result<String, String> {
+    check_username(input).map_err(|e| format!("{idp}: {e}"))
 }
 
 fn setup_error(error: TransferError) -> SetupError {
@@ -139,12 +146,9 @@ impl SettingsPage {
         let text = std::fs::read_to_string(path).map_err(|e| io_error("read", path, e))?;
         let report =
             import_text(&self.settings, codec, &text, mode, usernames).map_err(setup_error)?;
-        let settings = self
-            .settings
-            .load()
-            .map_err(|e| edit_error(e, Form::Action))?;
+        let view = self.run(Form::Action, |s| s.load())?;
 
-        Ok((settings.into(), report))
+        Ok((view, report))
     }
 }
 

@@ -1,7 +1,7 @@
 //! The settings page: identity providers, AWS apps and Ranchers, each listed, added, changed and removed on its
 //! own. Every change goes through the same service as `c9s config ...`.
 //!
-//! The page only checks the form and shows what went wrong under the right field. [`SettingsService`] decides
+//! The page only translates form state and shows what went wrong under the right field; it validates nothing itself. [`SettingsService`] decides
 //! whether a change is written: always (there is no mode), and only when what it sets up resolves a login the way
 //! the CLI would (a dry run on a copy), and when nothing that resolved before stops resolving.
 //!
@@ -23,16 +23,17 @@ pub use models::{
 };
 
 use crate::domain::models::mfa::MfaSelection;
-use crate::domain::models::settings::YubikeyConfig;
+use crate::domain::models::settings::{AppConfig, YubikeyConfig};
 use crate::domain::ports::notifier::Notifier;
 use crate::domain::ports::user_interaction::UserInteraction;
-use crate::domain::services::settings_editor::SettingsService;
-use crate::domain::services::settings_validation::check_name;
+use crate::domain::services::settings_editor::{SettingsEditError, SettingsService};
 use errors::{edit_error, Form};
 use std::sync::Arc;
 
 pub use security_key::{enroll_security_key, DEFAULT_RP_ID};
-pub use transfer::{export_text, import_text, usernames_needed, ExportChoice, TransferError};
+pub use transfer::{
+    check_import_username, export_text, import_text, usernames_needed, ExportChoice, TransferError,
+};
 
 /// Whether security keys can be used on this machine.
 const SECURITY_KEY_SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos"));
@@ -47,43 +48,34 @@ impl SettingsPage {
     }
 
     pub fn view(&self) -> Result<SettingsView, SetupError> {
-        let settings = self
-            .settings
-            .load()
-            .map_err(|e| edit_error(e, Form::Action))?;
+        self.run(Form::Action, |s| s.load())
+    }
 
-        Ok(settings.into())
+    /// Runs one change of the service, and tells the form what went wrong.
+    fn run(
+        &self,
+        form: Form,
+        op: impl FnOnce(&SettingsService) -> Result<AppConfig, SettingsEditError>,
+    ) -> Result<SettingsView, SetupError> {
+        op(&self.settings)
+            .map(Into::into)
+            .map_err(|e| edit_error(e, form))
     }
 
     pub fn set_use_keyring(&self, enabled: bool) -> Result<SettingsView, SetupError> {
-        let settings = self
-            .settings
-            .set_use_keyring(enabled)
-            .map_err(|e| edit_error(e, Form::Action))?;
-
-        Ok(settings.into())
+        self.run(Form::Action, |s| s.set_use_keyring(enabled))
     }
 }
 
 impl SettingsPage {
     /// Chooses whether issued credentials (AWS/Rancher) are encrypted with the security key.
     pub fn set_wrap_cached(&self, enabled: bool) -> Result<SettingsView, SetupError> {
-        let settings = self
-            .settings
-            .set_wrap_cached_secrets(enabled)
-            .map_err(|e| edit_error(e, Form::Action))?;
-
-        Ok(settings.into())
+        self.run(Form::Action, |s| s.set_wrap_cached_secrets(enabled))
     }
 
     /// Saves the enrolled security key, or `None` to stop using it.
     pub fn set_security_key(&self, key: Option<YubikeyConfig>) -> Result<SettingsView, SetupError> {
-        let settings = self
-            .settings
-            .set_yubikey(key)
-            .map_err(|e| edit_error(e, Form::Action))?;
-
-        Ok(settings.into())
+        self.run(Form::Action, |s| s.set_yubikey(key))
     }
 
     /// Enrolls a security key for `rp_id` and saves it.
@@ -98,16 +90,12 @@ impl SettingsPage {
     }
 }
 
-/// Every app logs in through an identity provider, so one has to be chosen.
-fn check_idp(input: &str) -> Result<String, String> {
-    match input.trim() {
-        "" => Err("Choose an identity provider.".into()),
-        name => check_name(name),
-    }
+fn mfa_selection(choice: MfaChoice) -> Result<Option<MfaSelection>, String> {
+    mfa_selection_on(choice, SECURITY_KEY_SUPPORTED)
 }
 
-fn mfa_selection(choice: MfaChoice) -> Result<Option<MfaSelection>, String> {
-    match (choice, SECURITY_KEY_SUPPORTED) {
+fn mfa_selection_on(choice: MfaChoice, supported: bool) -> Result<Option<MfaSelection>, String> {
+    match (choice, supported) {
         (MfaChoice::Ask, _) => Ok(None),
         (MfaChoice::Totp, _) => Ok(Some(MfaSelection::Totp)),
         (MfaChoice::SecurityKey, true) => Ok(Some(MfaSelection::WebAuthn)),
