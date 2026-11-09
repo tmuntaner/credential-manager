@@ -2,8 +2,8 @@
 //! own. Every change goes through the same service as `c9s config ...`.
 //!
 //! The page only checks the form and shows what went wrong under the right field. [`SettingsService`] decides
-//! whether a change is written: only when what it sets up resolves a login the way the CLI would (a dry run on a
-//! copy), and when nothing that resolved before stops resolving.
+//! whether a change is written: always (there is no mode), and only when what it sets up resolves a login the way
+//! the CLI would (a dry run on a copy), and when nothing that resolved before stops resolving.
 //!
 //! A driving adapter (the egui window) brings its own screens and calls this page.
 
@@ -43,9 +43,7 @@ pub struct SettingsPage {
 
 impl SettingsPage {
     pub fn new(store: SettingsService) -> Self {
-        Self {
-            settings: store.with_login_checks(),
-        }
+        Self { settings: store }
     }
 
     pub fn view(&self) -> Result<SettingsView, SetupError> {

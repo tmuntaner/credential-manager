@@ -6,6 +6,7 @@ pub mod rancher;
 // Driven ports: used by the domain, implemented by adapters or by the host.
 pub mod bundle;
 pub mod config;
+pub mod login_check;
 pub mod notifier;
 pub mod secret_store;
 pub mod secret_wrapper;

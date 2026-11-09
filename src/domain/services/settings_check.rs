@@ -1,85 +1,82 @@
-use crate::domain::models::login::{AwsOverrides, RancherOverrides, ResolveError};
+use crate::domain::models::login::{AwsOverrides, LoginTarget, RancherOverrides, ResolveError};
 use crate::domain::models::settings::{AppConfig, AwsAppType};
 use crate::domain::ports::login::LoginResolver;
+use crate::domain::ports::login_check::LoginCheck;
 use crate::domain::services::login_resolver::LoginResolverService;
 use crate::domain::services::settings_editor::SettingsEditError;
 
-/// An app in the settings, by its key.
-pub(super) enum Entry {
-    Aws(String, AwsAppType),
-    Rancher(String),
-}
+/// The real implementation of LoginCheck.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ResolvingLoginCheck;
 
-impl Entry {
-    fn url(&self) -> &str {
-        match self {
-            Entry::Aws(url, _) | Entry::Rancher(url) => url,
+impl LoginCheck for ResolvingLoginCheck {
+    fn resolves(&self, settings: &AppConfig, target: &LoginTarget) -> Result<(), ResolveError> {
+        let resolver = LoginResolverService::new(settings.clone());
+
+        match target {
+            LoginTarget::Aws { app_url, app_type } => resolver
+                .resolve_aws(&AwsOverrides {
+                    app_url: Some(app_url.clone()),
+                    app_type: Some(*app_type),
+                    ..Default::default()
+                })
+                .map(|_| ()),
+            LoginTarget::Rancher { url } => resolver
+                .resolve_rancher(&RancherOverrides {
+                    url: Some(url.clone()),
+                    ..Default::default()
+                })
+                .map(|_| ()),
         }
     }
 }
 
-fn entries(settings: &AppConfig) -> Vec<Entry> {
-    let aws = settings
-        .aws_hosts()
-        .iter()
-        .map(|host| Entry::Aws(host.app_url().to_string(), AwsAppType::Aws));
+/// All LoginTargets from an AppConfig.
+pub(super) fn targets(settings: &AppConfig) -> Vec<LoginTarget> {
+    let aws = settings.aws_hosts().iter().map(|host| LoginTarget::Aws {
+        app_url: host.app_url().to_string(),
+        app_type: AwsAppType::Aws,
+    });
 
     let sso = settings
         .aws_sso_hosts()
         .iter()
-        .map(|host| Entry::Aws(host.app_url().to_string(), AwsAppType::AwsSso));
+        .map(|host| LoginTarget::Aws {
+            app_url: host.app_url().to_string(),
+            app_type: AwsAppType::AwsSso,
+        });
 
     let rancher = settings
         .rancher_hosts()
         .iter()
-        .map(|host| Entry::Rancher(host.url().to_string()));
+        .map(|host| LoginTarget::Rancher {
+            url: host.url().to_string(),
+        });
 
     aws.chain(sso).chain(rancher).collect()
 }
 
-/// Resolves the login of one app using a provided resolver, as `c9s creds aws --app-url` or `c9s creds rancher --url` would.
-fn resolve_with<R: LoginResolver>(resolver: &R, entry: &Entry) -> Result<(), ResolveError> {
-    match entry {
-        Entry::Aws(url, app_type) => resolver
-            .resolve_aws(&AwsOverrides {
-                app_url: Some(url.clone()),
-                app_type: Some(*app_type),
-                ..Default::default()
-            })
-            .map(|_| ()),
-        Entry::Rancher(url) => resolver
-            .resolve_rancher(&RancherOverrides {
-                url: Some(url.clone()),
-                ..Default::default()
-            })
-            .map(|_| ()),
-    }
-}
-
-/// Resolves the login of one app, as `c9s creds aws --app-url` or `c9s creds rancher --url` would.
-pub(super) fn resolve(settings: &AppConfig, entry: &Entry) -> Result<(), SettingsEditError> {
-    let resolver = LoginResolverService::new(settings.clone());
-
-    resolve_with(&resolver, entry).map_err(SettingsEditError::DoesNotResolve)
-}
-
-/// Refuses a change that breaks an app that worked before it.
-pub(super) fn still_resolves(
+/// Verifies that changed applications will still resolve after the change is made.
+pub(super) fn verify<C: LoginCheck>(
+    check: &C,
     before: &AppConfig,
     after: &AppConfig,
+    touched: &[LoginTarget],
 ) -> Result<(), SettingsEditError> {
-    let before_resolver = LoginResolverService::new(before.clone());
-    let after_resolver = LoginResolverService::new(after.clone());
+    for target in touched {
+        check
+            .resolves(after, target)
+            .map_err(SettingsEditError::DoesNotResolve)?;
+    }
 
     // Only the apps of `after` are checked, so an app the change removed is never reported. An app is
     // broken when it resolved before and fails now.
-    let urls: Vec<String> = entries(after)
+    let urls: Vec<String> = targets(after)
         .into_iter()
-        .filter(|entry| {
-            resolve_with(&before_resolver, entry).is_ok()
-                && resolve_with(&after_resolver, entry).is_err()
+        .filter(|target| {
+            check.resolves(before, target).is_ok() && check.resolves(after, target).is_err()
         })
-        .map(|entry| entry.url().to_string())
+        .map(|target| target.url().to_string())
         .collect();
 
     if urls.is_empty() {
@@ -116,7 +113,7 @@ mod tests {
         let mut after = before.clone();
         after.remove_aws_host(URL);
 
-        assert!(still_resolves(&before, &after).is_ok());
+        assert!(verify(&ResolvingLoginCheck, &before, &after, &[]).is_ok());
     }
 
     #[test]
@@ -125,7 +122,7 @@ mod tests {
         let mut after = before.clone();
         after.remove_idp("a");
 
-        match still_resolves(&before, &after) {
+        match verify(&ResolvingLoginCheck, &before, &after, &[]) {
             Err(SettingsEditError::WouldBreak { urls }) => {
                 assert_eq!(urls, vec![URL.trim_end_matches('/').to_string()])
             }
@@ -143,13 +140,13 @@ mod tests {
         let mut without_sso = before.clone();
         without_sso.remove_aws_sso_host(URL);
 
-        assert!(still_resolves(&before, &without_aws).is_ok());
-        assert!(still_resolves(&before, &without_sso).is_ok());
+        assert!(verify(&ResolvingLoginCheck, &before, &without_aws, &[]).is_ok());
+        assert!(verify(&ResolvingLoginCheck, &before, &without_sso, &[]).is_ok());
 
         // Losing the identity provider breaks both, and each is named.
         let mut broken = before.clone();
         broken.remove_idp("a");
-        match still_resolves(&before, &broken) {
+        match verify(&ResolvingLoginCheck, &before, &broken, &[]) {
             Err(SettingsEditError::WouldBreak { urls }) => assert_eq!(urls.len(), 2),
             other => panic!("expected WouldBreak, got {other:?}"),
         }

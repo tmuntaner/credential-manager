@@ -437,15 +437,6 @@ fn a_change_that_would_break_an_app_is_refused_and_not_saved() {
     let error = page.remove_idp("work").unwrap_err();
     assert!(error.message.is_some());
     assert_eq!(store.saves(), saves);
-
-    // The service itself refuses a breaking edit made behind the page's back.
-    let service = SettingsService::new(store.clone()).with_login_checks();
-    let broken = service.update_checked(|_, config| {
-        config.remove_idp("work");
-        Ok(())
-    });
-    assert!(broken.is_err());
-    assert_eq!(store.saves(), saves);
 }
 
 #[test]

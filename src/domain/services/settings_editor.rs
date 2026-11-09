@@ -2,17 +2,19 @@
 //!
 //! Every driving adapter (the CLI, the GUI) edits the settings through here, so they accept and refuse the same
 //! things. The `apply` functions change settings in memory; [`SettingsService`] is the one way to load, change and
-//! save them: every change goes through it, and nothing is saved when a change is refused.
+//! save them: every change goes through it, every change to an app is login-checked (there is no mode), and
+//! nothing is saved when a change is refused.
 
 use crate::domain::models::idp::IdpType;
-use crate::domain::models::login::ResolveError;
+use crate::domain::models::login::{LoginTarget, ResolveError};
 use crate::domain::models::mfa::MfaSelection;
 use crate::domain::models::settings::{
     same_app_url, AppConfig, AwsAppType, AwsHost, AwsSsoHost, Idp, RancherHost, SettingsBundle,
     SettingsError, YubikeyConfig,
 };
 use crate::domain::ports::config::{ConfigError, ConfigStore};
-use crate::domain::services::settings_check::{resolve, still_resolves, Entry};
+use crate::domain::ports::login_check::LoginCheck;
+use crate::domain::services::settings_check::{verify, ResolvingLoginCheck};
 use crate::domain::services::settings_validation::{
     allow_insecure_localhost, check_client_id, check_name, check_optional_username, check_region,
     check_url, check_username,
@@ -491,28 +493,46 @@ impl ImportReport {
     }
 }
 
-/// Edits the settings kept in a [`ConfigStore`]: every change is loaded, applied and saved here, and nothing is
-/// saved when a change is refused.
-#[derive(Clone)]
-pub struct SettingsService {
-    store: Arc<dyn ConfigStore + Send + Sync>,
-    login_checks: bool,
+/// Checks the existence rule of a save once, for every kind: `New` refuses a taken key, `Replace` refuses an old
+/// key that is gone, `Upsert` refuses neither.
+fn check_mode<K>(
+    mode: &SaveAs<K>,
+    key: &str,
+    new_key_taken: bool,
+    old_exists: impl FnOnce(&K) -> bool,
+) -> Result<(), SettingsEditError> {
+    match mode {
+        SaveAs::Upsert => Ok(()),
+        SaveAs::New if new_key_taken => Err(SettingsEditError::AlreadyExists {
+            key: key.to_string(),
+        }),
+        SaveAs::New => Ok(()),
+        SaveAs::Replace(old) if !old_exists(old) => Err(SettingsEditError::Gone),
+        SaveAs::Replace(_) => Ok(()),
+    }
 }
 
-impl SettingsService {
+/// Edits the settings kept in a [`ConfigStore`]: every change is loaded, applied, login-checked and saved here,
+/// and nothing is saved when a change is refused.
+///
+/// A change to the apps (the `save_*`, `remove_*` and `import` methods) is refused when what it sets up does not
+/// resolve a login, or when it stops an app that resolved before from resolving. The check is the [`LoginCheck`]
+/// port; [`SettingsService::new`] resolves the way the CLI would.
+#[derive(Clone)]
+pub struct SettingsService<C: LoginCheck = ResolvingLoginCheck> {
+    store: Arc<dyn ConfigStore + Send + Sync>,
+    check: C,
+}
+
+impl SettingsService<ResolvingLoginCheck> {
     pub fn new(store: Arc<dyn ConfigStore + Send + Sync>) -> Self {
-        Self {
-            store,
-            login_checks: false,
-        }
+        Self::with_login_check(store, ResolvingLoginCheck)
     }
+}
 
-    /// Opt in to login checks. The changes still save; the changes to apps (the `save_*` and `remove_*` methods)
-    /// are also refused when what they set up does not resolve a login, or when they stop an app that resolved before from resolving.
-    pub fn with_login_checks(mut self) -> Self {
-        self.login_checks = true;
-
-        self
+impl<C: LoginCheck> SettingsService<C> {
+    pub fn with_login_check(store: Arc<dyn ConfigStore + Send + Sync>, check: C) -> Self {
+        Self { store, check }
     }
 
     /// The settings as stored. Never saves.
@@ -520,8 +540,8 @@ impl SettingsService {
         Ok(self.store.load()?)
     }
 
-    /// Loads the settings, applies `change` and saves the result, which is returned.
-    /// Nothing is saved when `change` fails.
+    /// Loads the settings, applies `change` and saves the result, which is returned. No login check: for the
+    /// global settings. Nothing is saved when `change` fails.
     pub fn update(
         &self,
         change: impl FnOnce(&mut AppConfig) -> Result<(), SettingsEditError>,
@@ -533,33 +553,19 @@ impl SettingsService {
         Ok(config)
     }
 
-    /// Like [`update`](Self::update), and refuses a change that stops an app that resolved a login before from
-    /// resolving it. `change` receives the settings before the change, and the ones to change.
-    pub fn update_checked(
+    /// Loads the settings, applies `change` (which gets the settings before, the ones to change, and returns the
+    /// apps it set up), checks the logins and saves. Nothing is saved when anything fails.
+    fn edit(
         &self,
-        change: impl FnOnce(&AppConfig, &mut AppConfig) -> Result<(), SettingsEditError>,
+        change: impl FnOnce(&AppConfig, &mut AppConfig) -> Result<Vec<LoginTarget>, SettingsEditError>,
     ) -> Result<AppConfig, SettingsEditError> {
         let before = self.store.load()?;
         let mut config = before.clone();
-        change(&before, &mut config)?;
-        still_resolves(&before, &config)?;
+        let touched = change(&before, &mut config)?;
+        verify(&self.check, &before, &config, &touched)?;
         self.store.save(&config)?;
 
         Ok(config)
-    }
-
-    fn edit(
-        &self,
-        change: impl FnOnce(&AppConfig, &mut AppConfig) -> Result<(), SettingsEditError>,
-    ) -> Result<AppConfig, SettingsEditError> {
-        if self.login_checks {
-            self.update_checked(change)
-        } else {
-            self.update(|config| {
-                let before = config.clone();
-                change(&before, config)
-            })
-        }
     }
 
     /// Adds an identity provider, or updates the one with the same name.
@@ -569,20 +575,20 @@ impl SettingsService {
         mode: SaveAs<()>,
     ) -> Result<AppConfig, SettingsEditError> {
         self.edit(|before, config| {
-            match (&mode, before.find_idp(&input.name).is_some()) {
-                (SaveAs::New, true) => {
-                    return Err(SettingsEditError::AlreadyExists { key: input.name })
-                }
-                (SaveAs::Replace(()), false) => return Err(SettingsEditError::Gone),
-                _ => {}
-            }
+            let taken = before.find_idp(&input.name).is_some();
+            check_mode(&mode, &input.name, taken, |_| taken)?;
+            apply_idp(config, input)?;
 
-            apply_idp(config, input)
+            Ok(vec![])
         })
     }
 
     pub fn remove_idp(&self, name: &str) -> Result<AppConfig, SettingsEditError> {
-        self.edit(|_, config| apply_remove_idp(config, name))
+        self.edit(|_, config| {
+            apply_remove_idp(config, name)?;
+
+            Ok(vec![])
+        })
     }
 
     /// Adds an AWS app of either kind, or replaces one (its url and kind may change).
@@ -595,27 +601,21 @@ impl SettingsService {
         let app_type = kind.app_type();
         let url = input.app_url.clone();
         self.edit(|before, config| {
+            let taken = has_aws(before, &url, app_type);
+            check_mode(&mode, &url, taken, |(old_url, old_type)| {
+                has_aws(before, old_url, *old_type)
+            })?;
             match &mode {
-                SaveAs::Upsert => apply_aws_app_of_kind(config, input, kind)?,
-                SaveAs::New => {
-                    if has_aws(before, &url, app_type) {
-                        return Err(SettingsEditError::AlreadyExists { key: url });
-                    }
-                    apply_aws_app_of_kind(config, input, kind)?;
-                }
                 SaveAs::Replace((old_url, old_type)) => {
-                    if !has_aws(before, old_url, *old_type) {
-                        return Err(SettingsEditError::Gone);
-                    }
-                    apply_replace_aws_app(config, old_url, *old_type, input, kind)?;
+                    apply_replace_aws_app(config, old_url, *old_type, input, kind)?
                 }
+                SaveAs::Upsert | SaveAs::New => apply_aws_app_of_kind(config, input, kind)?,
             }
 
-            if self.login_checks {
-                resolve(config, &Entry::Aws(url, app_type))?;
-            }
-
-            Ok(())
+            Ok(vec![LoginTarget::Aws {
+                app_url: url,
+                app_type,
+            }])
         })
     }
 
@@ -624,7 +624,11 @@ impl SettingsService {
         app_url: &str,
         app_type: AwsAppType,
     ) -> Result<AppConfig, SettingsEditError> {
-        self.edit(|_, config| apply_remove_aws_app(config, app_url, app_type))
+        self.edit(|_, config| {
+            apply_remove_aws_app(config, app_url, app_type)?;
+
+            Ok(vec![])
+        })
     }
 
     /// Adds a Rancher, or replaces one (its url may change).
@@ -635,32 +639,25 @@ impl SettingsService {
     ) -> Result<AppConfig, SettingsEditError> {
         let url = input.url.clone();
         self.edit(|before, config| {
+            let taken = before.find_rancher_host(&url).is_some();
+            check_mode(&mode, &url, taken, |old_url| {
+                before.find_rancher_host(old_url).is_some()
+            })?;
             match &mode {
-                SaveAs::Upsert => apply_rancher(config, input)?,
-                SaveAs::New => {
-                    if before.find_rancher_host(&url).is_some() {
-                        return Err(SettingsEditError::AlreadyExists { key: url });
-                    }
-                    apply_rancher(config, input)?;
-                }
-                SaveAs::Replace(old_url) => {
-                    if before.find_rancher_host(old_url).is_none() {
-                        return Err(SettingsEditError::Gone);
-                    }
-                    apply_replace_rancher(config, old_url, input)?;
-                }
+                SaveAs::Replace(old_url) => apply_replace_rancher(config, old_url, input)?,
+                SaveAs::Upsert | SaveAs::New => apply_rancher(config, input)?,
             }
 
-            if self.login_checks {
-                resolve(config, &Entry::Rancher(url))?;
-            }
-
-            Ok(())
+            Ok(vec![LoginTarget::Rancher { url }])
         })
     }
 
     pub fn remove_rancher(&self, url: &str) -> Result<AppConfig, SettingsEditError> {
-        self.edit(|_, config| apply_remove_rancher(config, url))
+        self.edit(|_, config| {
+            apply_remove_rancher(config, url)?;
+
+            Ok(vec![])
+        })
     }
 
     /// The identity providers called `names` and the apps that log in with them. Never saves.
@@ -697,6 +694,7 @@ impl SettingsService {
     ) -> Result<(AppConfig, ImportReport), SettingsEditError> {
         let mut report = ImportReport::default();
         let config = self.edit(|before, config| {
+            let mut touched = Vec::new();
             let overwrite = mode == ImportMode::Overwrite;
 
             for idp in bundle.idps() {
@@ -725,12 +723,10 @@ impl SettingsService {
                 input.username = host.username().map(str::to_string);
                 input.mfa = host.mfa();
                 apply_aws_app(config, input)?;
-                if self.login_checks {
-                    resolve(
-                        config,
-                        &Entry::Aws(host.app_url().to_string(), AwsAppType::Aws),
-                    )?;
-                }
+                touched.push(LoginTarget::Aws {
+                    app_url: host.app_url().to_string(),
+                    app_type: AwsAppType::Aws,
+                });
             }
 
             for host in bundle.aws_sso_hosts() {
@@ -742,12 +738,10 @@ impl SettingsService {
                 input.username = host.username().map(str::to_string);
                 input.mfa = host.mfa();
                 apply_aws_sso_app(config, input, host.region())?;
-                if self.login_checks {
-                    resolve(
-                        config,
-                        &Entry::Aws(host.app_url().to_string(), AwsAppType::AwsSso),
-                    )?;
-                }
+                touched.push(LoginTarget::Aws {
+                    app_url: host.app_url().to_string(),
+                    app_type: AwsAppType::AwsSso,
+                });
             }
 
             for host in bundle.rancher_hosts() {
@@ -759,12 +753,12 @@ impl SettingsService {
                 input.username = host.username().map(str::to_string);
                 input.mfa = host.mfa();
                 apply_rancher(config, input)?;
-                if self.login_checks {
-                    resolve(config, &Entry::Rancher(host.url().to_string()))?;
-                }
+                touched.push(LoginTarget::Rancher {
+                    url: host.url().to_string(),
+                });
             }
 
-            Ok(())
+            Ok(touched)
         })?;
 
         Ok((config, report))
@@ -801,6 +795,7 @@ mod tests {
     use super::*;
     use crate::domain::ports::config::memory::MemoryStore;
     use crate::domain::ports::config::MockConfigStore;
+    use crate::domain::ports::login_check::{MockLoginCheck, NoLoginCheck};
 
     const IDP_URL: &str = "https://id.example.com/";
     const APP_URL: &str = "https://id.example.com/application/saml/aws/sso/binding/init/";
@@ -956,12 +951,33 @@ mod tests {
         ));
     }
 
+    /// A check that fails for every app, or only for those the settings no longer have an identity provider for.
+    struct FailAfterRemoval;
+
+    impl LoginCheck for FailAfterRemoval {
+        fn resolves(&self, settings: &AppConfig, _: &LoginTarget) -> Result<(), ResolveError> {
+            if settings.find_idp("suse").is_some() {
+                Ok(())
+            } else {
+                Err(ResolveError::RancherNotConfigured)
+            }
+        }
+    }
+
+    fn failing_check() -> MockLoginCheck {
+        let mut check = MockLoginCheck::new();
+        check
+            .expect_resolves()
+            .returning(|_, _| Err(ResolveError::RancherNotConfigured));
+        check
+    }
+
     #[test]
-    fn update_checked_refuses_a_change_that_breaks_an_app() {
+    fn a_change_that_breaks_an_app_is_refused() {
         let store = Arc::new(MemoryStore::default());
-        let service = SettingsService::new(store.clone()).with_login_checks();
-        service.save_idp(idp_input(), SaveAs::New).unwrap();
-        service
+        let setup = SettingsService::with_login_check(store.clone(), NoLoginCheck);
+        setup.save_idp(idp_input(), SaveAs::New).unwrap();
+        setup
             .save_aws_app(
                 AwsAppInput::new(APP_URL, "suse"),
                 AwsAppKind::Aws,
@@ -970,11 +986,12 @@ mod tests {
             .unwrap();
         let saves = store.saves();
 
-        // Without any identity provider the app would have no username.
+        // The app resolved before; the edit leaves it without its identity provider.
+        let service = SettingsService::with_login_check(store.clone(), FailAfterRemoval);
         let err = service
-            .update_checked(|_, config| {
+            .edit(|_, config| {
                 config.remove_idp("suse");
-                Ok(())
+                Ok(vec![])
             })
             .map(|_| ())
             .unwrap_err();
@@ -992,6 +1009,152 @@ mod tests {
             })
             .unwrap();
         assert_eq!(store.saves(), saves + 1);
+    }
+
+    fn bundle_of_two() -> SettingsBundle {
+        let mut settings = with_idps(&["suse"]);
+        apply_aws_app(&mut settings, AwsAppInput::new(APP_URL, "suse")).unwrap();
+        apply_rancher(
+            &mut settings,
+            RancherInput::new("https://rancher.example.com", "c", "suse"),
+        )
+        .unwrap();
+        settings.export(&["suse".to_string()]).unwrap()
+    }
+
+    #[test]
+    fn checks_run_for_every_kind_and_for_the_cli_constructor() {
+        let store = Arc::new(MemoryStore::default());
+        let service = SettingsService::new(store.clone());
+        service.save_idp(idp_input(), SaveAs::New).unwrap();
+        service
+            .save_aws_app(
+                AwsAppInput::new(APP_URL, "suse"),
+                AwsAppKind::Aws,
+                SaveAs::New,
+            )
+            .unwrap();
+        service
+            .save_aws_app(
+                AwsAppInput::new(APP_URL, "suse"),
+                AwsAppKind::AwsSso {
+                    region: "eu-west-1".into(),
+                },
+                SaveAs::New,
+            )
+            .unwrap();
+        service
+            .save_rancher(
+                RancherInput::new("https://rancher.example.com", "c", "suse"),
+                SaveAs::New,
+            )
+            .unwrap();
+        let fresh = SettingsService::new(Arc::new(MemoryStore::default()));
+        fresh.save_idp(idp_input(), SaveAs::New).unwrap();
+        fresh
+            .import(&bundle_of_two(), ImportMode::Overwrite, &BTreeMap::new())
+            .unwrap();
+    }
+
+    #[test]
+    fn a_failing_check_saves_nothing_for_aws_rancher_and_import() {
+        let store = Arc::new(MemoryStore::default());
+        SettingsService::with_login_check(store.clone(), NoLoginCheck)
+            .save_idp(idp_input(), SaveAs::New)
+            .unwrap();
+        let saves = store.saves();
+        let service = SettingsService::with_login_check(store.clone(), failing_check());
+
+        let aws = service.save_aws_app(
+            AwsAppInput::new(APP_URL, "suse"),
+            AwsAppKind::Aws,
+            SaveAs::New,
+        );
+        assert!(matches!(aws, Err(SettingsEditError::DoesNotResolve(_))));
+        assert_eq!(store.saves(), saves);
+
+        let rancher = service.save_rancher(
+            RancherInput::new("https://rancher.example.com", "c", "suse"),
+            SaveAs::New,
+        );
+        assert!(matches!(rancher, Err(SettingsEditError::DoesNotResolve(_))));
+        assert_eq!(store.saves(), saves);
+
+        let import = service.import(&bundle_of_two(), ImportMode::Overwrite, &BTreeMap::new());
+        assert!(matches!(import, Err(SettingsEditError::DoesNotResolve(_))));
+        assert_eq!(store.saves(), saves);
+    }
+
+    #[test]
+    fn import_checks_only_what_it_wrote() {
+        let store = Arc::new(MemoryStore::default());
+        let setup = SettingsService::with_login_check(store.clone(), NoLoginCheck);
+        setup.save_idp(idp_input(), SaveAs::New).unwrap();
+        setup
+            .save_aws_app(
+                AwsAppInput::new(APP_URL, "suse"),
+                AwsAppKind::Aws,
+                SaveAs::New,
+            )
+            .unwrap();
+
+        // Only the Rancher is new: the AWS app is skipped, so one touched check plus the regression pass
+        // (before and after) for each of the two apps of the result.
+        let mut check = MockLoginCheck::new();
+        check
+            .expect_resolves()
+            .withf(|_, target| matches!(target, LoginTarget::Rancher { .. }))
+            .times(3)
+            .returning(|_, _| Ok(()));
+        check
+            .expect_resolves()
+            .withf(|_, target| matches!(target, LoginTarget::Aws { .. }))
+            .times(2)
+            .returning(|_, _| Ok(()));
+        let service = SettingsService::with_login_check(store, check);
+        let (_, report) = service
+            .import(&bundle_of_two(), ImportMode::SkipExisting, &BTreeMap::new())
+            .unwrap();
+
+        assert_eq!(report.added(), 1);
+        assert_eq!(report.skipped(), 2);
+    }
+
+    #[test]
+    fn no_login_check_lets_everything_through() {
+        let store = Arc::new(MemoryStore::default());
+        let service = SettingsService::with_login_check(store, NoLoginCheck);
+        service.save_idp(idp_input(), SaveAs::New).unwrap();
+        service
+            .save_aws_app(
+                AwsAppInput::new(APP_URL, "suse"),
+                AwsAppKind::Aws,
+                SaveAs::New,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn check_mode_applies_the_existence_rule() {
+        use SaveAs::{New, Replace, Upsert};
+        let ok =
+            |m: SaveAs<()>, taken: bool, old: bool| check_mode(&m, "k", taken, |_| old).is_ok();
+        let is = |m: SaveAs<()>, taken: bool, old: bool, want: fn(&SettingsEditError) -> bool| {
+            check_mode(&m, "k", taken, |_| old).map_err(|e| want(&e)) == Err(true)
+        };
+        assert!(ok(Upsert, true, false));
+        assert!(ok(Upsert, false, true));
+        assert!(ok(New, false, false));
+        assert!(is(New, true, true, |e| matches!(
+            e,
+            SettingsEditError::AlreadyExists { .. }
+        )));
+        assert!(ok(Replace(()), true, true));
+        assert!(ok(Replace(()), false, true));
+        assert!(is(Replace(()), true, false, |e| matches!(
+            e,
+            SettingsEditError::Gone
+        )));
     }
 
     #[test]
@@ -1170,7 +1333,7 @@ mod tests {
     fn editing_an_idp_keeps_the_apps_that_use_it() {
         for mode in [SaveAs::Upsert, SaveAs::Replace(())] {
             let store = Arc::new(MemoryStore::default());
-            let service = SettingsService::new(store.clone()).with_login_checks();
+            let service = SettingsService::new(store.clone());
             service.save_idp(idp_input(), SaveAs::New).unwrap();
             service
                 .save_aws_app(

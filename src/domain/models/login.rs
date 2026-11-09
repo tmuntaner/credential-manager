@@ -29,6 +29,28 @@ pub enum ResolveError {
     RancherNotConfigured,
 }
 
+/// An app in the setting by its identifiers (urls and possible other fields like type)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoginTarget {
+    Aws {
+        app_url: String,
+        app_type: AwsAppType,
+    },
+    Rancher {
+        url: String,
+    },
+}
+
+impl LoginTarget {
+    /// The url of the app within the identity provider.
+    pub fn url(&self) -> &str {
+        match self {
+            LoginTarget::Aws { app_url, .. } => app_url,
+            LoginTarget::Rancher { url } => url,
+        }
+    }
+}
+
 /// What the user gave on the command line for AWS.
 #[derive(Debug, Default)]
 pub struct AwsOverrides {
