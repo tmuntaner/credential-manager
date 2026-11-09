@@ -1,4 +1,5 @@
 use crate::domain::models::idp::IdpType;
+use crate::domain::models::login::LoginTarget;
 use crate::domain::models::mfa::MfaSelection;
 use crate::domain::models::prompt_mode::PromptMode;
 use std::path::PathBuf;
@@ -309,6 +310,52 @@ impl AppConfig {
         self.aws_sso_hosts
             .iter()
             .find(|host| same_app_url(app_url, &host.app_url))
+    }
+
+    /// Whether an AWS app of `app_type` is set up at `app_url`.
+    pub fn has_aws_app(&self, app_url: &str, app_type: AwsAppType) -> bool {
+        match app_type {
+            AwsAppType::Aws => self.find_aws_host(app_url).is_some(),
+            AwsAppType::AwsSso => self.find_aws_sso_host(app_url).is_some(),
+        }
+    }
+
+    /// The apps (by url) that log in with the identity provider `name`.
+    pub fn apps_using_idp(&self, name: &str) -> Vec<String> {
+        let aws = self
+            .aws_hosts
+            .iter()
+            .filter(|host| host.idp == name)
+            .map(|host| host.app_url.clone());
+        let sso = self
+            .aws_sso_hosts
+            .iter()
+            .filter(|host| host.idp == name)
+            .map(|host| host.app_url.clone());
+        let rancher = self
+            .rancher_hosts
+            .iter()
+            .filter(|host| host.idp == name)
+            .map(|host| host.url.clone());
+
+        aws.chain(sso).chain(rancher).collect()
+    }
+
+    /// Every app that can be logged in to, as the login resolver names them.
+    pub fn login_targets(&self) -> Vec<LoginTarget> {
+        let aws = self.aws_hosts.iter().map(|host| LoginTarget::Aws {
+            app_url: host.app_url.clone(),
+            app_type: AwsAppType::Aws,
+        });
+        let sso = self.aws_sso_hosts.iter().map(|host| LoginTarget::Aws {
+            app_url: host.app_url.clone(),
+            app_type: AwsAppType::AwsSso,
+        });
+        let rancher = self.rancher_hosts.iter().map(|host| LoginTarget::Rancher {
+            url: host.url.clone(),
+        });
+
+        aws.chain(sso).chain(rancher).collect()
     }
 
     /// Removes the identity provider called `name`. Returns whether there was one.

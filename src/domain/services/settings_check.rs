@@ -1,5 +1,5 @@
 use crate::domain::models::login::{AwsOverrides, LoginTarget, RancherOverrides, ResolveError};
-use crate::domain::models::settings::{AppConfig, AwsAppType};
+use crate::domain::models::settings::AppConfig;
 use crate::domain::ports::login::LoginResolver;
 use crate::domain::ports::login_check::LoginCheck;
 use crate::domain::services::login_resolver::LoginResolverService;
@@ -31,31 +31,6 @@ impl LoginCheck for ResolvingLoginCheck {
     }
 }
 
-/// All LoginTargets from an AppConfig.
-pub(super) fn targets(settings: &AppConfig) -> Vec<LoginTarget> {
-    let aws = settings.aws_hosts().iter().map(|host| LoginTarget::Aws {
-        app_url: host.app_url().to_string(),
-        app_type: AwsAppType::Aws,
-    });
-
-    let sso = settings
-        .aws_sso_hosts()
-        .iter()
-        .map(|host| LoginTarget::Aws {
-            app_url: host.app_url().to_string(),
-            app_type: AwsAppType::AwsSso,
-        });
-
-    let rancher = settings
-        .rancher_hosts()
-        .iter()
-        .map(|host| LoginTarget::Rancher {
-            url: host.url().to_string(),
-        });
-
-    aws.chain(sso).chain(rancher).collect()
-}
-
 /// Verifies that changed applications will still resolve after the change is made.
 pub(super) fn verify<C: LoginCheck>(
     check: &C,
@@ -71,7 +46,8 @@ pub(super) fn verify<C: LoginCheck>(
 
     // Only the apps of `after` are checked, so an app the change removed is never reported. An app is
     // broken when it resolved before and fails now.
-    let urls: Vec<String> = targets(after)
+    let urls: Vec<String> = after
+        .login_targets()
         .into_iter()
         .filter(|target| {
             check.resolves(before, target).is_ok() && check.resolves(after, target).is_err()

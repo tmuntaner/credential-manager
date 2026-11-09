@@ -2,12 +2,14 @@
 
 use super::*;
 use crate::domain::models::login::{AwsOverrides, RancherOverrides};
+use crate::domain::models::mfa::MfaSelection;
 use crate::domain::models::settings::YubikeyConfig;
-use crate::domain::ports::config::{ConfigError, InMemoryConfigStore, MockConfigStore};
+use crate::domain::ports::config::{ConfigError, MockConfigStore};
 use crate::domain::ports::login::LoginResolver;
 use crate::domain::ports::secret_wrapper::WrapError;
 use crate::domain::services::login_resolver::LoginResolverService;
 use crate::domain::services::settings_editor::SettingsService;
+use crate::outbound::config::in_memory::InMemoryConfigStore;
 
 const APP_URL: &str = "https://id.example.com/application/saml/aws/sso/binding/init/";
 const STORED_APP_URL: &str = "https://id.example.com/application/saml/aws/sso/binding/init";
@@ -302,15 +304,15 @@ fn the_kind_of_error_picks_the_field() {
 
     let key = || "x".to_string();
     assert_eq!(
-        fields(&edit_error(E::AlreadyExists { key: key() }, Form::Idp)),
+        fields(&edit_error(E::AlreadyExists { key: key() }, Form::IDP)),
         [Field::IdpName]
     );
     assert_eq!(
-        fields(&edit_error(E::AlreadyExists { key: key() }, Form::Aws)),
+        fields(&edit_error(E::AlreadyExists { key: key() }, Form::AWS)),
         [Field::AwsAppUrl]
     );
     assert_eq!(
-        fields(&edit_error(E::AlreadyExists { key: key() }, Form::Rancher)),
+        fields(&edit_error(E::AlreadyExists { key: key() }, Form::RANCHER)),
         [Field::RancherUrl]
     );
     let unknown = || {
@@ -318,9 +320,9 @@ fn the_kind_of_error_picks_the_field() {
             key(),
         ))
     };
-    assert_eq!(fields(&edit_error(unknown(), Form::Aws)), [Field::AwsIdp]);
+    assert_eq!(fields(&edit_error(unknown(), Form::AWS)), [Field::AwsIdp]);
     assert_eq!(
-        fields(&edit_error(unknown(), Form::Rancher)),
+        fields(&edit_error(unknown(), Form::RANCHER)),
         [Field::RancherIdp]
     );
     let problems = || {
@@ -335,24 +337,24 @@ fn the_kind_of_error_picks_the_field() {
             },
         ])
     };
-    let error = edit_error(problems(), Form::Aws);
+    let error = edit_error(problems(), Form::AWS);
     assert_eq!(fields(&error), [Field::AwsAppUrl, Field::AwsIdp]);
     assert_eq!(
         error.fields[1].message,
         "There is no identity provider called x. Choose another one."
     );
     assert_eq!(
-        fields(&edit_error(problems(), Form::Rancher)),
+        fields(&edit_error(problems(), Form::RANCHER)),
         [Field::RancherUrl, Field::RancherIdp]
     );
     // The identity provider form has no field for the reference, an action has no fields at all.
-    assert_eq!(fields(&edit_error(problems(), Form::Idp)), [Field::IdpUrl]);
-    let general = edit_error(problems(), Form::Action);
+    assert_eq!(fields(&edit_error(problems(), Form::IDP)), [Field::IdpUrl]);
+    let general = edit_error(problems(), Form::ACTION);
     assert!(general.fields.is_empty());
     assert!(general.message.unwrap().starts_with("Bad url. "));
-    let gone = edit_error(E::Gone, Form::Aws);
+    let gone = edit_error(E::Gone, Form::AWS);
     assert!(gone.fields.is_empty() && gone.message.is_some());
-    let broken = edit_error(E::WouldBreak { urls: vec![key()] }, Form::Idp);
+    let broken = edit_error(E::WouldBreak { urls: vec![key()] }, Form::IDP);
     assert!(broken.message.unwrap().contains("Nothing was saved"));
 }
 
@@ -415,39 +417,6 @@ fn a_missing_security_key_is_explained() {
 }
 
 #[test]
-fn with_mfa_keeps_form_order() {
-    use super::errors::with_mfa;
-    use crate::domain::services::settings_editor::{
-        FieldProblem, InvalidField, Problem, SettingsEditError as E,
-    };
-    let problem = |field| FieldProblem {
-        field,
-        problem: Problem::Message("m".into()),
-    };
-    let domain = Err(E::InvalidFields(vec![
-        problem(InvalidField::Url),
-        problem(InvalidField::Idp),
-    ]));
-
-    let error = with_mfa(Form::Aws, Field::AwsMfa, "mfa".into(), domain);
-    assert_eq!(
-        fields(&error),
-        [Field::AwsAppUrl, Field::AwsMfa, Field::AwsIdp]
-    );
-
-    let error = with_mfa(Form::Idp, Field::IdpMfa, "mfa".into(), Ok(()));
-    assert_eq!(fields(&error), [Field::IdpMfa]);
-}
-
-#[test]
-fn security_keys_need_a_supported_platform() {
-    assert!(mfa_selection_on(MfaChoice::SecurityKey, false).is_err());
-    assert!(mfa_selection_on(MfaChoice::Totp, false).is_ok());
-    assert_eq!(mfa_selection_on(MfaChoice::Ask, false), Ok(None));
-    assert!(mfa_selection_on(MfaChoice::SecurityKey, true).is_ok());
-}
-
-#[test]
 fn a_broken_settings_file_is_a_readable_error() {
     let mut store = MockConfigStore::new();
     store
@@ -491,7 +460,8 @@ fn enrolling_where_security_keys_do_not_work_is_refused_and_saves_nothing() {
         Arc::new(MockUserInteraction::new()),
         Arc::new(MockNotifier::new()),
     ))
-    .unwrap_err();
+    .err()
+    .expect("enrolling must be refused");
 
     assert!(error.sentence().contains("not supported"));
     assert!(another_service(&store)

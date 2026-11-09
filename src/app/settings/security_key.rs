@@ -4,11 +4,12 @@ use crate::domain::models::settings::{AppConfig, YubikeyConfig};
 use crate::domain::ports::notifier::Notifier;
 use crate::domain::ports::secret_wrapper::WrapError;
 use crate::domain::ports::user_interaction::UserInteraction;
+use crate::domain::services::settings_editor::fields::security_key_supported;
 use crate::domain::services::settings_editor::SettingsService;
 use std::sync::Arc;
 
 /// Whether security keys are supported on this machine (os dependant).
-pub const SECURITY_KEY_SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos"));
+pub const SECURITY_KEY_SUPPORTED: bool = security_key_supported();
 
 /// The relying party id used when none is given, as in `c9s config global yubikey enroll`.
 pub const DEFAULT_RP_ID: &str = "localhost";
@@ -43,7 +44,7 @@ pub async fn enroll_and_save<U: UserInteraction + 'static, N: Notifier + 'static
 
     settings
         .set_yubikey(Some(key))
-        .map_err(|e| edit_error(e, Form::Action))
+        .map_err(|e| edit_error(e, Form::ACTION))
 }
 
 /// Says why a security key could not be enrolled.

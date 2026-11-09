@@ -5,6 +5,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 /// Reads and writes the settings file.
 pub struct ConfigFileAdapter {
@@ -54,9 +55,15 @@ impl ConfigStore for ConfigFileAdapter {
 ///
 /// A symlinked file is written through (the link stays), and an existing file keeps its permissions.
 /// On Windows the rename fails if another program holds the file open without sharing deletes; that
-/// is returned as an error and not retried, and the folder is not synced (std cannot).
+/// is retried briefly and then returned as an error, and the folder is not synced (std cannot).
 fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
+    // Saves from this process take turns: on Windows, renames over the same file race with each other
+    // and fail with "access denied" or "not found". Other programs are covered by the retry below.
+    static SAVING: Mutex<()> = Mutex::new(());
+    let _turn = SAVING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     let existing = fs::canonicalize(path).ok();
     let target = existing.as_deref().unwrap_or(path);
@@ -84,13 +91,18 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let written = (|| {
         let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
         if existing.is_some() {
-            fs::set_permissions(&tmp, fs::metadata(target)?.permissions())?;
+            // On Windows the file can briefly be missing while a concurrent save replaces it.
+            match fs::metadata(target) {
+                Ok(meta) => fs::set_permissions(&tmp, meta.permissions())?,
+                Err(e) if e.kind() == ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
         }
         file.write_all(bytes)?;
         file.flush()?;
         file.sync_all()?;
         drop(file);
-        fs::rename(&tmp, target)
+        rename_over(&tmp, target)
     })();
 
     if let Err(e) = written {
@@ -103,6 +115,26 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
         let _ = dir.sync_all();
     }
     Ok(())
+}
+
+/// Renames `from` over `to`. On Windows a concurrent save or reader makes the rename fail briefly with
+/// "access denied", so it is retried for a short while; elsewhere it is a plain rename.
+fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        let mut attempts = 0;
+        loop {
+            match fs::rename(from, to) {
+                Err(e) if e.kind() == ErrorKind::PermissionDenied && attempts < 100 => {
+                    attempts += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                result => return result,
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    fs::rename(from, to)
 }
 
 #[cfg(test)]

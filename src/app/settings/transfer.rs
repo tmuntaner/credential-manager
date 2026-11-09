@@ -3,10 +3,10 @@ use super::models::{SettingsView, SetupError};
 use super::SettingsPage;
 use crate::domain::models::settings::SettingsBundle;
 use crate::domain::ports::bundle::{BundleCodec, BundleError};
+use crate::domain::services::settings_editor::fields::check_username;
 use crate::domain::services::settings_editor::{
     ImportMode, ImportReport, SettingsEditError, SettingsService,
 };
-use crate::domain::services::settings_validation::check_username;
 use std::collections::BTreeMap;
 use std::path::Path;
 use thiserror::Error;
@@ -100,7 +100,7 @@ pub fn describe_import(report: &ImportReport) -> String {
 
 fn setup_error(error: TransferError) -> SetupError {
     match error {
-        TransferError::Settings(e) => edit_error(e, Form::Action),
+        TransferError::Settings(e) => edit_error(e, Form::ACTION),
         TransferError::NoIdp => SetupError::general("Choose at least one identity provider to export."),
         TransferError::Bundle(e) => {
             SetupError::general(format!("This is not a c9s onboarding file. Make one with Export. Your c9s settings file cannot be imported. ({e})"))
@@ -198,7 +198,7 @@ impl SettingsPage {
         let report = plan
             .apply(&self.settings, mode, usernames)
             .map_err(setup_error)?;
-        let view = self.run(Form::Action, |s| s.load())?;
+        let view = self.run(Form::ACTION, |s| s.load())?;
 
         Ok((view, report))
     }
@@ -223,11 +223,11 @@ mod tests {
     use crate::domain::models::idp::IdpType;
     use crate::domain::models::settings::YubikeyConfig;
     use crate::domain::ports::bundle::MockBundleCodec;
-    use crate::domain::ports::config::InMemoryConfigStore;
     use crate::domain::services::settings_editor::{
         AwsAppInput, AwsAppKind, IdpInput, ImportCounts, SaveAs,
     };
     use crate::outbound::config::bundle::TomlBundleCodec;
+    use crate::outbound::config::in_memory::InMemoryConfigStore;
     use std::sync::Arc;
 
     #[test]

@@ -22,7 +22,6 @@ pub use models::{
     IdpSummary, MfaChoice, RancherForm, RancherSummary, SettingsView, SetupError,
 };
 
-use crate::domain::models::mfa::MfaSelection;
 pub use crate::domain::models::settings::AwsAppType;
 use crate::domain::models::settings::{AppConfig, YubikeyConfig};
 use crate::domain::ports::notifier::Notifier;
@@ -49,7 +48,7 @@ impl SettingsPage {
     }
 
     pub fn view(&self) -> Result<SettingsView, SetupError> {
-        self.run(Form::Action, |s| s.load())
+        self.run(Form::ACTION, |s| s.load())
     }
 
     /// Runs one change of the service, and tells the form what went wrong.
@@ -64,19 +63,17 @@ impl SettingsPage {
     }
 
     pub fn set_use_keyring(&self, enabled: bool) -> Result<SettingsView, SetupError> {
-        self.run(Form::Action, |s| s.set_use_keyring(enabled))
+        self.run(Form::ACTION, |s| s.set_use_keyring(enabled))
     }
-}
 
-impl SettingsPage {
     /// Chooses whether issued credentials (AWS/Rancher) are encrypted with the security key.
     pub fn set_wrap_cached(&self, enabled: bool) -> Result<SettingsView, SetupError> {
-        self.run(Form::Action, |s| s.set_wrap_cached_secrets(enabled))
+        self.run(Form::ACTION, |s| s.set_wrap_cached_secrets(enabled))
     }
 
     /// Saves the enrolled security key, or `None` to stop using it.
     pub fn set_security_key(&self, key: Option<YubikeyConfig>) -> Result<SettingsView, SetupError> {
-        self.run(Form::Action, |s| s.set_yubikey(key))
+        self.run(Form::ACTION, |s| s.set_yubikey(key))
     }
 
     /// Enrolls a security key for `rp_id` and saves it.
@@ -90,25 +87,4 @@ impl SettingsPage {
             .await
             .map(Into::into)
     }
-}
-
-fn mfa_selection(choice: MfaChoice) -> Result<Option<MfaSelection>, String> {
-    mfa_selection_on(choice, SECURITY_KEY_SUPPORTED)
-}
-
-fn mfa_selection_on(choice: MfaChoice, supported: bool) -> Result<Option<MfaSelection>, String> {
-    match (choice, supported) {
-        (MfaChoice::Ask, _) => Ok(None),
-        (MfaChoice::Totp, _) => Ok(Some(MfaSelection::Totp)),
-        (MfaChoice::SecurityKey, true) => Ok(Some(MfaSelection::WebAuthn)),
-        (MfaChoice::SecurityKey, false) => Err(
-            "Security keys are not supported on this computer yet. Choose the authenticator app code."
-                .into(),
-        ),
-    }
-}
-
-/// `None` (and "ask") keeps the choice of the identity provider.
-fn mfa_override(choice: Option<MfaChoice>) -> Result<Option<MfaSelection>, String> {
-    choice.map_or(Ok(None), mfa_selection)
 }

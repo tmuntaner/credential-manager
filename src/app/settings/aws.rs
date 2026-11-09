@@ -1,20 +1,19 @@
-use super::errors::{with_mfa, Form};
-use super::models::{AwsAppForm, AwsAppKey, Field, SettingsView, SetupError};
-use super::{mfa_override, SettingsPage};
+use super::errors::Form;
+use super::models::{AwsAppForm, AwsAppKey, MfaChoice, SettingsView, SetupError};
+use super::SettingsPage;
 use crate::domain::models::settings::AwsAppType;
-use crate::domain::services::settings_editor::{self, AwsAppInput, SaveAs};
+use crate::domain::services::settings_editor::{AwsAppInput, AwsAppKind, SaveAs};
 
 impl SettingsPage {
     /// Adds or edits an AWS app.
     pub fn save_aws_app(&self, form: AwsAppForm) -> Result<SettingsView, SetupError> {
-        let mfa = mfa_override(form.mfa);
-
         let mut input = AwsAppInput::new(form.app_url, form.idp);
         input.username = form.username;
+        input.mfa = form.mfa.and_then(MfaChoice::selection);
 
         let kind = match form.kind {
-            AwsAppType::Aws => settings_editor::AwsAppKind::Aws,
-            AwsAppType::AwsSso => settings_editor::AwsAppKind::AwsSso {
+            AwsAppType::Aws => AwsAppKind::Aws,
+            AwsAppType::AwsSso => AwsAppKind::AwsSso {
                 region: form.region.unwrap_or_default(),
             },
         };
@@ -24,21 +23,10 @@ impl SettingsPage {
             None => SaveAs::New,
         };
 
-        match mfa {
-            Ok(mfa) => {
-                input.mfa = mfa;
-                self.run(Form::Aws, |s| s.save_aws_app(input, kind, mode))
-            }
-            Err(message) => Err(with_mfa(
-                Form::Aws,
-                Field::AwsMfa,
-                message,
-                self.settings.check_aws_app(&input, &kind),
-            )),
-        }
+        self.run(Form::AWS, |s| s.save_aws_app(input, kind, mode))
     }
 
     pub fn remove_aws_app(&self, key: AwsAppKey) -> Result<SettingsView, SetupError> {
-        self.run(Form::Action, |s| s.remove_aws_app(&key.app_url, key.kind))
+        self.run(Form::ACTION, |s| s.remove_aws_app(&key.app_url, key.kind))
     }
 }

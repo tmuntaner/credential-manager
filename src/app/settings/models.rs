@@ -3,8 +3,7 @@ use crate::domain::models::mfa::MfaSelection;
 /// Whether two URLs are the same entry: the one rule of the settings.
 pub use crate::domain::models::settings::same_app_url as same_url;
 use crate::domain::models::settings::{AppConfig, AwsAppType};
-use crate::domain::services::settings_editor::idp_used_by;
-use crate::domain::services::settings_validation::allow_insecure_localhost;
+use crate::domain::services::settings_editor::fields::allow_insecure_localhost;
 
 /// The MFA choice from the user.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,6 +13,17 @@ pub enum MfaChoice {
     Totp,
     /// A security key, e.g., a YubiKey.
     SecurityKey,
+}
+
+impl MfaChoice {
+    /// The selection to save: "ask" is no selection.
+    pub fn selection(self) -> Option<MfaSelection> {
+        match self {
+            MfaChoice::Ask => None,
+            MfaChoice::Totp => Some(MfaSelection::Totp),
+            MfaChoice::SecurityKey => Some(MfaSelection::WebAuthn),
+        }
+    }
 }
 
 impl From<MfaSelection> for MfaChoice {
@@ -167,7 +177,7 @@ impl From<AppConfig> for SettingsView {
                     Some(mfa) => mfa.into(),
                     None => MfaChoice::Ask,
                 },
-                used_by: idp_used_by(settings, idp.name()),
+                used_by: settings.apps_using_idp(idp.name()),
             })
             .collect();
 

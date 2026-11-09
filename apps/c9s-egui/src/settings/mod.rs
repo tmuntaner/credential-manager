@@ -1,5 +1,6 @@
 mod aws;
 mod dialogs;
+mod enrolling;
 mod home;
 mod idps;
 mod rancher;
@@ -9,24 +10,24 @@ mod transfer;
 
 use crate::app::{Focus, FocusTarget, Route, Section, Shell};
 use crate::prompts::Bridge;
-use c9s::app::prompts::{WindowInteraction, WindowNotifier};
 use c9s::app::settings::{
-    describe_import, enroll_security_key, AwsAppSummary, IdpSummary, ImportPlan, MfaChoice,
-    RancherSummary, SettingsPage, SettingsView, SetupError, DEFAULT_RP_ID,
+    describe_import, AwsAppSummary, IdpSummary, ImportPlan, MfaChoice, RancherSummary,
+    SettingsPage, SettingsView, SetupError,
 };
-use c9s::domain::models::settings::YubikeyConfig;
 use c9s::domain::services::settings_editor::{ImportMode, SettingsService};
 use c9s::outbound::config::bundle::TomlBundleCodec;
 use c9s::outbound::config::config_store::ConfigFileAdapter;
 use dialogs::{
-    Dialog, DialogOutcome, ExportDialog, FormContext, Removal, RemoveDialog, UsernamesDialog,
+    Dialog, DialogOutcome, ExportDialog, FormContext, Removal, RemoveDialog, Submitted,
+    UsernamesDialog,
 };
 use eframe::egui::{Id, Ui};
+pub use enrolling::Enroller;
+use enrolling::Enrolling;
 use std::collections::BTreeMap;
-use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
-use transfer::{real_file_picker, ChosenFile, Transfer};
 pub use transfer::{FilePicker, Pick};
+use transfer::{FileTransfer, Transfer};
 
 /// The user's action on a settings screen.
 pub enum SettingsAction {
@@ -49,41 +50,10 @@ pub enum SettingsAction {
     SetImportOverwrite(bool),
 }
 
-/// Enrolls a security key for a relying party id, blocking until the user is done. It runs on its own thread
-/// and asks its questions through the bridge. Tests replace it.
-pub type Enroller = Arc<dyn Fn(&str, Bridge) -> Result<YubikeyConfig, SetupError> + Send + Sync>;
-
-/// The enroller that uses the real security key.
-fn real_enroller() -> Enroller {
-    Arc::new(|rp_id, bridge| {
-        // The enrolling future is not `Send`, so it gets a runtime of its own on this thread.
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| SetupError::general(format!("Could not start enrolling: {e}.")))?;
-        let result = runtime.block_on(enroll_security_key(
-            rp_id,
-            Arc::new(WindowInteraction::new(bridge.clone())),
-            Arc::new(WindowNotifier::new(bridge.clone())),
-        ));
-        // The "touch your key" notice stays until it is cleared.
-        bridge.clear_notices();
-        result
-    })
-}
-
 pub struct SettingsState {
     bridge: Bridge,
-    enroller: Enroller,
-    /// The result of the enrolling that is in progress.
-    enrolling: Option<Receiver<Result<YubikeyConfig, SetupError>>>,
-    file_picker: FilePicker,
-    /// The file the user chose for an export or import.
-    file_picker_choice: Option<ChosenFile>,
-    /// Whether an import overwrites existing settings.
-    import_overwrite: bool,
-    /// The onboarding bundle we're importing.
-    importing: Option<(ImportPlan, ImportMode)>,
+    enrolling: Enrolling,
+    transfer: FileTransfer,
     page: SettingsPage,
     /// The settings view, or error message
     view: Result<SettingsView, String>,
@@ -99,12 +69,8 @@ impl SettingsState {
         let view = page.view().map_err(|e| e.sentence());
         Self {
             bridge,
-            enroller: real_enroller(),
-            enrolling: None,
-            file_picker: real_file_picker(),
-            file_picker_choice: None,
-            import_overwrite: false,
-            importing: None,
+            enrolling: Enrolling::new(),
+            transfer: FileTransfer::new(),
             page,
             view,
             dialog: None,
@@ -114,12 +80,12 @@ impl SettingsState {
 
     /// Replaces how a security key is enrolled.
     pub fn set_enroller(&mut self, enroller: Enroller) {
-        self.enroller = enroller;
+        self.enrolling.set_enroller(enroller);
     }
 
-    /// Replaces the file picker which asks teh user to choose a file to import from or export to.
+    /// Replaces the file picker which asks the user to choose a file to import from or export to.
     pub fn set_file_picker(&mut self, chooser: FilePicker) {
-        self.file_picker = chooser;
+        self.transfer.set_picker(chooser);
     }
 
     /// The settings, if they could be read.
@@ -152,14 +118,14 @@ impl SettingsState {
             Route::Settings(Section::Share) => share::ui(
                 ui,
                 view,
-                self.import_overwrite,
-                self.file_picker_choice.is_some(),
+                self.transfer.overwrite(),
+                self.transfer.is_choosing(),
                 focus,
             ),
             Route::Settings(Section::Aws) => aws::ui(ui, view, focus),
             Route::Settings(Section::Rancher) => rancher::ui(ui, view, focus),
             Route::Settings(Section::Security) => {
-                security::ui(ui, view, self.enrolling.is_some(), focus)
+                security::ui(ui, view, self.enrolling.is_running(), focus)
             }
         }
     }
@@ -192,19 +158,16 @@ impl SettingsState {
                 self.open(shell, Dialog::edit_rancher(&host, &form))
             }
             SettingsAction::Remove(dialog) => self.open(shell, Dialog::Remove(dialog)),
-            SettingsAction::EnrollSecurityKey => self.enroll(shell),
+            SettingsAction::EnrollSecurityKey => self.enrolling.start(shell, &self.bridge),
             SettingsAction::Export => {
                 self.open(shell, Dialog::Export(ExportDialog::new(view)));
             }
             SettingsAction::Import => {
-                let mode = if self.import_overwrite {
-                    ImportMode::Overwrite
-                } else {
-                    ImportMode::SkipExisting
-                };
-                self.choose(shell, Transfer::Import(mode), Pick::Open);
+                let mode = self.transfer.import_mode();
+                self.transfer
+                    .choose(shell, Transfer::Import(mode), Pick::Open);
             }
-            SettingsAction::SetImportOverwrite(overwrite) => self.import_overwrite = overwrite,
+            SettingsAction::SetImportOverwrite(overwrite) => self.transfer.set_overwrite(overwrite),
             SettingsAction::DisableSecurityKey => {
                 let rp_id = view.security_key_rp_id.clone().unwrap_or_default();
                 self.open(
@@ -243,79 +206,12 @@ impl SettingsState {
         }
     }
 
-    /// Starts enrolling a security key on its own thread.
-    fn enroll(&mut self, shell: &mut Shell) {
-        if self.enrolling.is_some() {
-            return;
-        }
-
-        let (sender, receiver) = mpsc::channel();
-        let enroller = self.enroller.clone();
-        let bridge = self.bridge.clone();
-        let ctx = shell.ctx.clone();
-        let spawned = std::thread::Builder::new()
-            .name("enroll-security-key".into())
-            .spawn(move || {
-                let _ = sender.send(enroller(DEFAULT_RP_ID, bridge));
-                ctx.request_repaint();
-            });
-
-        match spawned {
-            Ok(_) => {
-                self.enrolling = Some(receiver);
-                shell.say("Enrolling the security key. Follow the instructions on the screen.");
-            }
-            Err(e) => shell.fail(format!("Could not start enrolling: {e}.")),
-        }
-    }
-
-    /// Asks the user to choose a file.
-    fn choose(&mut self, shell: &mut Shell, transfer: Transfer, pick: Pick) {
-        // ensure there is actually a file that the user chose.
-        if self.file_picker_choice.is_some() {
-            return;
-        }
-
-        // create a channel and get the file path from the file picker
-        let (sender, file) = mpsc::channel();
-        let chooser = self.file_picker.clone();
-        let ctx = shell.ctx.clone();
-        let spawned = std::thread::Builder::new()
-            .name("choose-file".into())
-            .spawn(move || {
-                let _ = sender.send(chooser(pick));
-                ctx.request_repaint();
-            });
-
-        match spawned {
-            Ok(_) => self.file_picker_choice = Some(ChosenFile { transfer, file }),
-            Err(e) => shell.fail(format!("Could not ask for a file: {e}.")),
-        }
-    }
-
-    /// Pools to see if a user selected anything from the file picker. Called every frame.
+    /// Handles the file the user chose for an export or import, once they did. Called every frame.
     fn poll_choosing(&mut self, shell: &mut Shell) {
-        // return unless there is a selected file picker file yet
-        let Some(choice) = &self.file_picker_choice else {
+        let Some((transfer, path)) = self.transfer.poll() else {
             return;
         };
 
-        // try to receive the file from the receiver
-        let file = match choice.file.try_recv() {
-            Ok(file) => file,
-            Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => None,
-        };
-
-        // take the file and leave none in its place
-        let Some(ChosenFile { transfer, .. }) = self.file_picker_choice.take() else {
-            return;
-        };
-
-        // if there is no file, return
-        let Some(path) = file else { return };
-
-        // handle the file event
         match transfer {
             Transfer::Export(choice) => {
                 // export the onboarding data to a file
@@ -339,7 +235,7 @@ impl SettingsState {
                     }
                     Ok(plan) => {
                         let dialog = UsernamesDialog::new(plan.usernames_needed());
-                        self.importing = Some((plan, mode));
+                        self.transfer.hold(plan, mode);
                         self.open(shell, Dialog::Usernames(dialog));
                     }
                 }
@@ -374,18 +270,9 @@ impl SettingsState {
     pub fn poll(&mut self, shell: &mut Shell) {
         self.poll_choosing(shell);
 
-        let Some(receiver) = &self.enrolling else {
+        let Some(result) = self.enrolling.poll() else {
             return;
         };
-
-        let result = match receiver.try_recv() {
-            Ok(result) => result,
-            Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Err(SetupError::general(
-                "Enrolling the security key stopped unexpectedly.",
-            )),
-        };
-        self.enrolling = None;
 
         let saved = result.and_then(|key| self.page.set_security_key(Some(key)));
         self.changed(
@@ -408,7 +295,7 @@ impl SettingsState {
             DialogOutcome::Nothing => {}
             DialogOutcome::Cancel => {
                 self.dialog = None;
-                self.importing = None;
+                self.transfer.forget_held();
                 shell.ctx.request_repaint();
 
                 if let Some(opener) = self.opener.take() {
@@ -428,34 +315,10 @@ impl SettingsState {
             return;
         };
 
-        // Importing has what it needs now: the file, and the user names.
-        if let Dialog::Usernames(names) = dialog {
-            let Ok(usernames) = names.usernames() else {
-                return;
-            };
-            self.dialog = None;
-            self.opener = None;
-            if let Some((plan, mode)) = self.importing.take() {
-                self.import(shell, &plan, mode, &usernames);
-            }
-            return;
-        }
-
-        // Exporting needs a file, so the dialog closes and the user chooses one.
-        if let Dialog::Export(export) = dialog {
-            let choice = export.chosen();
-            self.dialog = None;
-            self.opener = None;
-            self.choose(shell, Transfer::Export(choice), Pick::Save);
-            return;
-        }
-
-        // submit the dialog
         match dialog.submit(&self.page) {
-            Ok(saved) => {
+            Ok(Submitted::Saved(saved)) => {
                 self.view = Ok(saved.view);
-                self.dialog = None;
-                self.opener = None;
+                self.close_dialog();
 
                 // if we have a focus after the save, focus on it.
                 if let Some(target) = saved.focus {
@@ -466,11 +329,38 @@ impl SettingsState {
                 shell.say(saved.message);
             }
 
+            // Exporting needs a file, so the dialog closes and the user chooses one.
+            Ok(Submitted::Export(choice)) => {
+                self.close_dialog();
+                self.transfer
+                    .choose(shell, Transfer::Export(choice), Pick::Save);
+            }
+
+            // Importing has what it needs now: the file, and the user names.
+            Ok(Submitted::Usernames(usernames)) => {
+                self.close_dialog();
+                if let Some((plan, mode)) = self.transfer.take_held() {
+                    self.import(shell, &plan, mode, &usernames);
+                }
+            }
+
+            Ok(Submitted::StillOpen) => {}
+
             Err(said) => {
                 shell.fail(said);
-                self.view = self.page.view().map_err(|e| e.sentence());
+                self.refresh_view();
             }
         }
+    }
+
+    fn close_dialog(&mut self) {
+        self.dialog = None;
+        self.opener = None;
+    }
+
+    /// Reads the settings again, so that the screen shows what is stored.
+    fn refresh_view(&mut self) {
+        self.view = self.page.view().map_err(|e| e.sentence());
     }
 
     fn open(&mut self, shell: &Shell, dialog: Dialog) {
@@ -497,7 +387,7 @@ impl SettingsState {
             }
             Err(error) => {
                 shell.fail(error.sentence());
-                self.view = self.page.view().map_err(|e| e.sentence());
+                self.refresh_view();
             }
         }
     }
