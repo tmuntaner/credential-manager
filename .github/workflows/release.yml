@@ -33,8 +33,8 @@ jobs:
       - name: Build
         run: |
           cargo build --all --exclude c9s-egui --release
-          strip target/release/c9s-cli
-          mv target/release/c9s-cli target/release/c9s_amd64
+          strip target/release/c9s
+          mv target/release/c9s target/release/c9s_amd64
           cd target/release && sha256sum c9s_amd64 > c9s_amd64.SHA256SUM
 
       - name: Build GUI
@@ -74,8 +74,8 @@ jobs:
       - name: Build
         run: |
           cargo build --all --exclude c9s-egui --release
-          strip target/release/c9s-cli
-          mv target/release/c9s-cli target/release/c9s_darwin
+          strip target/release/c9s
+          mv target/release/c9s target/release/c9s_darwin
           cd target/release && shasum -a 256 c9s_darwin > c9s_darwin.SHA256SUM
 
       - name: Build GUI
@@ -117,7 +117,6 @@ jobs:
         run: |
           cargo build --all --exclude c9s-egui --release
           cd target\release
-          mv c9s-cli.exe c9s.exe
           $sum = (CertUtil -hashFile .\c9s.exe SHA256)[1] -replace " ",""
           "$sum c9s.exe" | Out-File .\c9s.exe.SHA256SUM
 

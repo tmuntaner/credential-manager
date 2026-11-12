@@ -1075,7 +1075,7 @@ dependencies = [
 
 [[package]]
 name = "c9s"
-version = "0.1.0-beta4"
+version = "0.1.0-beta5"
 dependencies = [
  "aes-gcm",
  "async-trait",

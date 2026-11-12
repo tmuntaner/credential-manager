@@ -3,30 +3,21 @@ use crate::args::AwsAppTypeArg;
 use crate::utils::parse_ttl;
 use anyhow::{anyhow, Result};
 use c9s::app::credentials::aws::{issue_aws, AwsRequest};
-use c9s::app::secrets::cache::{cache_warning, get_cached_credential, set_cached_credential_best_effort};
-use c9s::app::secrets::passwords::get_password;
-use c9s::app::secrets::store::{create_secret_stores, SecretStores};
+use c9s::app::credentials::rancher::{issue_rancher, RancherRequest};
 use c9s::domain::models::aws::Credential;
-use c9s::domain::models::idp::IdpType;
 use c9s::domain::models::login::{AwsOverrides, RancherOverrides};
 use c9s::domain::models::mfa::MfaSelection;
 use c9s::domain::models::rancher_credentials::RancherCredential;
 use c9s::domain::models::settings::AppConfig;
-use c9s::domain::models::user_credentials::UserCredentials;
-use c9s::domain::ports::login::LoginResolver;
 use c9s::domain::ports::notifier::Notifier;
-use c9s::domain::ports::rancher::{KubeconfigRenderer, RancherCredentialIssuer};
+use c9s::domain::ports::rancher::KubeconfigRenderer;
 use c9s::domain::ports::user_interaction::UserInteraction;
-use c9s::domain::services::login_resolver::LoginResolverService;
-use c9s::domain::services::rancher_credential_issuer::RancherCredentialIssuerService;
-use c9s::outbound::authentik::{AuthentikOidcClient, StoredSessions};
-use c9s::outbound::rancher::{RancherClient, RancherKubeconfig};
+use c9s::outbound::rancher::RancherKubeconfig;
 use clap::Parser;
 use clap::ValueEnum;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
-use time::OffsetDateTime;
 
 #[derive(Parser)]
 pub struct Credentials {
@@ -73,9 +64,6 @@ struct RancherCredentials {
     enable_desktop_notifications: bool,
 }
 
-/// A token that expires within this long is not handed out from the cache.
-const CACHE_MARGIN: time::Duration = time::Duration::seconds(60);
-
 #[derive(ValueEnum, PartialEq, Debug, Clone, Copy, Default)]
 enum OutputOptions {
     #[default]
@@ -113,12 +101,9 @@ impl Credentials {
         let settings = application.config().clone();
         let prompt = Arc::new(application.interaction());
         let notifier = Arc::new(application.notifier());
-        let resolver = LoginResolverService::new(settings.clone());
         match &self.sub_command {
             CredentialsSubCommands::Aws(val) => val.run(prompt, notifier, settings).await,
-            CredentialsSubCommands::Rancher(val) => {
-                val.run(resolver, prompt, notifier, settings).await
-            }
+            CredentialsSubCommands::Rancher(val) => val.run(prompt, notifier, settings).await,
         }
     }
 }
@@ -158,73 +143,23 @@ impl AwsCredentials {
 impl RancherCredentials {
     async fn run<U: UserInteraction + 'static, N: Notifier + 'static>(
         &self,
-        resolver: LoginResolverService,
         prompt: Arc<U>,
         notifier: Arc<N>,
         settings: AppConfig,
     ) -> Result<()> {
-        let rancher = resolver.resolve_rancher(&self.overrides())?;
-        let cache_key = format!("rancher:{}:{}", rancher.url, self.cluster);
-        let SecretStores {
-            idp: idp_store,
-            cache: cache_store,
-            session: session_store,
-        } = create_secret_stores(&settings, prompt.clone(), notifier.clone())?;
+        let credential = issue_rancher(&settings, &self.request(), prompt, notifier).await?;
 
-        let cached: Option<RancherCredential> =
-            get_cached_credential(&cache_key, cache_store.as_deref())
-                .await
-                .unwrap_or_default();
-        if let Some(credential) = cached
-            .filter(|credential| credential.is_valid_at(OffsetDateTime::now_utc(), CACHE_MARGIN))
-        {
-            return self.print(&credential);
+        self.print(&credential)
+    }
+
+    fn request(&self) -> RancherRequest {
+        RancherRequest {
+            overrides: self.overrides(),
+            cluster: self.cluster.clone(),
+            ttl: self.ttl,
+            with_password: self.with_password,
+            enable_desktop_notifications: self.enable_desktop_notifications,
         }
-
-        let password = get_password(
-            rancher.idp_url.clone(),
-            rancher.username.clone(),
-            self.with_password,
-            idp_store.as_deref(),
-            prompt.as_ref(),
-        )
-        .await?;
-
-        let authorizer = match rancher.idp_type {
-            IdpType::Authentik => Box::new(AuthentikOidcClient::new(
-                rancher.idp_url,
-                rancher.client_id,
-                self.enable_desktop_notifications,
-                prompt.clone(),
-                notifier.clone(),
-                StoredSessions::new(session_store),
-            )),
-        };
-
-        let credential = RancherCredentialIssuerService::new(
-            authorizer,
-            Box::new(RancherClient::new(&rancher.url)?),
-        )
-        .issue(
-            UserCredentials {
-                username: rancher.username,
-                password,
-                mfa: rancher.mfa,
-            },
-            &self.cluster,
-            self.ttl,
-        )
-        .await?;
-
-        self.print(&credential)?;
-        // The cache only saves a login: the credential was printed, so a failure is only a warning.
-        if let Some(error) =
-            set_cached_credential_best_effort(&cache_key, &credential, cache_store.as_deref()).await
-        {
-            eprintln!("warning: {}", cache_warning(&error));
-        }
-
-        Ok(())
     }
 
     fn print(&self, credential: &RancherCredential) -> Result<()> {
