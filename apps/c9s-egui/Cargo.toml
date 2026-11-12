@@ -10,7 +10,7 @@ c9s = { path = "../.." }
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 eframe = { version = "0.37", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "wayland", "x11"] }
 log = { workspace = true }
-rfd = "0.17.2"
+rfd = "0.18.0"
 tokio = { workspace = true }
 zeroize = { workspace = true }
 
