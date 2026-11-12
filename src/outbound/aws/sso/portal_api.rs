@@ -24,6 +24,9 @@ pub enum SsoPortalError {
 
     #[error(transparent)]
     InvalidExpiration(#[from] time::error::ComponentRange),
+
+    #[error(transparent)]
+    FormatExpiration(#[from] time::error::Format),
 }
 
 // https://docs.aws.amazon.com/singlesignon/latest/PortalAPIReference/ssoportal-api.pdf
@@ -89,7 +92,7 @@ impl SsoPortalApi for SsoPortal {
         let time = time::OffsetDateTime::from_unix_timestamp_nanos(
             response.role_credentials.expiration as i128 * 1_000_000i128,
         )?;
-        let expiration_timestamp = time.format(&Rfc3339).unwrap();
+        let expiration_timestamp = time.format(&Rfc3339)?;
 
         Ok(Credential {
             access_key_id: response.role_credentials.access_key_id.clone(),

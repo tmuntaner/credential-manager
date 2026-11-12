@@ -37,7 +37,7 @@ impl InMemoryConfigStore {
 
     /// What is stored; `None` when nothing was saved or seeded.
     pub fn snapshot(&self) -> Option<AppConfig> {
-        self.saved.lock().unwrap().clone()
+        self.saved.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 
@@ -50,7 +50,7 @@ impl ConfigStore for InMemoryConfigStore {
         if self.fail_save.load(Ordering::SeqCst) {
             return Err(ConfigError::Failed("disk full".into()));
         }
-        *self.saved.lock().unwrap() = Some(config.clone());
+        *self.saved.lock().unwrap_or_else(|e| e.into_inner()) = Some(config.clone());
         self.saves.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }

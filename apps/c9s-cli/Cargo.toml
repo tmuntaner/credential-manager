@@ -1,0 +1,23 @@
+[package]
+name = "c9s-cli"
+version = "0.1.0"
+edition = "2021"
+license = "EUPL-1.2+"
+description = "Command-line tool to get temporary credentials for AWS, Rancher, and Authentik"
+
+[dependencies]
+c9s = { path = "../.." }
+tokio = { workspace = true }
+clap = { version = "4.5.3", features = ["derive", "env"] }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"

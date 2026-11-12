@@ -1,4 +1,4 @@
-use aes::cipher::block_padding::Pkcs7;
+use aes::cipher::block_padding::{self, Pkcs7};
 use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
 use aes::Aes128;
 use cbc::{Decryptor, Encryptor};
@@ -131,6 +131,9 @@ pub enum SecretError {
 
     #[error(transparent)]
     StringError(#[from] FromUtf8Error),
+
+    #[error("the secret could not be decrypted: {0}")]
+    Unpad(#[from] block_padding::Error),
 }
 
 impl Secret {
@@ -156,7 +159,7 @@ impl Secret {
         let parameter = self.parameters.clone();
 
         let decryptor = Aes128CbcDec::new_from_slices(aes.as_slice(), parameter.as_slice())?;
-        let result = decryptor.decrypt_padded_vec::<Pkcs7>(value).unwrap();
+        let result = decryptor.decrypt_padded_vec::<Pkcs7>(value)?;
         let secret = String::from_utf8(result)?;
 
         Ok(secret)
@@ -174,5 +177,45 @@ impl Secret {
         let result = encryptor.encrypt_padded_vec::<Pkcs7>(value);
 
         Ok((result, aes_iv))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aes::cipher::block_padding::NoPadding;
+    use std::convert::TryFrom;
+
+    const KEY: [u8; 16] = [7; 16];
+    const IV: [u8; 16] = [3; 16];
+
+    fn secret_with(value: Vec<u8>) -> Secret {
+        Secret {
+            session: ObjectPath::try_from("/session").unwrap().into(),
+            parameters: IV.to_vec(),
+            value,
+            content_type: "text/plain".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_round_trip_returns_the_secret() {
+        let (value, parameters) = Secret::encrypt("hunter2".to_string(), KEY.to_vec()).unwrap();
+        let secret = Secret {
+            parameters,
+            ..secret_with(value)
+        };
+
+        assert_eq!(secret.secret(KEY.to_vec()).unwrap(), "hunter2");
+    }
+
+    #[test]
+    fn bad_padding_is_an_error_not_a_panic() {
+        let encryptor = Aes128CbcEnc::new_from_slices(&KEY, &IV).unwrap();
+        let value = encryptor.encrypt_padded_vec::<NoPadding>(&[0u8; 16]);
+
+        let result = secret_with(value).secret(KEY.to_vec());
+
+        assert!(matches!(result, Err(SecretError::Unpad(_))));
     }
 }

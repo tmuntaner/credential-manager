@@ -13,7 +13,7 @@ pub trait KubeconfigRenderer {
     fn kubeconfig(&self, credential: &RancherCredential) -> String;
 
     /// The output of a `client.authentication.k8s.io` exec plugin for `credential`.
-    fn exec_credential(&self, credential: &RancherCredential) -> String;
+    fn exec_credential(&self, credential: &RancherCredential) -> Result<String, RancherError>;
 }
 
 /// Logs in at Rancher and hands out a token for one of its clusters.

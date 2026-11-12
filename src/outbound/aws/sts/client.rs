@@ -13,6 +13,9 @@ pub enum StsError {
 
     #[error("Could not get credentials from STS")]
     NoCredentials,
+
+    #[error("invalid credential expiration: {0}")]
+    InvalidExpiration(String),
 }
 
 #[derive(Default)]
@@ -57,9 +60,9 @@ impl StsClient {
             let expiration_timestamp = credentials
                 .expiration
                 .to_time()
-                .unwrap()
+                .map_err(|e| StsError::InvalidExpiration(e.to_string()))?
                 .format(&Rfc3339)
-                .unwrap();
+                .map_err(|e| StsError::InvalidExpiration(e.to_string()))?;
             aws_credentials.push(Credential {
                 secret_access_key: credentials.secret_access_key,
                 access_key_id: credentials.access_key_id,

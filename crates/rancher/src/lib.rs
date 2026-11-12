@@ -21,4 +21,4 @@ pub use domain::ports::oidc::{OidcAuthorizer, OidcError};
 pub use domain::ports::rancher_api::{ApiToken, Cluster, RancherApi, RancherApiError};
 pub use domain::services::credentials::RancherCredentialService;
 pub use outbound::api::RancherApiClient;
-pub use render::{exec_credential, kubeconfig};
+pub use render::{exec_credential, kubeconfig, RenderError};

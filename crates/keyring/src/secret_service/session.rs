@@ -32,6 +32,9 @@ pub enum SessionError {
 
     #[error(transparent)]
     ServerPublicKey(#[from] ToServerPublicKeyError),
+
+    #[error("could not derive the session key: {0}")]
+    Hkdf(#[from] hkdf::InvalidLength),
 }
 
 impl Session<'_> {
@@ -61,7 +64,7 @@ impl Session<'_> {
 
         let mut okm = [0; 16];
         let (_, hk) = Hkdf::<Sha256>::extract(None, ikm);
-        hk.expand(&info, &mut okm).expect("hkdf should not fail");
+        hk.expand(&info, &mut okm)?;
 
         let aes_key = okm.to_vec();
 

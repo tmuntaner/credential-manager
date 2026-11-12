@@ -2,6 +2,7 @@ use crate::domain::models::rancher_credentials::RancherCredential;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde_json::json;
+use thiserror::Error;
 use time::format_description::well_known::Rfc3339;
 
 pub fn kubeconfig(credential: &RancherCredential) -> String {
@@ -32,19 +33,27 @@ pub fn kubeconfig(credential: &RancherCredential) -> String {
     )
 }
 
+/// A kubeconfig rendering error.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum RenderError {
+    #[error("the expiry of the credential cannot be written as RFC 3339: {0}")]
+    Expiry(#[from] time::error::Format),
+}
+
 /// The output of a kubectl credential plugin (`users[].user.exec`).
-///
-/// The expiry of a credential is at most a few years out, so it can always be written as RFC 3339.
-pub fn exec_credential(credential: &RancherCredential) -> String {
-    json!({
+pub fn exec_credential(credential: &RancherCredential) -> Result<String, RenderError> {
+    let expiry = credential.expiry.format(&Rfc3339)?;
+
+    Ok(json!({
         "apiVersion": "client.authentication.k8s.io/v1",
         "kind": "ExecCredential",
         "status": {
             "token": credential.token,
-            "expirationTimestamp": credential.expiry.format(&Rfc3339).expect("the expiry is a year from 0 to 9999"),
+            "expirationTimestamp": expiry,
         },
     })
-    .to_string()
+    .to_string())
 }
 
 #[cfg(test)]
@@ -99,7 +108,7 @@ mod tests {
 
     #[test]
     fn the_exec_credential_carries_the_token_and_expiry() {
-        let value: Value = serde_json::from_str(&exec_credential(&credential())).unwrap();
+        let value: Value = serde_json::from_str(&exec_credential(&credential()).unwrap()).unwrap();
 
         assert_eq!(value["apiVersion"], "client.authentication.k8s.io/v1");
         assert_eq!(value["kind"], "ExecCredential");
