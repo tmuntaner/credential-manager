@@ -1,6 +1,6 @@
 [package]
 name = "c9s-egui"
-version = "0.1.0-beta2"
+version = "0.1.0"
 edition = "2021"
 license = "EUPL-1.2+"
 description = "Desktop app to get temporary credentials without the command line (egui)"
