@@ -2,4 +2,4 @@
 
 mod kubeconfig;
 
-pub use kubeconfig::{exec_credential, kubeconfig};
+pub use kubeconfig::{exec_credential, kubeconfig, RenderError};

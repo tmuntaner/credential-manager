@@ -231,7 +231,7 @@ impl RancherCredentials {
         let renderer = RancherKubeconfig;
         match self.output.unwrap_or_default() {
             RancherOutput::Kubeconfig => print!("{}", renderer.kubeconfig(credential)),
-            RancherOutput::ExecCredential => println!("{}", renderer.exec_credential(credential)),
+            RancherOutput::ExecCredential => println!("{}", renderer.exec_credential(credential)?),
         }
 
         Ok(())

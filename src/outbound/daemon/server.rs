@@ -74,7 +74,7 @@ impl<W: DaemonKeyCache, N: Notifier> DaemonSession<W, N> {
 
     /// Checks if the session is over the idle timeout. If it is, clear the secrets from meory.
     pub fn check_and_expire_if_idle(&self) -> Result<bool, WrapError> {
-        let mut guard = self.last_activity.lock().unwrap();
+        let mut guard = self.last_activity.lock().unwrap_or_else(|e| e.into_inner());
 
         if let Some(last) = *guard {
             if last.elapsed() >= self.idle_timeout {
@@ -93,7 +93,7 @@ impl<W: DaemonKeyCache, N: Notifier> DaemonSession<W, N> {
     pub fn lock(&self) -> Result<(), WrapError> {
         self.wrapper.clear_key()?;
 
-        let mut guard = self.last_activity.lock().unwrap();
+        let mut guard = self.last_activity.lock().unwrap_or_else(|e| e.into_inner());
         *guard = None;
 
         info!("daemon session locked. Secrets cleared.");
@@ -101,7 +101,7 @@ impl<W: DaemonKeyCache, N: Notifier> DaemonSession<W, N> {
     }
 
     fn touch_activity(&self) {
-        let mut guard = self.last_activity.lock().unwrap();
+        let mut guard = self.last_activity.lock().unwrap_or_else(|e| e.into_inner());
         *guard = Some(Instant::now());
     }
 
@@ -200,7 +200,7 @@ impl<W: DaemonKeyCache, N: Notifier> DaemonSession<W, N> {
                 // if it's there, then it's considered unlocked.
                 let is_cached = self.wrapper.has_key().unwrap_or(false);
                 if is_cached {
-                    let guard = self.last_activity.lock().unwrap();
+                    let guard = self.last_activity.lock().unwrap_or_else(|e| e.into_inner());
                     let remaining =
                         guard.map(|t| self.idle_timeout.saturating_sub(t.elapsed()).as_secs());
                     (

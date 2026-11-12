@@ -19,7 +19,7 @@ impl ProgressBarFallbackNotifier {
                 "▪▪▪▪▪",
             ])
             .template("{spinner:.blue} {msg}")
-            .unwrap(); // this should always work
+            .unwrap_or_else(|_| ProgressStyle::default_spinner());
         let pb = ProgressBar::new_spinner();
         pb.enable_steady_tick(Duration::new(120, 0));
         pb.set_style(style);

@@ -70,7 +70,7 @@ impl KubeconfigRenderer for RancherKubeconfig {
         rancher::kubeconfig(&credential.into())
     }
 
-    fn exec_credential(&self, credential: &RancherCredential) -> String {
-        rancher::exec_credential(&credential.into())
+    fn exec_credential(&self, credential: &RancherCredential) -> Result<String, RancherError> {
+        rancher::exec_credential(&credential.into()).map_err(|e| RancherError::Failed(Box::new(e)))
     }
 }

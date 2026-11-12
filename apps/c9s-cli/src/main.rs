@@ -16,6 +16,7 @@ use anyhow::Result;
 use c9s::domain::services::settings_editor::SettingsService;
 use c9s::outbound::config::config_store::ConfigFileAdapter;
 use clap::Parser;
+use std::process::ExitCode;
 use std::sync::Arc;
 
 #[derive(Parser)]
@@ -50,7 +51,20 @@ impl Licenses {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("Error: {err}");
+            for cause in err.chain().skip(1) {
+                eprintln!("  Caused by: {cause}");
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     let opt: Opts = Opts::parse();
     let settings_service = SettingsService::new(Arc::new(ConfigFileAdapter::in_user_config_dir()?));
     let config = settings_service.load()?;

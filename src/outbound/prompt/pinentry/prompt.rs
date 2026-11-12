@@ -75,8 +75,14 @@ impl PinentryPrompt {
 
         // build the pinentry session
         let mut session = Session::new(
-            child.stdin.take().expect("stdin is piped"),
-            child.stdout.take().expect("stdout is piped"),
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| PinentryError::NotStarted("stdin was not piped".into()))?,
+            child
+                .stdout
+                .take()
+                .ok_or_else(|| PinentryError::NotStarted("stdout was not piped".into()))?,
         );
 
         // start the session
