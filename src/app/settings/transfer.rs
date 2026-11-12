@@ -138,7 +138,7 @@ impl ExportChoice {
     }
 
     /// Export everything for these idps.
-    /// We don't sepcify any apps because all of them will be used.
+    /// We don't specify any apps because all of them will be used.
     pub fn everything_of(idps: Vec<String>) -> Self {
         Self {
             all_apps: true,
