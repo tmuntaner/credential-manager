@@ -6,15 +6,16 @@
 //! - `prompts`: the questions and notices for flows.
 //! - `ui`: reusable widgets
 
-pub mod app;
-mod prompts;
-mod settings;
-mod ui;
+pub mod outbound;
+mod core;
+pub mod inbound;
 
-pub use settings::{Enroller, FilePicker, Pick};
+pub use inbound::settings::{Enroller, FilePicker, Pick};
 
-use app::C9sApp;
+use crate::inbound::app::C9sApp;
 use c9s::outbound::config::config_store::ConfigFileAdapter;
+use inbound::settings;
+use outbound::prompts;
 
 const WINDOW_SIZE: [f32; 2] = [900.0, 700.0];
 
@@ -33,7 +34,14 @@ pub fn run() -> eframe::Result {
         options,
         Box::new(|cc| {
             let store = ConfigFileAdapter::in_user_config_dir()?;
-            Ok(Box::new(C9sApp::new(cc.egui_ctx.clone(), store)))
+            let (bridge, prompts) = prompts::connect(cc.egui_ctx.clone());
+            let settings = settings::SettingsState::new(store, bridge.clone());
+            Ok(Box::new(C9sApp::new(
+                cc.egui_ctx.clone(),
+                settings,
+                bridge,
+                prompts,
+            )))
         }),
     )
 }

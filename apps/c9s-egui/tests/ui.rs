@@ -16,7 +16,9 @@ use c9s::domain::services::login_resolver::LoginResolverService;
 use c9s::domain::services::settings_editor::SettingsService;
 use c9s::outbound::config::bundle::TomlBundleCodec;
 use c9s::outbound::config::config_store::ConfigFileAdapter;
-use c9s_egui::app::C9sApp;
+use c9s_egui::inbound::app::C9sApp;
+use c9s_egui::inbound::settings;
+use c9s_egui::outbound::prompts;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use c9s_egui::Enroller;
 use c9s_egui::FilePicker;
@@ -50,7 +52,16 @@ impl Window {
 
     /// The app, created on the first frame (it needs the context of the harness).
     fn open(&self) -> Harness<'static, Option<C9sApp>> {
+        self.open_with(|_| {})
+    }
+
+    /// Like `open`, with `configure` applied to the settings before the app gets them.
+    fn open_with(
+        &self,
+        configure: impl FnOnce(&mut settings::SettingsState) + 'static,
+    ) -> Harness<'static, Option<C9sApp>> {
         let path = self.path();
+        let mut configure = Some(configure);
         let mut harness = Harness::builder()
             .with_size([900.0, 900.0])
             // A new dialog takes a few frames to find its size (see `ui::dialog::modal`).
@@ -58,7 +69,13 @@ impl Window {
             .build_ui_state(
                 move |ui, app: &mut Option<C9sApp>| {
                     app.get_or_insert_with(|| {
-                        C9sApp::new(ui.ctx().clone(), ConfigFileAdapter::at(path.clone()))
+                        let store = ConfigFileAdapter::at(path.clone());
+                        let (bridge, prompts) = prompts::connect(ui.ctx().clone());
+                        let mut settings = settings::SettingsState::new(store, bridge.clone());
+                        if let Some(configure) = configure.take() {
+                            configure(&mut settings);
+                        }
+                        C9sApp::new(ui.ctx().clone(), settings, bridge, prompts)
                     })
                     .show(ui);
                 },
@@ -446,12 +463,7 @@ fn a_security_key_is_disabled_after_asking() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn a_security_key_is_enrolled_and_found_by_the_cli() {
     let window = Window::new();
-    let mut harness = window.open();
-    harness
-        .state_mut()
-        .as_mut()
-        .unwrap()
-        .set_enroller(enroller(Ok(yubikey())));
+    let mut harness = window.open_with(move |s| s.enrolling.enroller = enroller(Ok(yubikey())));
 
     click_button(&mut harness, "Security");
     click_button(&mut harness, "Enroll security key");
@@ -470,14 +482,11 @@ fn a_security_key_is_enrolled_and_found_by_the_cli() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn a_failed_enrolling_is_shown_and_nothing_is_written() {
     let window = Window::new();
-    let mut harness = window.open();
-    harness
-        .state_mut()
-        .as_mut()
-        .unwrap()
-        .set_enroller(enroller(Err(SetupError::general(
+    let mut harness = window.open_with(move |s| {
+        s.enrolling.enroller = enroller(Err(SetupError::general(
             "No security key was found. Plug it in and try again.",
-        ))));
+        )))
+    });
 
     click_button(&mut harness, "Security");
     click_button(&mut harness, "Enroll security key");
@@ -532,12 +541,10 @@ fn identity_providers_are_exported_to_a_file_without_security_settings() {
         .set_security_key(Some(yubikey()))
         .unwrap();
     let file = window.dir.path().join("share.toml");
-    let mut harness = window.open();
-    harness
-        .state_mut()
-        .as_mut()
-        .unwrap()
-        .set_chooser(chooser(Some(file.clone())));
+    let mut harness = window.open_with({
+        let file = file.clone();
+        move |s| s.transfer.picker = chooser(Some(file))
+    });
 
     click_button(&mut harness, "Import / Export");
     click_button(&mut harness, "Export…");
@@ -558,12 +565,10 @@ fn an_app_that_is_unchecked_is_left_out_of_the_export() {
     let window = Window::new();
     window.with_idp_and_aws();
     let file = window.dir.path().join("share.toml");
-    let mut harness = window.open();
-    harness
-        .state_mut()
-        .as_mut()
-        .unwrap()
-        .set_chooser(chooser(Some(file.clone())));
+    let mut harness = window.open_with({
+        let file = file.clone();
+        move |s| s.transfer.picker = chooser(Some(file))
+    });
 
     click_button(&mut harness, "Import / Export");
     click_button(&mut harness, "Export…");
@@ -586,12 +591,10 @@ fn an_export_needs_an_identity_provider_chosen() {
     let window = Window::new();
     window.with_idp_and_aws();
     let file = window.dir.path().join("share.toml");
-    let mut harness = window.open();
-    harness
-        .state_mut()
-        .as_mut()
-        .unwrap()
-        .set_chooser(chooser(Some(file.clone())));
+    let mut harness = window.open_with({
+        let file = file.clone();
+        move |s| s.transfer.picker = chooser(Some(file))
+    });
 
     click_button(&mut harness, "Import / Export");
     click_button(&mut harness, "Export…");
@@ -621,12 +624,7 @@ fn a_file_is_imported_and_found_by_the_cli() {
         .unwrap();
 
     let window = Window::new();
-    let mut harness = window.open();
-    harness
-        .state_mut()
-        .as_mut()
-        .unwrap()
-        .set_chooser(chooser(Some(file)));
+    let mut harness = window.open_with(move |s| s.transfer.picker = chooser(Some(file)));
 
     click_button(&mut harness, "Import / Export");
     click_button(&mut harness, "Import…");
@@ -664,12 +662,7 @@ fn importing_the_same_file_again_says_nothing_is_new() {
         .unwrap();
 
     let window = Window::new();
-    let mut harness = window.open();
-    harness
-        .state_mut()
-        .as_mut()
-        .unwrap()
-        .set_chooser(chooser(Some(file)));
+    let mut harness = window.open_with(move |s| s.transfer.picker = chooser(Some(file)));
 
     click_button(&mut harness, "Import / Export");
     click_button(&mut harness, "Import…");
@@ -692,12 +685,7 @@ fn a_file_that_is_not_an_export_is_refused_and_nothing_is_written() {
     let window = Window::new();
     let file = window.dir.path().join("junk.toml");
     std::fs::write(&file, "[global_settings]\nuse_keyring = false\n").unwrap();
-    let mut harness = window.open();
-    harness
-        .state_mut()
-        .as_mut()
-        .unwrap()
-        .set_chooser(chooser(Some(file)));
+    let mut harness = window.open_with(move |s| s.transfer.picker = chooser(Some(file)));
 
     click_button(&mut harness, "Import / Export");
     click_button(&mut harness, "Import…");
@@ -711,12 +699,7 @@ fn a_file_that_is_not_an_export_is_refused_and_nothing_is_written() {
 #[test]
 fn closing_the_file_dialog_changes_nothing() {
     let window = Window::new();
-    let mut harness = window.open();
-    harness
-        .state_mut()
-        .as_mut()
-        .unwrap()
-        .set_chooser(chooser(None));
+    let mut harness = window.open_with(move |s| s.transfer.picker = chooser(None));
 
     click_button(&mut harness, "Import / Export");
     click_button(&mut harness, "Import…");
@@ -744,12 +727,7 @@ fn a_first_run_is_set_up_by_importing_a_file() {
         .unwrap();
 
     let window = Window::new();
-    let mut harness = window.open();
-    harness
-        .state_mut()
-        .as_mut()
-        .unwrap()
-        .set_chooser(chooser(Some(file)));
+    let mut harness = window.open_with(move |s| s.transfer.picker = chooser(Some(file)));
 
     harness.get_by_label("Get started");
     click_button(&mut harness, "Import an onboarding file…");
