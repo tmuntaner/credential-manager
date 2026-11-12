@@ -5,6 +5,10 @@ edition = "2021"
 license = "EUPL-1.2+"
 description = "Command-line tool to get temporary credentials for AWS, Rancher, and Authentik"
 
+[[bin]]
+name = "c9s"
+path = "src/main.rs"
+
 [dependencies]
 c9s = { path = "../.." }
 tokio = { workspace = true }

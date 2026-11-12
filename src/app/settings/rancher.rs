@@ -1,6 +1,6 @@
-use super::errors::Form;
 use super::models::{MfaChoice, RancherForm, SettingsView, SetupError};
 use super::SettingsPage;
+use crate::app::settings::form::Form;
 use crate::domain::services::settings_editor::{RancherInput, SaveAs};
 
 impl SettingsPage {

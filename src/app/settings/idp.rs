@@ -1,6 +1,6 @@
-use super::errors::Form;
 use super::models::{IdpForm, SettingsView, SetupError};
 use super::SettingsPage;
+use crate::app::settings::form::Form;
 use crate::domain::models::idp::IdpType;
 use crate::domain::services::settings_editor::{IdpInput, SaveAs};
 
