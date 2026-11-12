@@ -1,5 +1,6 @@
-use super::errors::{edit_error, Form};
+use super::errors::edit_error;
 use super::models::SetupError;
+use crate::app::settings::form::Form;
 use crate::domain::models::settings::{AppConfig, YubikeyConfig};
 use crate::domain::ports::notifier::Notifier;
 use crate::domain::ports::secret_wrapper::WrapError;

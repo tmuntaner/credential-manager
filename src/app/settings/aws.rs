@@ -1,6 +1,6 @@
-use super::errors::Form;
 use super::models::{AwsAppForm, AwsAppKey, MfaChoice, SettingsView, SetupError};
 use super::SettingsPage;
+use crate::app::settings::form::Form;
 use crate::domain::models::settings::AwsAppType;
 use crate::domain::services::settings_editor::{AwsAppInput, AwsAppKind, SaveAs};
 

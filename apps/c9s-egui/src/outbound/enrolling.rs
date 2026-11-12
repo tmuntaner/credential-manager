@@ -96,3 +96,9 @@ impl Enrolling {
         Some(result)
     }
 }
+
+impl Default for Enrolling {
+    fn default() -> Self {
+        Self::new()
+    }
+}

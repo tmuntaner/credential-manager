@@ -7,7 +7,11 @@ mod security;
 mod share;
 
 use crate::inbound::app::{Focus, FocusTarget, Route, Section, Shell};
+pub use crate::outbound::enrolling::Enroller;
+use crate::outbound::enrolling::Enrolling;
 use crate::outbound::prompts::Bridge;
+pub use crate::outbound::transfer::{FilePicker, Pick};
+use crate::outbound::transfer::{FileTransfer, Transfer};
 use c9s::app::settings::{
     describe_import, AwsAppSummary, IdpSummary, ImportPlan, MfaChoice, RancherSummary,
     SettingsPage, SettingsView, SetupError,
@@ -20,12 +24,8 @@ use dialogs::{
     UsernamesDialog,
 };
 use eframe::egui::{Id, Ui};
-pub use crate::outbound::enrolling::Enroller;
-use crate::outbound::enrolling::Enrolling;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-pub use crate::outbound::transfer::{FilePicker, Pick};
-use crate::outbound::transfer::{FileTransfer, Transfer};
 
 /// The user's action on a settings screen.
 pub enum SettingsAction {

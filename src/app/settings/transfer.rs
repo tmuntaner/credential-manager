@@ -1,6 +1,7 @@
-use super::errors::{edit_error, Form};
+use super::errors::edit_error;
 use super::models::{SettingsView, SetupError};
 use super::SettingsPage;
+use crate::app::settings::form::Form;
 use crate::domain::models::settings::SettingsBundle;
 use crate::domain::ports::bundle::{BundleCodec, BundleError};
 use crate::domain::services::settings_editor::fields::check_username;

@@ -9,6 +9,7 @@
 
 mod aws;
 mod errors;
+mod form;
 mod idp;
 mod models;
 mod rancher;
@@ -27,9 +28,10 @@ use crate::domain::models::settings::{AppConfig, YubikeyConfig};
 use crate::domain::ports::notifier::Notifier;
 use crate::domain::ports::user_interaction::UserInteraction;
 use crate::domain::services::settings_editor::{SettingsEditError, SettingsService};
-use errors::{edit_error, Form};
+use errors::edit_error;
 use std::sync::Arc;
 
+use crate::app::settings::form::Form;
 pub use security_key::{
     enroll_and_save, enroll_security_key, DEFAULT_RP_ID, SECURITY_KEY_SUPPORTED,
 };

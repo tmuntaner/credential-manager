@@ -161,3 +161,9 @@ impl FileTransfer {
         file.map(|path| (transfer, path))
     }
 }
+
+impl Default for FileTransfer {
+    fn default() -> Self {
+        Self::new()
+    }
+}

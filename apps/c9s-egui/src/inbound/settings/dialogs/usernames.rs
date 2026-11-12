@@ -1,5 +1,5 @@
-use crate::core::ui::dialog::DialogOutcome;
 use crate::core::ui::dialog::dialog;
+use crate::core::ui::dialog::DialogOutcome;
 use crate::core::ui::errors::error_label;
 use crate::core::ui::field::{hint, submitted, INPUT_WIDTH};
 use c9s::app::settings::check_import_username;

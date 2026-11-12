@@ -6,9 +6,9 @@
 //! - `prompts`: the questions and notices for flows.
 //! - `ui`: reusable widgets
 
-pub mod outbound;
 mod core;
 pub mod inbound;
+pub mod outbound;
 
 pub use inbound::settings::{Enroller, FilePicker, Pick};
 

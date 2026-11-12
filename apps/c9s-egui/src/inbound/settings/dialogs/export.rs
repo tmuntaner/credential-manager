@@ -1,5 +1,5 @@
-use crate::core::ui::dialog::DialogOutcome;
 use crate::core::ui::dialog::dialog;
+use crate::core::ui::dialog::DialogOutcome;
 use c9s::app::settings::{ExportChoice, SettingsView};
 use eframe::egui::Context;
 
