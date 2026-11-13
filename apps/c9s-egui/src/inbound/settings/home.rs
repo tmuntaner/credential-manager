@@ -12,16 +12,12 @@ pub fn ui(ui: &mut Ui, view: &SettingsView, focus: &mut Focus) -> Option<Setting
         "Get started"
     };
 
-    card_header(
-        ui,
-        title,
-        "Start by setting your identity provider, the rest can wait until you need it.",
-    );
+    card_header(ui, title, "Set up your identity provider and applications.");
 
     let steps = [
         (
             Route::Settings(Section::Idp),
-            "Add your identity provider",
+            "Add an identity provider",
             c.idp,
             false,
         ),

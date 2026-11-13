@@ -12,7 +12,7 @@ pub fn ui(ui: &mut Ui, view: &SettingsView, focus: &mut Focus) -> Option<Setting
     card_header(
         ui,
         "Identity providers",
-        "The services you sign in with, for example authentik.",
+        "The services you use to sign in with.",
     );
     let mut action = None;
 
@@ -46,12 +46,9 @@ fn used_by(idp: &IdpSummary) -> String {
 
 fn idp_entry(ui: &mut Ui, idp: &IdpSummary, focus: &mut Focus) -> Option<SettingsAction> {
     let details = [
-        idp.url.clone(),
-        format!(
-            "User name: {}. Second step: {}.",
-            idp.username,
-            mfa_label(idp.mfa)
-        ),
+        format!("URL: {}", idp.url.clone()),
+        format!("Username: {}", idp.username),
+        format!("MFA: {}.", mfa_label(idp.mfa)),
         used_by(idp),
     ];
 
@@ -67,7 +64,7 @@ fn idp_entry(ui: &mut Ui, idp: &IdpSummary, focus: &mut Focus) -> Option<Setting
                 Removal::Idp(idp.name.clone()),
                 format!("Remove {}?", idp.name),
                 format!(
-                    "c9s will no longer use the identity provider {} ({}). A password kept in the system keyring is not deleted.",
+                    "The identity provider {} ({}) will be deleted.",
                     idp.name, idp.url
                 ),
                 format!("{} removed.", idp.name),
