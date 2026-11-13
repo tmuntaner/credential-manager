@@ -17,8 +17,8 @@ pub fn ui(
         "Share your identity providers with a colleague, or start from theirs.",
     );
     ui.label(
-        "An onboarding file holds your identity providers and their applications, so a colleague can start from them. \
-         It does not contain user names and or user specific settings. It's not your c9s settings file, which you should not share.",
+        "An onboarding file is a shortcut to add identity providers and their applications to give to colleagues. \
+         It does not contain user names and or user specific settings.",
     );
     ui.add_space(8.0);
 

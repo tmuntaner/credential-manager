@@ -13,7 +13,7 @@ pub fn ui(
     enrolling: bool,
     focus: &mut Focus,
 ) -> Option<SettingsAction> {
-    card_header(ui, "Security", "How c9s keeps your secrets.");
+    card_header(ui, "Security", "Security settings for c9s.");
     let mut action = None;
 
     heading(ui, "Passwords");
@@ -30,7 +30,7 @@ pub fn ui(
 
     ui.label(
         RichText::new(
-            "c9s asks for your password the first time and offers to keep it in your computer's secure storage. It is never saved in the settings file.",
+            "c9s asks for your password the first time and offers to keep it in your computer's secure storage.",
         )
         .weak(),
     );
@@ -64,7 +64,10 @@ fn security_key(
 
     ui.horizontal_wrapped(|ui| {
         let can_enroll = view.security_key_supported && !enrolling;
-        let enroll = ui.add_enabled(can_enroll, eframe::egui::Button::new("Enroll security key"));
+        let enroll = ui.add_enabled(
+            can_enroll,
+            eframe::egui::Button::new("Enroll a security key"),
+        );
         focus.apply(FocusTarget::Add(Section::Security), &enroll);
         if enroll.clicked() {
             action = Some(SettingsAction::EnrollSecurityKey);
@@ -80,7 +83,7 @@ fn security_key(
         }
     });
     if enrolling {
-        ui.label(RichText::new("Enrolling… touch the key when it asks.").weak());
+        ui.label(RichText::new("Enrolling… touch the key when asked.").weak());
     }
 
     ui.add_space(8.0);
@@ -96,7 +99,7 @@ fn security_key(
     }
     ui.label(
         RichText::new(
-            "When a security key is enrolled, your identity provider password and session are always encrypted with it. This also encrypts the AWS and Rancher credentials c9s issues. Enroll a key to turn it on.",
+            "When a security key is enrolled and you save your identity provider credentials in your system's keyring, c9s automatically encrypts them. You can also encrypt issued credentials, but will require a security key to access them.",
         )
         .weak(),
     );
