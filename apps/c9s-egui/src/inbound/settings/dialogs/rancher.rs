@@ -35,7 +35,7 @@ impl RancherDialog {
         Self {
             original_url: None,
             url: String::new(),
-            client_id: "rancher".to_string(),
+            client_id: "".to_string(),
             sign_in: SignInFields::new(SIGN_IN, form),
             first_frame: true,
             errors: FormErrors::default(),
@@ -103,7 +103,7 @@ impl RancherDialog {
                 ui,
                 &mut self.errors,
                 Field::RancherUrl,
-                "Web address of Rancher",
+                "The URL of Rancher",
                 &mut self.url,
                 TextOptions {
                     placeholder: Some("https://rancher.example.com"),
@@ -121,7 +121,7 @@ impl RancherDialog {
                 &mut self.client_id,
                 TextOptions {
                     hint: Some(
-                        "The client ID of the Rancher application in your identity provider, often rancher.",
+                        "The client ID of the Rancher application in your identity provider.",
                     ),
                     ..Default::default()
                 },

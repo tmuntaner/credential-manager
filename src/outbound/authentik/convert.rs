@@ -40,13 +40,23 @@ impl From<WebauthnAssertion> for authentik::WebauthnAssertion {
 
 impl From<authentik::AuthentikError> for SamlLoginError {
     fn from(e: authentik::AuthentikError) -> Self {
-        SamlLoginError::Failed(Box::new(e))
+        match e {
+            authentik::AuthentikError::Flow(authentik::FlowError::PasswordRejected(_)) => {
+                SamlLoginError::InvalidCredentials
+            }
+            e => SamlLoginError::Failed(Box::new(e)),
+        }
     }
 }
 
 impl From<authentik::AuthentikError> for OidcError {
     fn from(e: authentik::AuthentikError) -> Self {
-        OidcError::Failed(Box::new(e))
+        match e {
+            authentik::AuthentikError::Flow(authentik::FlowError::PasswordRejected(_)) => {
+                OidcError::InvalidCredentials
+            }
+            e => OidcError::Failed(Box::new(e)),
+        }
     }
 }
 
@@ -78,5 +88,35 @@ mod tests {
             err.to_string(),
             "the state of the authorization response does not match the request"
         );
+    }
+
+    #[test]
+    fn a_rejected_password_is_invalid_credentials() {
+        let rejected = || {
+            authentik::AuthentikError::Flow(authentik::FlowError::PasswordRejected(
+                "Invalid password".to_string(),
+            ))
+        };
+
+        assert!(matches!(
+            SamlLoginError::from(rejected()),
+            SamlLoginError::InvalidCredentials
+        ));
+        assert!(matches!(
+            OidcError::from(rejected()),
+            OidcError::InvalidCredentials
+        ));
+    }
+
+    #[test]
+    fn a_rejected_username_is_not_invalid_credentials() {
+        let err = authentik::AuthentikError::Flow(authentik::FlowError::UsernameRejected(
+            "unknown".to_string(),
+        ));
+
+        assert!(matches!(
+            SamlLoginError::from(err),
+            SamlLoginError::Failed(_)
+        ));
     }
 }

@@ -132,7 +132,7 @@ impl AwsDialog {
                     "AWS region of Identity Center",
                     &mut self.region,
                     TextOptions {
-                        hint: Some("For example eu-west-1."),
+                        hint: Some("For example eu-central-1."),
                         ..Default::default()
                     },
                 );

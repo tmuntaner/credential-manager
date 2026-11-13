@@ -11,7 +11,7 @@ pub fn ui(ui: &mut Ui, view: &SettingsView, focus: &mut Focus) -> Option<Setting
     card_header(
         ui,
         "AWS accounts",
-        "The AWS tiles in your identity provider. Each one gives access to one or more AWS accounts.",
+        "The AWS tiles in your identity provider. Each gives access to one or more AWS accounts.",
     );
 
     let mut action = None;
@@ -27,7 +27,7 @@ pub fn ui(ui: &mut Ui, view: &SettingsView, focus: &mut Focus) -> Option<Setting
         ui.add_space(8.0);
     }
 
-    let add = ui.button("Add AWS account");
+    let add = ui.button("Add an AWS account");
     focus.apply(FocusTarget::Add(Section::Aws), &add);
     if add.clicked() {
         action = Some(SettingsAction::AddAws);

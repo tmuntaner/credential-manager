@@ -26,6 +26,11 @@ use time::OffsetDateTime;
 /// A token that expires within this long is not handed out from the cache.
 const CACHE_MARGIN: time::Duration = time::Duration::seconds(60);
 
+/// How many times we continue to ask the user for the password when it's rejected.
+const MAX_PASSWORD_ATTEMPTS: u32 = 3;
+
+const WRONG_PASSWORD: &str = "The password was rejected. Please try again.";
+
 /// An issue of a Rancher cluster token.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -95,42 +100,59 @@ pub async fn issue_rancher<U: UserInteraction + 'static, N: Notifier + 'static>(
         return Ok(credential);
     }
 
-    let password = get_password(
-        rancher.idp_url.clone(),
-        rancher.username.clone(),
-        request.with_password,
-        idp_store.as_deref(),
-        prompt.as_ref(),
-    )
-    .await
-    .map_err(IssueRancherError::Password)?;
+    let sessions = StoredSessions::new(session_store);
+    let mut with_password = request.with_password;
+    let mut previous_error = None;
+    let mut attempt = 1;
+    let credential = loop {
+        let password = get_password(
+            rancher.idp_url.clone(),
+            rancher.username.clone(),
+            with_password,
+            idp_store.as_deref(),
+            prompt.as_ref(),
+            previous_error,
+        )
+        .await
+        .map_err(IssueRancherError::Password)?;
 
-    let authorizer = match rancher.idp_type {
-        IdpType::Authentik => Box::new(AuthentikOidcClient::new(
-            rancher.idp_url,
-            rancher.client_id,
-            request.enable_desktop_notifications,
-            prompt.clone(),
-            notifier.clone(),
-            StoredSessions::new(session_store),
-        )),
+        let authorizer = match rancher.idp_type {
+            IdpType::Authentik => Box::new(AuthentikOidcClient::new(
+                rancher.idp_url.clone(),
+                rancher.client_id.clone(),
+                request.enable_desktop_notifications,
+                prompt.clone(),
+                notifier.clone(),
+                sessions.clone(),
+            )),
+        };
+
+        let result = RancherCredentialIssuerService::new(
+            authorizer,
+            Box::new(RancherClient::new(&rancher.url).map_err(IssueRancherError::Setup)?),
+        )
+        .issue(
+            UserCredentials {
+                username: rancher.username.clone(),
+                password,
+                mfa: rancher.mfa,
+            },
+            &request.cluster,
+            request.ttl,
+        )
+        .await;
+
+        match result {
+            Ok(credential) => break credential,
+            // The saved password may be out of date: ask for a new one, and offer to save it.
+            Err(e) if e.is_invalid_credentials() && attempt < MAX_PASSWORD_ATTEMPTS => {
+                attempt += 1;
+                with_password = true;
+                previous_error = Some(WRONG_PASSWORD);
+            }
+            Err(e) => return Err(IssueRancherError::Issue(e)),
+        }
     };
-
-    let credential = RancherCredentialIssuerService::new(
-        authorizer,
-        Box::new(RancherClient::new(&rancher.url).map_err(IssueRancherError::Setup)?),
-    )
-    .issue(
-        UserCredentials {
-            username: rancher.username,
-            password,
-            mfa: rancher.mfa,
-        },
-        &request.cluster,
-        request.ttl,
-    )
-    .await
-    .map_err(IssueRancherError::Issue)?;
 
     if let Some(error) =
         set_cached_credential_best_effort(&cache_key, &credential, cache_store.as_deref()).await

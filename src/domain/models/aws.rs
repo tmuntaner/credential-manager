@@ -22,6 +22,13 @@ pub enum AwsError {
     Failed(Box<dyn Error + Send + Sync>),
 }
 
+impl AwsError {
+    /// Whether the identity provider rejected the password.
+    pub fn is_invalid_credentials(&self) -> bool {
+        matches!(self, Self::Login(SamlLoginError::InvalidCredentials))
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum RoleError {
     #[error(transparent)]

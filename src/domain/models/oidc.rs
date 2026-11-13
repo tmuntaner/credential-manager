@@ -3,7 +3,11 @@ use thiserror::Error;
 
 /// Why the identity provider did not hand out an authorization code.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum OidcError {
+    /// The identity provider rejected the password.
+    #[error("the identity provider rejected the password")]
+    InvalidCredentials,
     #[error(transparent)]
     Failed(Box<dyn Error + Send + Sync>),
 }
@@ -18,7 +22,9 @@ mod tests {
         let err = OidcError::Failed(Box::new(cause));
 
         assert_eq!(err.to_string(), "boom");
-        let OidcError::Failed(inner) = err;
+        let OidcError::Failed(inner) = err else {
+            panic!("expected Failed");
+        };
         assert!(inner.downcast_ref::<std::io::Error>().is_some());
     }
 }
