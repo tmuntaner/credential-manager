@@ -3,6 +3,7 @@ use crate::domain::ports::secret_store::{SecretKey, SecretStore};
 use async_trait::async_trait;
 use authentik::{AuthentikSession, SessionCache, SessionCacheError};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use time::OffsetDateTime;
 
 const SERVICE: &str = "c9s authentik session";
@@ -20,13 +21,16 @@ struct StoredSession {
 
 /// Keeps the authentik sessions in a secret store. The session authenticates as the user, so the store
 /// must encrypt it. Without a store, nothing is remembered.
+#[derive(Clone)]
 pub struct StoredSessions {
-    store: Option<Box<dyn SecretStore>>,
+    store: Option<Arc<dyn SecretStore>>,
 }
 
 impl StoredSessions {
     pub fn new(store: Option<Box<dyn SecretStore>>) -> Self {
-        Self { store }
+        Self {
+            store: store.map(Arc::from),
+        }
     }
 
     fn key(idp_host: &str) -> SecretKey {

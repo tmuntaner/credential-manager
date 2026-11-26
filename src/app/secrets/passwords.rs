@@ -35,6 +35,7 @@ pub async fn get_password(
     with_password: bool,
     store: Option<&dyn SecretStore>,
     prompt: &dyn UserInteraction,
+    previous_error: Option<&str>,
 ) -> Result<SafeSecret, PasswordError> {
     let app_domain = Url::parse(app_url.as_str()).map_err(PasswordError::InvalidAppUrl)?;
     let app_domain = app_domain
@@ -53,7 +54,7 @@ pub async fn get_password(
         }
     }
 
-    prompt_user_for_password(store, &key, &username, app_domain, prompt).await
+    prompt_user_for_password(store, &key, &username, app_domain, prompt, previous_error).await
 }
 
 async fn prompt_user_for_password(
@@ -62,9 +63,13 @@ async fn prompt_user_for_password(
     username: &str,
     domain: &str,
     prompt: &dyn UserInteraction,
+    previous_error: Option<&str>,
 ) -> Result<SafeSecret, PasswordError> {
-    let password_prompt = SecretPrompt::new("c9s: password required", "Password")
+    let mut password_prompt = SecretPrompt::new("c9s: password required", "Password")
         .with_description(format!("Enter the password of {username} for {domain}."));
+    if let Some(error) = previous_error {
+        password_prompt = password_prompt.with_error(error);
+    }
     let password = prompt
         .ask_secret(password_prompt)
         .await
@@ -100,16 +105,23 @@ mod tests {
     #[tokio::test]
     async fn an_ip_url_has_no_domain() {
         let prompt = MockUserInteraction::new();
-        let err = get_password("http://127.0.0.1/".into(), "u".into(), false, None, &prompt)
-            .await
-            .unwrap_err();
+        let err = get_password(
+            "http://127.0.0.1/".into(),
+            "u".into(),
+            false,
+            None,
+            &prompt,
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, PasswordError::NoAppDomain { .. }));
     }
 
     #[tokio::test]
     async fn a_bad_url_is_invalid() {
         let prompt = MockUserInteraction::new();
-        let err = get_password("not a url".into(), "u".into(), false, None, &prompt)
+        let err = get_password("not a url".into(), "u".into(), false, None, &prompt, None)
             .await
             .unwrap_err();
         assert!(matches!(err, PasswordError::InvalidAppUrl(_)));
@@ -131,6 +143,7 @@ mod tests {
             true,
             Some(&store),
             &prompt,
+            None,
         )
         .await
         .unwrap();
@@ -149,9 +162,30 @@ mod tests {
             false,
             None,
             &prompt,
+            None,
         )
         .await
         .unwrap_err();
         assert!(err.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn the_previous_error_is_shown_with_the_question() {
+        let mut prompt = MockUserInteraction::new();
+        prompt
+            .expect_ask_secret()
+            .withf(|p| p.error.as_deref() == Some("nope"))
+            .returning(|_| Ok(SafeSecret::new("pw")));
+        let password = get_password(
+            "https://idp.example.com".into(),
+            "u".into(),
+            true,
+            None,
+            &prompt,
+            Some("nope"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(password.into_inner(), "pw");
     }
 }

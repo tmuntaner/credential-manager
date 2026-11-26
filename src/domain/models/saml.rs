@@ -3,7 +3,11 @@ use thiserror::Error;
 
 /// Why the identity provider did not hand out a SAML assertion.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SamlLoginError {
+    /// The identity provider rejected the password.
+    #[error("the identity provider rejected the password")]
+    InvalidCredentials,
     #[error(transparent)]
     Failed(Box<dyn Error + Send + Sync>),
 }

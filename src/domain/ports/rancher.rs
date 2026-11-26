@@ -38,6 +38,13 @@ pub enum RancherError {
     Failed(Box<dyn Error + Send + Sync>),
 }
 
+impl RancherError {
+    /// Whether the identity provider rejected the password.
+    pub fn is_invalid_credentials(&self) -> bool {
+        matches!(self, Self::Oidc(OidcError::InvalidCredentials))
+    }
+}
+
 /// Trades a login at the identity provider of Rancher for a token of one of its clusters.
 #[async_trait(?Send)]
 pub trait RancherCredentials {

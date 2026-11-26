@@ -21,6 +21,11 @@ use crate::outbound::authentik::{AuthentikSamlClient, StoredSessions};
 use crate::outbound::aws::{SsoCredentials, StsCredentials};
 use std::sync::Arc;
 
+/// How many times we continue to ask the user for the password when it's rejected.
+const MAX_PASSWORD_ATTEMPTS: u32 = 3;
+
+const WRONG_PASSWORD: &str = "The password was rejected. Please try again.";
+
 /// An issue with an AWS app.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -81,29 +86,46 @@ pub async fn issue_aws<U: UserInteraction + 'static, N: Notifier + 'static>(
         .resolve_aws(&request.overrides)
         .map_err(IssueAwsError::Resolve)?;
 
-    let password = get_password(
-        login.password_url().to_string(),
-        login.username.clone(),
-        request.with_password,
-        idp_store.as_deref(),
-        prompt.as_ref(),
-    )
-    .await
-    .map_err(IssueAwsError::Password)?;
+    let sessions = StoredSessions::new(session_store);
+    let mut with_password = request.with_password;
+    let mut previous_error = None;
+    let mut attempt = 1;
+    let credentials = loop {
+        let password = get_password(
+            login.password_url().to_string(),
+            login.username.clone(),
+            with_password,
+            idp_store.as_deref(),
+            prompt.as_ref(),
+            previous_error,
+        )
+        .await
+        .map_err(IssueAwsError::Password)?;
 
-    let credentials = AwsCredentialIssuerService::new(
-        Box::new(AuthentikSamlClient::new(
-            request.enable_desktop_notifications,
-            prompt.clone(),
-            notifier.clone(),
-            StoredSessions::new(session_store),
-        )),
-        Box::new(StsCredentials::new()),
-        Box::new(SsoCredentials::new().map_err(|e| IssueAwsError::SsoSetup(e.to_string()))?),
-    )
-    .issue(&login, password, request.role_arn.as_deref())
-    .await
-    .map_err(IssueAwsError::Issue)?;
+        let result = AwsCredentialIssuerService::new(
+            Box::new(AuthentikSamlClient::new(
+                request.enable_desktop_notifications,
+                prompt.clone(),
+                notifier.clone(),
+                sessions.clone(),
+            )),
+            Box::new(StsCredentials::new()),
+            Box::new(SsoCredentials::new().map_err(|e| IssueAwsError::SsoSetup(e.to_string()))?),
+        )
+        .issue(&login, password, request.role_arn.as_deref())
+        .await;
+
+        match result {
+            Ok(credentials) => break credentials,
+            // The saved password may be out of date: ask for a new one, and offer to save it.
+            Err(e) if e.is_invalid_credentials() && attempt < MAX_PASSWORD_ATTEMPTS => {
+                attempt += 1;
+                with_password = true;
+                previous_error = Some(WRONG_PASSWORD);
+            }
+            Err(e) => return Err(IssueAwsError::Issue(e)),
+        }
+    };
 
     if let (Some(role_arn), [credential]) = (&request.role_arn, credentials.as_slice()) {
         if let Some(error) =

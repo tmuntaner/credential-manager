@@ -11,7 +11,7 @@ pub fn ui(ui: &mut Ui, view: &SettingsView, focus: &mut Focus) -> Option<Setting
     card_header(
         ui,
         "Rancher",
-        "Optional. Rancher signs in through an identity provider. For now, get Rancher credentials with `c9s creds rancher` in a terminal; it uses what you set up here.",
+        "Rancher applications through an identity provider.",
     );
     let mut action = None;
 

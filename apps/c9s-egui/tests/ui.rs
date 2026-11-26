@@ -146,7 +146,7 @@ fn a_first_run_starts_on_the_checklist() {
     let harness = window.open();
 
     harness.get_by_label("Get started");
-    harness.get_by_label("Add your identity provider");
+    harness.get_by_label("Add an identity provider");
     // Only the identity provider is needed, the apps can come later.
     assert_eq!(harness.get_all_by_label("(To do)").count(), 1);
     assert_eq!(harness.get_all_by_label("(Optional)").count(), 2);
@@ -157,14 +157,14 @@ fn an_identity_provider_and_an_aws_account_are_set_up_and_found_by_the_cli() {
     let window = Window::new();
     let mut harness = window.open();
 
-    harness.get_by_label("Add your identity provider").click();
+    harness.get_by_label("Add an identity provider").click();
     harness.run();
     click_button(&mut harness, "Add identity provider");
     // The first field has the focus when the dialog opens.
     assert!(harness.get_by_label("Name").is_focused());
     type_into(&mut harness, "Name", "work");
     type_into(&mut harness, "Web address", " https://id.example.com/ ");
-    type_into(&mut harness, "User name", "me@example.com");
+    type_into(&mut harness, "Username", "me@example.com");
     click_button(&mut harness, "Save");
 
     harness.get_by_label("Identity provider work saved.");
@@ -174,7 +174,7 @@ fn an_identity_provider_and_an_aws_account_are_set_up_and_found_by_the_cli() {
         .is_focused());
 
     click_button(&mut harness, "AWS accounts");
-    click_button(&mut harness, "Add AWS account");
+    click_button(&mut harness, "Add an AWS account");
     type_into(&mut harness, "Web address of the application", APP_URL);
     click_button(&mut harness, "Save");
     harness.get_by_label("AWS account saved.");
@@ -244,9 +244,11 @@ fn a_rancher_is_set_up_with_the_default_identity_provider() {
     click_button(&mut harness, "Add Rancher");
     type_into(
         &mut harness,
-        "Web address of Rancher",
+        "The URL of Rancher",
         "https://rancher.example.com",
     );
+    // The client ID is not filled in by default.
+    type_into(&mut harness, "Client ID", "rancher");
     click_button(&mut harness, "Save");
     harness.get_by_label("Rancher saved.");
 
@@ -266,7 +268,7 @@ fn every_input_is_named_by_its_label() {
 
     for (section, add) in [
         ("Identity providers", "Add identity provider"),
-        ("AWS accounts", "Add AWS account"),
+        ("AWS accounts", "Add an AWS account"),
         ("Rancher", "Add Rancher"),
     ] {
         click_button(&mut harness, section);
@@ -466,7 +468,7 @@ fn a_security_key_is_enrolled_and_found_by_the_cli() {
     let mut harness = window.open_with(move |s| s.enrolling.enroller = enroller(Ok(yubikey())));
 
     click_button(&mut harness, "Security");
-    click_button(&mut harness, "Enroll security key");
+    click_button(&mut harness, "Enroll a security key");
     wait_until(&mut harness, "the end of the enrolling", |h| {
         h.query_by_label("Security key enrolled.").is_some()
     });
@@ -489,7 +491,7 @@ fn a_failed_enrolling_is_shown_and_nothing_is_written() {
     });
 
     click_button(&mut harness, "Security");
-    click_button(&mut harness, "Enroll security key");
+    click_button(&mut harness, "Enroll a security key");
     wait_until(&mut harness, "the end of the enrolling", |h| {
         h.query_by_label_contains("No security key was found")
             .is_some()

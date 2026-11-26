@@ -50,7 +50,7 @@ impl SignInFields {
         heading(ui, "Signing in");
         let options = idp_options(&self.form.idps, &self.idp);
         if options.is_empty() {
-            ui.label("Add an identity provider first, an application signs in through one.");
+            ui.label("Add an identity provider");
         }
 
         select(
@@ -67,7 +67,7 @@ impl SignInFields {
             ui,
             errors,
             self.keys.username,
-            "User name (optional)",
+            "Username override (optional)",
             &mut self.username,
             TextOptions {
                 hint: Some("Leave empty to use the user name of the identity provider."),
@@ -80,7 +80,7 @@ impl SignInFields {
             ui,
             errors,
             self.keys.mfa,
-            "Second step (optional)",
+            "MFA (optional)",
             None,
             &mut self.mfa,
             &mfa_override_options(self.form.security_key),

@@ -94,7 +94,7 @@ impl IdpDialog {
                     ui,
                     "Name",
                     &self.name,
-                    "The name cannot be changed. To rename, add a new one and remove this one.",
+                    "The name cannot be changed after it's set.",
                 );
             } else {
                 let input = text_field(
@@ -104,7 +104,7 @@ impl IdpDialog {
                     "Name",
                     &mut self.name,
                     TextOptions {
-                        hint: Some("A short name so you can recognise it, like work."),
+                        hint: Some("A short name so you can recognise it."),
                         autofocus: first,
                         ..Default::default()
                     },
@@ -131,7 +131,7 @@ impl IdpDialog {
                 ui,
                 &mut self.errors,
                 Field::IdpUsername,
-                "User name",
+                "Username",
                 &mut self.username,
                 TextOptions::default(),
             );
